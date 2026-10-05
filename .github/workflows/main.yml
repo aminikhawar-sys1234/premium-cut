@@ -11,8 +11,7 @@ on:
       - main
       - master
 
-# Agar aapka project repository ke root par hai toh `working-directory` ko `.` hi rehne dein.
-# Agar kisi sub-folder mein hai (e.g., android), toh `.` ko apne folder ka naam likh dein (e.g., ./android).
+# Agar project kisi subfolder mein hai toh '.' ki jagah folder ka naam dein (e.g. 'my-app')
 env:
   PROJECT_PATH: '.'
 
@@ -30,14 +29,14 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '17'
           cache: 'gradle'
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+        uses: gradle/actions/setup-gradle@v4
 
       - name: Make Gradle Wrapper executable
         run: chmod +x gradlew
