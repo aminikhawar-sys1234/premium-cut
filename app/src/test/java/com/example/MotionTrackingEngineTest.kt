@@ -163,6 +163,7 @@ class MotionTrackingEngineTest {
     assertEquals(4, mid.size)
     assertEquals(0.2f, mid[0].first, 1e-4f)
     assertEquals(0.15f, mid[0].second, 1e-4f)
-    assertEquals(0.4f, mid[2].second, 1e-4f)
+    assertEquals(0.6f, mid[2].first, 1e-4f)
+    assertEquals(0.55f, mid[2].second, 1e-4f)
   }
 }

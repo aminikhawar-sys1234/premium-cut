@@ -273,7 +273,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   // Playback & auto-save jobs
   private var autoSaveJob: Job? = null
 
-  init {
+  /**
+   * Wires timeline/playback collectors. Invoked from the last `init` block of this class: the collectors run
+   * eagerly on Main.immediate and read state declared further down, so they must start after every property exists.
+   */
+  private fun startEngineSync() {
     // 1. Initialize with a clean, blank timeline
     timelineEngine.loadTimeline(Timeline())
 
@@ -2372,5 +2376,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     videoExporter.release()
     proxyMediaEngine.release()
     compositionEngine.releaseGpu()
+  }
+
+  init {
+    startEngineSync()
   }
 }
