@@ -1,0 +1,80 @@
+name: Android CI/CD Build and Test
+
+on:
+  push:
+    branches:
+      - main
+      - master
+      - 'feature/**'
+  pull_request:
+    branches:
+      - main
+      - master
+
+# Agar project kisi subfolder mein hai toh '.' ki jagah folder ka naam dein (e.g. 'my-app')
+env:
+  PROJECT_PATH: '.'
+
+jobs:
+  build-and-test:
+    name: Build, Test & Quality Checks
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: ${{ env.PROJECT_PATH }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+          cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
+
+      - name: Run Android Lint (Code Quality)
+        run: ./gradlew lintDebug --stacktrace
+
+      - name: Run Unit Tests
+        run: ./gradlew test --stacktrace
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace
+
+      - name: Build Release Bundle (AAB)
+        run: ./gradlew bundleRelease --stacktrace
+
+      - name: Upload Debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-debug
+          path: ${{ env.PROJECT_PATH }}/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: Upload Release AAB
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-release-bundle
+          path: ${{ env.PROJECT_PATH }}/app/build/outputs/bundle/release/app-release.aab
+
+      - name: Upload Unit Test Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: unit-test-reports
+          path: ${{ env.PROJECT_PATH }}/app/build/reports/tests/testDebugUnitTest/
+
+      - name: Upload Lint Reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: ${{ env.PROJECT_PATH }}/app/build/reports/lint-results-debug.html
