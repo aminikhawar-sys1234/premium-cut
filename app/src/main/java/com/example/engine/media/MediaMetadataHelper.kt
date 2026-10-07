@@ -18,7 +18,7 @@ data class RealMediaMetadata(
   val mimeType: String,
   val hasAudio: Boolean,
   val isVideo: Boolean,
-  val detectedAspectRatio: AspectRatio = AspectRatio.fromDimensions(width, height)
+  val detectedAspectRatio: AspectRatio = AspectRatio.fromDimensions(width, height, rotationDegrees)
 )
 
 object MediaMetadataHelper {
@@ -126,14 +126,12 @@ object MediaMetadataHelper {
       val frameRate = captureFpsStr?.toFloatOrNull()?.takeIf { it in 10f..120f } ?: 30.0f
       val finalMime = extractedMime ?: if (mimeType.isNotBlank()) mimeType else "video/mp4"
 
-      // Account for 90 or 270 degree rotation if width/height are unrotated
-      val effectiveWidth = if (rotation == 90 || rotation == 270) height else width
-      val effectiveHeight = if (rotation == 90 || rotation == 270) width else height
-
+      // width/height stay the coded (unrotated) frame size: VideoClip, the decoder and the GPU compositor all
+      // pair them with rotationDegrees/naturalRotation and swap exactly once when laying the frame out.
       return RealMediaMetadata(
         durationMs = durationMs,
-        width = effectiveWidth,
-        height = effectiveHeight,
+        width = width,
+        height = height,
         rotationDegrees = rotation,
         frameRate = frameRate,
         mimeType = finalMime,
