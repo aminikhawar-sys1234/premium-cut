@@ -93,11 +93,11 @@ class PlaybackManager(
       if (state == Player.STATE_BUFFERING) Log.d(TAG, "BUFFERING at ${player.currentPosition}ms")
       if (state == Player.STATE_READY) Log.d(TAG, "READY at ${player.currentPosition}ms")
       if (state == Player.STATE_ENDED) Log.d(TAG, "ENDED")
-      onPlaybackStateChanged(state)
+      this@PlaybackManager.onPlaybackStateChanged(state)
     }
     override fun onIsPlayingChanged(isPlaying: Boolean) {
       Log.d(TAG, "isPlaying=$isPlaying pos=${player.currentPosition}ms")
-      onIsPlayingChanged(isPlaying)
+      this@PlaybackManager.onIsPlayingChanged(isPlaying)
     }
     override fun onVideoSizeChanged(videoSize: androidx.media3.common.VideoSize) {
       Log.d(TAG, "videoSize=${videoSize.width}x${videoSize.height}")
@@ -105,7 +105,7 @@ class PlaybackManager(
     override fun onRenderedFirstFrame() { Log.d(TAG, "first video frame rendered") }
     override fun onPlayerError(error: PlaybackException) {
       Log.e(TAG, "player error [${error.errorCodeName}] ${error.message}", error)
-      onPlayerError(error)
+      this@PlaybackManager.onPlayerError(error)
     }
   }
 
