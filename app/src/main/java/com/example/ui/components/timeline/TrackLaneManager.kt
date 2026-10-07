@@ -385,7 +385,16 @@ object TrackLaneManager {
     // Explicit tracks in timeline.tracks
     val explicitSubTracks = timeline.tracks.filter { it.trackType != com.example.domain.model.TrackType.MAIN_VIDEO }
     for (explicitTrack in explicitSubTracks) {
-      val alreadyCovered = resultLanes.any { it.trackId == explicitTrack.trackId || (it.trackType == explicitTrack.trackType && it.label == explicitTrack.displayName) }
+      val clipLaneId = when (explicitTrack.trackType) {
+        com.example.domain.model.TrackType.OVERLAY, com.example.domain.model.TrackType.ELEMENT, com.example.domain.model.TrackType.ADJUSTMENT -> "track_overlay_${explicitTrack.zOrder}"
+        com.example.domain.model.TrackType.AUDIO, com.example.domain.model.TrackType.MUSIC, com.example.domain.model.TrackType.SFX -> "track_audio_${explicitTrack.zOrder}"
+        com.example.domain.model.TrackType.TEXT, com.example.domain.model.TrackType.CAPTION -> "track_text_${explicitTrack.zOrder}"
+        else -> null
+      }
+      val alreadyCovered = resultLanes.any {
+        it.trackId == explicitTrack.trackId || it.trackId == clipLaneId ||
+          (it.trackType == explicitTrack.trackType && it.label == explicitTrack.displayName)
+      }
       if (!alreadyCovered) {
         val kind = when (explicitTrack.trackType) {
           com.example.domain.model.TrackType.MAIN_VIDEO -> LaneKind.MAIN_VIDEO

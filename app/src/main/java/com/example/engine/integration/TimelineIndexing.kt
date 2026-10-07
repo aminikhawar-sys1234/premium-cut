@@ -209,41 +209,31 @@ class AdvancedTimelineIndex private constructor(
     fun from(timeline: Timeline): AdvancedTimelineIndex =
       synchronized(cache) { cache[timeline] ?: build(timeline).also { cache[timeline] = it } }
 
-    fun build(timeline: Timeline, ignoreClipIds: Set<String> = emptySet()): AdvancedTimelineIndex {
-      val all = mutableListOf<TimelineIndexItem>()
-      val snapPoints = mutableSetOf(0L, timeline.totalDurationMs)
+    /**
+     * Snap-only index: skips the interval trees and per-track indexes that [build] constructs, which
+     * snapping never uses. Cheap enough to rebuild per drag frame; cache it per timeline instance.
+     */
+    fun buildSnapIndex(timeline: Timeline, ignoreClipIds: Set<String> = emptySet()): TimelineSnapIndex =
+      TimelineSnapIndex.build(collectSnapPoints(timeline, ignoreClipIds))
 
-      fun addItem(id: String, track: String, startMs: Long, durationMs: Long, layer: Int, keyframes: List<ClipKeyframe>) {
+    private fun collectSnapPoints(timeline: Timeline, ignoreClipIds: Set<String>): Set<Long> {
+      val snapPoints = HashSet<Long>()
+      snapPoints += 0L
+      snapPoints += timeline.totalDurationMs
+
+      fun addPoints(id: String, startMs: Long, durationMs: Long, keyframes: List<ClipKeyframe>) {
         if (id in ignoreClipIds) return
-        val safeDuration = durationMs.coerceAtLeast(0L)
-        val endMs = startMs + safeDuration
-        all += TimelineIndexItem(id, track, startMs, endMs, layer)
         snapPoints += startMs
-        snapPoints += endMs
+        snapPoints += startMs + durationMs.coerceAtLeast(0L)
         keyframes.forEach { snapPoints += startMs + it.timeMs }
       }
-
-      timeline.videoClips.forEachIndexed { layer, clip ->
-        addItem(clip.id, "video", clip.timelineStartMs, clip.durationMs, layer, clip.keyframes)
-      }
-      timeline.overlayClips.forEachIndexed { layer, clip ->
-        addItem(clip.id, "overlay", clip.timelineStartMs, clip.durationMs, layer, clip.keyframes)
-      }
-      timeline.audioClips.forEachIndexed { layer, clip ->
-        addItem(clip.id, "audio", clip.timelineStartMs, clip.durationMs, layer, clip.keyframes)
-      }
-      timeline.textClips.forEachIndexed { layer, clip ->
-        addItem(clip.id, "text", clip.timelineStartMs, clip.durationMs, layer, clip.keyframes)
-      }
-      timeline.stickerClips.forEachIndexed { layer, clip ->
-        addItem(clip.id, "sticker", clip.timelineStartMs, clip.durationMs, layer, clip.keyframes)
-      }
-      timeline.effectClips.forEachIndexed { layer, clip ->
-        addItem(clip.id, "effect", clip.timelineStartMs, clip.durationMs, layer, clip.keyframes)
-      }
-      timeline.shapeClips.forEachIndexed { layer, clip ->
-        addItem(clip.id, "shape", clip.timelineStartMs, clip.durationMs, layer, clip.keyframes)
-      }
+      timeline.videoClips.forEach { addPoints(it.id, it.timelineStartMs, it.durationMs, it.keyframes) }
+      timeline.overlayClips.forEach { addPoints(it.id, it.timelineStartMs, it.durationMs, it.keyframes) }
+      timeline.audioClips.forEach { addPoints(it.id, it.timelineStartMs, it.durationMs, it.keyframes) }
+      timeline.textClips.forEach { addPoints(it.id, it.timelineStartMs, it.durationMs, it.keyframes) }
+      timeline.stickerClips.forEach { addPoints(it.id, it.timelineStartMs, it.durationMs, it.keyframes) }
+      timeline.effectClips.forEach { addPoints(it.id, it.timelineStartMs, it.durationMs, it.keyframes) }
+      timeline.shapeClips.forEach { addPoints(it.id, it.timelineStartMs, it.durationMs, it.keyframes) }
 
       timeline.transitions.forEach { transition ->
         timeline.videoClips.getOrNull(transition.clipIndexBefore)?.let { clip ->
@@ -255,7 +245,7 @@ class AdvancedTimelineIndex private constructor(
       }
 
       timeline.audioClips.forEach { clip ->
-        if (clip.isMuted || clip.waveformData.isEmpty()) return@forEach
+        if (clip.id in ignoreClipIds || clip.isMuted || clip.waveformData.isEmpty()) return@forEach
         val step = (clip.waveformData.size / 20).coerceAtLeast(1)
         for (i in clip.waveformData.indices step step) {
           if (clip.waveformData[i] > 0.8f) {
@@ -264,6 +254,24 @@ class AdvancedTimelineIndex private constructor(
           }
         }
       }
+      return snapPoints
+    }
+
+    fun build(timeline: Timeline, ignoreClipIds: Set<String> = emptySet()): AdvancedTimelineIndex {
+      val all = mutableListOf<TimelineIndexItem>()
+
+      fun addItem(id: String, track: String, startMs: Long, durationMs: Long, layer: Int) {
+        if (id in ignoreClipIds) return
+        all += TimelineIndexItem(id, track, startMs, startMs + durationMs.coerceAtLeast(0L), layer)
+      }
+
+      timeline.videoClips.forEachIndexed { layer, clip -> addItem(clip.id, "video", clip.timelineStartMs, clip.durationMs, layer) }
+      timeline.overlayClips.forEachIndexed { layer, clip -> addItem(clip.id, "overlay", clip.timelineStartMs, clip.durationMs, layer) }
+      timeline.audioClips.forEachIndexed { layer, clip -> addItem(clip.id, "audio", clip.timelineStartMs, clip.durationMs, layer) }
+      timeline.textClips.forEachIndexed { layer, clip -> addItem(clip.id, "text", clip.timelineStartMs, clip.durationMs, layer) }
+      timeline.stickerClips.forEachIndexed { layer, clip -> addItem(clip.id, "sticker", clip.timelineStartMs, clip.durationMs, layer) }
+      timeline.effectClips.forEachIndexed { layer, clip -> addItem(clip.id, "effect", clip.timelineStartMs, clip.durationMs, layer) }
+      timeline.shapeClips.forEachIndexed { layer, clip -> addItem(clip.id, "shape", clip.timelineStartMs, clip.durationMs, layer) }
 
       val grouped = all.groupBy { it.track }
       val trackIndexes = grouped.mapValues { (track, values) -> TrackSpatialIndex.build(track, values) }
@@ -272,7 +280,7 @@ class AdvancedTimelineIndex private constructor(
         byId = all.associateBy { it.id },
         tracks = trackIndexes,
         intervalTree = IntervalTree.build(all),
-        snapIndex = TimelineSnapIndex.build(snapPoints)
+        snapIndex = buildSnapIndex(timeline, ignoreClipIds)
       )
     }
   }

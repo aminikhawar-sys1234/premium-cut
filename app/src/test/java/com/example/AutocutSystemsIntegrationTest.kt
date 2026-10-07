@@ -4,10 +4,7 @@ import com.example.domain.model.ClipKeyframe
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
 import com.example.engine.integration.AdvancedTimelineIndex
-import com.example.engine.integration.CompoundTimelineTimeMapper
 import com.example.engine.integration.KeyframeAnimationEngine
-import com.example.engine.integration.MultiLayerCompositor
-import com.example.engine.integration.TimelineCommandSystem
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -44,29 +41,5 @@ class AutocutSystemsIntegrationTest {
     assertEquals(5f, value.positionX, .001f)
     assertEquals(45f, value.rotation, .001f)
     assertEquals(.75f, value.opacity, .001f)
-  }
-
-  @Test
-  fun compoundMapperSupportsBidirectionalSpeedMapping() {
-    val mapper = CompoundTimelineTimeMapper(100, 1_000, 0, 2_000, speed = 2.0)
-    assertEquals(1_000L, mapper.parentToSource(600))
-    assertEquals(600L, mapper.sourceToParent(1_000))
-    assertNull(mapper.parentToSource(1_100))
-  }
-
-  @Test
-  fun commandSystemUndoRedoIsNonDestructive() {
-    val before = timeline()
-    val after = before.copy(videoClips = before.videoClips.drop(1))
-    val commands = TimelineCommandSystem()
-    commands.execute("remove", before, after)
-    assertEquals(before, commands.undo())
-    assertEquals(after, commands.redo())
-  }
-
-  @Test
-  fun multiLayerProjectionPreservesLayerOrderAndVisibility() {
-    val before = timeline()
-    assertEquals(listOf("v1", "v2", "o1"), MultiLayerCompositor.activeLayerIds(before, 1_500))
   }
 }

@@ -91,29 +91,26 @@ object TimelineTrackManager {
         trackType: TrackType,
         displayName: String? = null
     ): Pair<Timeline, NleTrack> {
-        val currentTracks = timeline.tracks
-        
-        // Max order dhoond kar +1 karein taake list ke bilkul aakhir mein append ho
-        val nextOrder = (currentTracks.maxOfOrNull { it.order } ?: -1) + 1
-        
-        // Stable UUID har track ke liye laazmi hai taake Compose keys duplicate na hon
-        val newTrackUuid = UUID.randomUUID().toString()
-        
+        // A track's lane index is the stacking order of its clips, so it must not collide with a
+        // lane that already holds clips (or another explicit track) of the same type.
+        val firstLane = when (trackType) {
+            TrackType.OVERLAY, TrackType.ELEMENT, TrackType.ADJUSTMENT -> 1
+            else -> 0
+        }
+        val lane = maxOf((lanesOf(timeline, trackType).maxOrNull() ?: (firstLane - 1)) + 1, firstLane)
+
         val newNleTrack = NleTrack(
-            trackId = newTrackUuid,
+            trackId = UUID.randomUUID().toString(),
             trackType = trackType,
-            displayName = displayName ?: "${trackType.name.replace("_", " ")} ${nextOrder + 1}",
-            order = nextOrder,
-            zOrder = nextOrder, // zOrder ko order ke sath sync rakhein taake overwrite na ho
+            displayName = displayName ?: "${trackType.name.replace("_", " ")} ${lane + 1}",
+            order = lane,
+            zOrder = lane,
             isLocked = false,
             isVisible = true,
             isMuted = false,
             isSolo = false
         )
-        
-        // List ke aakhir mein append karein (no indexing or replacement)
-        val updatedTracks = currentTracks + newNleTrack
-        return Pair(timeline.copy(tracks = updatedTracks), newNleTrack)
+        return Pair(timeline.copy(tracks = timeline.tracks + newNleTrack), newNleTrack)
     }
 
     /**
@@ -342,5 +339,170 @@ object TimelineTrackManager {
      */
     fun compactTracks(timeline: Timeline): Timeline {
         return timeline
+    }
+
+    // ---- Lane (per-track) operations -------------------------------------------------------
+
+    /** Clip lane the given track id refers to, or null when the id is unknown. Lane -1 means "every lane of that type". */
+    fun resolveTrack(timeline: Timeline, trackId: String): Pair<TrackType, Int>? {
+        timeline.tracks.firstOrNull { it.trackId == trackId }?.let { return it.trackType to it.zOrder }
+        return when {
+            trackId == "track_main_video" -> TrackType.MAIN_VIDEO to 0
+            trackId.startsWith("track_overlay_") -> trackId.removePrefix("track_overlay_").toIntOrNull()?.let { TrackType.OVERLAY to it }
+            trackId.startsWith("track_audio_") -> trackId.removePrefix("track_audio_").toIntOrNull()?.let { TrackType.AUDIO to it }
+            trackId.startsWith("track_text_") -> trackId.removePrefix("track_text_").toIntOrNull()?.let { TrackType.TEXT to it }
+            trackId == "track_effects" -> TrackType.EFFECT to -1
+            trackId == "track_stickers" -> TrackType.STICKER to -1
+            trackId == "track_shapes" -> TrackType.SHAPE to -1
+            else -> null
+        }
+    }
+
+    /** Ids of all clips on a lane (or on every lane of the type when [lane] is -1). */
+    fun laneClipIds(timeline: Timeline, trackType: TrackType, lane: Int): Set<String> {
+        fun matches(trackIndex: Int) = lane < 0 || trackIndex == lane
+        return when (trackType) {
+            TrackType.MAIN_VIDEO -> timeline.videoClips.map { it.id }.toSet()
+            TrackType.OVERLAY, TrackType.ELEMENT, TrackType.ADJUSTMENT ->
+                timeline.overlayClips.filter { matches(it.trackIndex) }.map { it.id }.toSet()
+            TrackType.AUDIO, TrackType.MUSIC, TrackType.SFX ->
+                timeline.audioClips.filter { matches(it.trackIndex) }.map { it.id }.toSet()
+            TrackType.TEXT, TrackType.CAPTION ->
+                timeline.textClips.filter { matches(it.trackIndex) }.map { it.id }.toSet()
+            TrackType.STICKER -> timeline.stickerClips.filter { matches(it.trackIndex) }.map { it.id }.toSet()
+            TrackType.EFFECT -> timeline.effectClips.filter { matches(it.trackIndex) }.map { it.id }.toSet()
+            TrackType.SHAPE -> timeline.shapeClips.filter { matches(it.trackIndex) }.map { it.id }.toSet()
+        }
+    }
+
+    /** Removes a lane together with every clip on it. The main video track can never be removed. */
+    fun removeLane(timeline: Timeline, trackType: TrackType, lane: Int): Timeline? {
+        if (trackType == TrackType.MAIN_VIDEO) return null
+        val ids = laneClipIds(timeline, trackType, lane)
+        val remainingTracks = timeline.tracks.filterNot { it.trackType == trackType && (lane < 0 || it.zOrder == lane) }
+        if (ids.isEmpty() && remainingTracks.size == timeline.tracks.size) return null
+        return timeline.copy(
+            overlayClips = timeline.overlayClips.filterNot { it.id in ids },
+            audioClips = timeline.audioClips.filterNot { it.id in ids },
+            textClips = timeline.textClips.filterNot { it.id in ids },
+            stickerClips = timeline.stickerClips.filterNot { it.id in ids },
+            effectClips = timeline.effectClips.filterNot { it.id in ids },
+            shapeClips = timeline.shapeClips.filterNot { it.id in ids },
+            tracks = remainingTracks
+        )
+    }
+
+    /** All lanes of a type that currently exist (have clips or an explicit track), ascending. */
+    fun lanesOf(timeline: Timeline, trackType: TrackType): List<Int> {
+        val fromClips = when (trackType) {
+            TrackType.OVERLAY, TrackType.ELEMENT, TrackType.ADJUSTMENT -> timeline.overlayClips.map { it.trackIndex }
+            TrackType.AUDIO, TrackType.MUSIC, TrackType.SFX -> timeline.audioClips.map { it.trackIndex }
+            TrackType.TEXT, TrackType.CAPTION -> timeline.textClips.map { it.trackIndex }
+            TrackType.STICKER -> timeline.stickerClips.map { it.trackIndex }
+            TrackType.EFFECT -> timeline.effectClips.map { it.trackIndex }
+            TrackType.SHAPE -> timeline.shapeClips.map { it.trackIndex }
+            TrackType.MAIN_VIDEO -> listOf(0)
+        }
+        return (fromClips + timeline.tracks.filter { it.trackType == trackType }.map { it.zOrder }).distinct().sorted()
+    }
+
+    /**
+     * Swaps the contents (and z-order) of two lanes of the same type. Because lane index is the
+     * clips' stacking order, this is how a track is moved up or down in the layer stack.
+     */
+    fun swapLanes(timeline: Timeline, trackType: TrackType, laneA: Int, laneB: Int): Timeline? {
+        if (laneA == laneB || trackType == TrackType.MAIN_VIDEO) return null
+        fun swap(i: Int) = when (i) { laneA -> laneB; laneB -> laneA; else -> i }
+        val tracks = timeline.tracks.map {
+            if (it.trackType == trackType && (it.zOrder == laneA || it.zOrder == laneB)) {
+                it.copy(zOrder = swap(it.zOrder), order = if (it.order == it.zOrder) swap(it.zOrder) else it.order)
+            } else it
+        }
+        return when (trackType) {
+            TrackType.OVERLAY, TrackType.ELEMENT, TrackType.ADJUSTMENT ->
+                timeline.copy(overlayClips = timeline.overlayClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
+            TrackType.AUDIO, TrackType.MUSIC, TrackType.SFX ->
+                timeline.copy(audioClips = timeline.audioClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
+            TrackType.TEXT, TrackType.CAPTION ->
+                timeline.copy(textClips = timeline.textClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
+            TrackType.STICKER ->
+                timeline.copy(stickerClips = timeline.stickerClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
+            TrackType.EFFECT ->
+                timeline.copy(effectClips = timeline.effectClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
+            TrackType.SHAPE ->
+                timeline.copy(shapeClips = timeline.shapeClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
+            TrackType.MAIN_VIDEO -> null
+        }
+    }
+
+    /** Applies lock / hide / mute to every clip of a lane and to its explicit track record, if any. */
+    fun setLaneFlags(
+        timeline: Timeline,
+        trackType: TrackType,
+        lane: Int,
+        locked: Boolean? = null,
+        hidden: Boolean? = null,
+        muted: Boolean? = null
+    ): Timeline {
+        fun matches(trackIndex: Int) = lane < 0 || trackIndex == lane
+        val tracks = timeline.tracks.map {
+            if (it.trackType == trackType && (lane < 0 || it.zOrder == lane)) {
+                it.copy(
+                    isLocked = locked ?: it.isLocked,
+                    isVisible = hidden?.let { h -> !h } ?: it.isVisible,
+                    isMuted = muted ?: it.isMuted
+                )
+            } else it
+        }
+        return when (trackType) {
+            TrackType.MAIN_VIDEO -> timeline.copy(
+                videoClips = timeline.videoClips.map {
+                    it.copy(isLocked = locked ?: it.isLocked, isHidden = hidden ?: it.isHidden, isMuted = muted ?: it.isMuted)
+                },
+                tracks = tracks
+            )
+            TrackType.OVERLAY, TrackType.ELEMENT, TrackType.ADJUSTMENT -> timeline.copy(
+                overlayClips = timeline.overlayClips.map {
+                    if (!matches(it.trackIndex)) it
+                    else it.copy(isLocked = locked ?: it.isLocked, isHidden = hidden ?: it.isHidden, isMuted = muted ?: it.isMuted)
+                },
+                tracks = tracks
+            )
+            TrackType.AUDIO, TrackType.MUSIC, TrackType.SFX -> timeline.copy(
+                audioClips = timeline.audioClips.map {
+                    if (!matches(it.trackIndex)) it
+                    else it.copy(isLocked = locked ?: it.isLocked, isHidden = hidden ?: it.isHidden, isMuted = muted ?: it.isMuted)
+                },
+                tracks = tracks
+            )
+            TrackType.TEXT, TrackType.CAPTION -> timeline.copy(
+                textClips = timeline.textClips.map {
+                    if (!matches(it.trackIndex)) it
+                    else it.copy(isLocked = locked ?: it.isLocked, isHidden = hidden ?: it.isHidden)
+                },
+                tracks = tracks
+            )
+            TrackType.STICKER -> timeline.copy(
+                stickerClips = timeline.stickerClips.map {
+                    if (!matches(it.trackIndex)) it
+                    else it.copy(isLocked = locked ?: it.isLocked, isHidden = hidden ?: it.isHidden)
+                },
+                tracks = tracks
+            )
+            TrackType.EFFECT -> timeline.copy(
+                effectClips = timeline.effectClips.map {
+                    if (!matches(it.trackIndex)) it
+                    else it.copy(isLocked = locked ?: it.isLocked, isHidden = hidden ?: it.isHidden)
+                },
+                tracks = tracks
+            )
+            TrackType.SHAPE -> timeline.copy(
+                shapeClips = timeline.shapeClips.map {
+                    if (!matches(it.trackIndex)) it
+                    else it.copy(isLocked = locked ?: it.isLocked, isHidden = hidden ?: it.isHidden)
+                },
+                tracks = tracks
+            )
+        }
     }
 }

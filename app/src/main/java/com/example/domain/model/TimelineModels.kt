@@ -415,7 +415,9 @@ data class AudioClip(
   val isHidden: Boolean = false,
   val isSolo: Boolean = false,
   /** Independent NLE audio lane index. */
-  val trackIndex: Int = 0
+  val trackIndex: Int = 0,
+  /** Real length of the source audio file in ms; 0 = unknown. Bounds trim extension. */
+  val sourceTotalDurationMs: Long = 0L
 ) : TimelineClip {
   override val clipId: String get() = id
   override val trackId: String get() = "track_audio_$trackIndex"

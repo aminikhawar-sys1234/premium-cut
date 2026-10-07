@@ -86,8 +86,9 @@ class TimelineActionManager(
   )
 
   val isTransactionActive: Boolean
-    get() = activeTransaction != null
+    @Synchronized get() = activeTransaction != null
 
+  @Synchronized
   fun beginTransaction(
     type: TimelineActionType,
     description: String,
@@ -99,6 +100,7 @@ class TimelineActionManager(
     }
   }
 
+  @Synchronized
   fun commitTransaction(finalTimeline: Timeline): Boolean {
     val tx = activeTransaction ?: return false
     activeTransaction = null
@@ -116,12 +118,14 @@ class TimelineActionManager(
     return false
   }
 
+  @Synchronized
   fun cancelTransaction(): Timeline? {
     val tx = activeTransaction ?: return null
     activeTransaction = null
     return tx.initialTimeline
   }
 
+  @Synchronized
   fun recordPreEditHistory(
     type: TimelineActionType = TimelineActionType.GENERIC_EDIT,
     description: String = type.displayName,
@@ -144,6 +148,7 @@ class TimelineActionManager(
     updateState()
   }
 
+  @Synchronized
   fun recordAction(
     type: TimelineActionType,
     description: String,
@@ -172,18 +177,26 @@ class TimelineActionManager(
     updateState()
   }
 
+  @Synchronized
   fun undo(currentTimeline: Timeline): Timeline? {
-    if (undoStack.isEmpty()) return null
-    val action = undoStack.removeLast()
-    val actionWithAfter = if (action.afterState == action.beforeState) {
-      action.copy(afterState = currentTimeline)
-    } else action
-    redoStack.addLast(actionWithAfter)
-    _statusMessage.value = "Undid: ${action.description}"
+    // Entries recorded just before an edit that ended up changing nothing (rejected or no-op edits)
+    // restore the state we are already in; skip them so Undo always visibly steps back.
+    while (undoStack.isNotEmpty()) {
+      val action = undoStack.removeLast()
+      if (action.beforeState == currentTimeline) continue
+      val actionWithAfter = if (action.afterState == action.beforeState) {
+        action.copy(afterState = currentTimeline)
+      } else action
+      redoStack.addLast(actionWithAfter)
+      _statusMessage.value = "Undid: ${action.description}"
+      updateState()
+      return action.beforeState
+    }
     updateState()
-    return action.beforeState
+    return null
   }
 
+  @Synchronized
   fun redo(currentTimeline: Timeline): Timeline? {
     if (redoStack.isEmpty()) return null
     val action = redoStack.removeLast()
@@ -196,6 +209,7 @@ class TimelineActionManager(
     return action.afterState
   }
 
+  @Synchronized
   fun clear() {
     undoStack.clear()
     redoStack.clear()

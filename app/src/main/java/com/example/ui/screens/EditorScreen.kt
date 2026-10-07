@@ -476,11 +476,7 @@ fun EditorScreen(
   val handleToolClick: (EditorToolItem) -> Unit = { tool ->
     when {
       tool.actionKey.contains("SPLIT", ignoreCase = true) -> {
-        com.example.engine.timeline.TimelineSplitEngine.performSplitAtPlayhead(
-          timelineEngine = viewModel.timelineEngine,
-          playheadMs = currentPosMs,
-          selectedElement = selectedElement
-        )
+        viewModel.timelineEngine.splitAtPlayhead()
       }
       tool.actionKey.equals("TOOL_EXPORT_PRESETS", ignoreCase = true) -> {
         viewModel.saveCurrentProject()
