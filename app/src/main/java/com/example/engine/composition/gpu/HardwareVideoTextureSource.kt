@@ -39,6 +39,8 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
     private const val DEFAULT_TIMEOUT_US = 2_000L
     /** Upper bound for a single decodeFrame() call (a seek can require decoding a whole GOP). */
     private const val DECODE_DEADLINE_MS = 12_000L
+    /** A decoder that has never produced a single picture is considered hung after this long. */
+    private const val FIRST_PICTURE_DEADLINE_MS = 4_000L
     /** How long to wait for a frame released to the Surface to arrive at the SurfaceTexture. */
     private const val FRAME_ARRIVAL_TIMEOUT_MS = 1_500L
     private const val JUMP_SEEK_THRESHOLD_US = 1_200_000L
@@ -75,6 +77,8 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
   private var isOutputEos = false
   private var lastRenderedPtsUs = Long.MIN_VALUE
   private val frameAvailable = AtomicBoolean(false)
+  private var inputsQueued = 0L
+  private var outputsDequeued = 0L
 
   /** Decoded output buffer that is in the future relative to the last request; kept for a later call. */
   private var heldIndex = -1
@@ -287,12 +291,17 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
     lastRequestUs = targetUs
 
     val info = MediaCodec.BufferInfo()
-    val deadline = SystemClock.elapsedRealtime() + DECODE_DEADLINE_MS
+    val noPictureYet = deliveredFrames == 0L
+    val deadline = SystemClock.elapsedRealtime() +
+      if (noPictureYet) FIRST_PICTURE_DEADLINE_MS else DECODE_DEADLINE_MS
     var rendered = false
 
     while (!cancelled.get()) {
       if (SystemClock.elapsedRealtime() > deadline) {
-        Log.w(TAG, "decodeFrame timed out for target=${targetUs}us (hasPicture=$hasPicture)")
+        Log.w(TAG, "decodeFrame timed out for target=${targetUs}us (hasPicture=$hasPicture inputs=$inputsQueued outputs=$outputsDequeued eosIn=$isInputEos)")
+        if (noPictureYet && outputsDequeued == 0L) {
+          throw IllegalStateException("Video decoder produced no output for target=${targetUs}us (inputs=$inputsQueued)")
+        }
         break
       }
 
@@ -309,6 +318,7 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       } else {
         feedInput(c, ex)
         val out = c.dequeueOutputBuffer(info, DEFAULT_TIMEOUT_US)
+        if (out >= 0) outputsDequeued++
         when {
           out == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
             val f = c.outputFormat
@@ -382,6 +392,7 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       isInputEos = true
     } else {
       c.queueInputBuffer(inputIndex, 0, sampleSize, ex.sampleTime.coerceAtLeast(0L), 0)
+      inputsQueued++
       ex.advance()
     }
   }
@@ -402,9 +413,12 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       try {
         st.updateTexImage()
         st.getTransformMatrix(transformMatrix)
+        if (deliveredFrames <= 3L) Log.d(TAG, "latched frame #$deliveredFrames ts=${st.timestamp} m=${transformMatrix.take(16)}")
       } catch (e: Exception) {
         Log.w(TAG, "updateTexImage failed: ${e.message}")
       }
+    } else if (deliveredFrames <= 3L) {
+      Log.w(TAG, "updateTexImage: no new frame available (delivered=$deliveredFrames)")
     }
     return transformMatrix
   }

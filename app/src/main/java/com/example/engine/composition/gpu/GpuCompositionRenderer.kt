@@ -636,6 +636,9 @@ class GpuCompositionRenderer(private val context: Context) {
     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
     if (isNativeActive) {
+      // The native compositor only draws into its own offscreen target between begin/end; without
+      // beginOffscreen it paints framebuffer 0 and endOffscreen() returns an empty texture (black output).
+      NativeRenderBridge.beginOffscreen(nativeHandle)
       NativeRenderBridge.renderFrame(nativeHandle, nativeLayers)
     } else {
       renderNativeLayersKotlin(nativeLayers, viewportWidth, viewportHeight)

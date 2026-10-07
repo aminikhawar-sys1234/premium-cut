@@ -582,11 +582,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
         }
       }
 
+      val undecodableClipIds = HashSet<String>()
+
       /**
        * Decodes the source frame for [srcPosMs] into the clip's OES texture and latches it (GL thread).
        * A codec error triggers ONE retry on a software decoder; null means "no usable picture".
        */
       fun decodeClipFrame(clip: VideoClip, srcPosMs: Long, activeIds: Set<String>): HardwareClipDecoder? {
+        if (clip.id in undecodableClipIds) return null
         for (tryNo in 0..1) {
           val dec = getOrCreateDecoder(clip, activeIds) ?: return null
           try {
@@ -604,6 +607,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
             decoderManager.triggerSoftwareFallback("Runtime decoder error: ${e.message}")
           }
         }
+        undecodableClipIds.add(clip.id)
+        Log.w(tag, "Clip ${clip.name} could not be decoded by hardware or software codecs; using still-frame extraction")
         return null
       }
 
