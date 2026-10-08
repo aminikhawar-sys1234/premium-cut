@@ -116,6 +116,7 @@ object FirebaseEffectsManager {
       val categoryStr = (data["category"] as? String ?: "").uppercase()
       val category = when {
         categoryStr.contains("BODY") -> EffectCategory.BODY_EFFECTS
+        categoryStr.contains("FACE") -> EffectCategory.FACE_EFFECTS
         categoryStr.contains("PHOTO") || categoryStr.contains("IMAGE") -> EffectCategory.PHOTO_EFFECTS
         categoryStr.contains("AI") -> EffectCategory.AI_EFFECTS
         else -> EffectCategory.VIDEO_EFFECTS

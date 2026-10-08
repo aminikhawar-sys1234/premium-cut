@@ -1,6 +1,7 @@
 package com.example.ui.components.effects
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -24,6 +25,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -31,6 +34,8 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.graphics.Bitmap
+import com.example.engine.effects.EffectThumbnailRaster
 import com.example.engine.effects.registry.EffectCategory
 import com.example.engine.effects.registry.EffectsAssetRegistry
 import com.example.engine.effects.registry.RegisteredEffect
@@ -56,11 +61,13 @@ fun EffectsCategoryPanel(
   viewModel: StudioViewModel,
   onClose: () -> Unit,
   onApply: (RegisteredEffect?) -> Unit,
+  onIntensity: (RegisteredEffect, Float) -> Unit = { _, _ -> },
   modifier: Modifier = Modifier
 ) {
   var searchQuery by remember { mutableStateOf("") }
   var draftSelectedEffect by remember { mutableStateOf<RegisteredEffect?>(null) }
   var isNoneSelected by remember { mutableStateOf(false) }
+  var strength by remember { mutableFloatStateOf(1f) }
 
   // Query real installed effect assets/plugins from registry matching category and search query
   val availableEffects = remember(category, searchQuery) {
@@ -197,6 +204,26 @@ fun EffectsCategoryPanel(
       }
     }
 
+    if (draftSelectedEffect != null && !isNoneSelected) {
+      Text(
+        text = "Strength ${(strength * 100).toInt()}%",
+        color = Color(0xFF99F6E4),
+        fontSize = 12.sp,
+        modifier = Modifier.padding(bottom = 2.dp)
+      )
+      Slider(
+        value = strength,
+        onValueChange = { value ->
+          strength = value
+          draftSelectedEffect?.let { onIntensity(it, value) }
+        },
+        valueRange = 0f..1f,
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("effect_strength_slider")
+      )
+    }
+
     // --- 4-Column Card / Grid Layout ---
     LazyVerticalGrid(
       columns = GridCells.Fixed(4),
@@ -218,10 +245,11 @@ fun EffectsCategoryPanel(
           ),
           modifier = Modifier
             .fillMaxWidth()
-            .height(68.dp)
+            .height(86.dp)
             .clickable {
               isNoneSelected = true
               draftSelectedEffect = null
+              onApply(null)
             }
             .testTag("effect_none_option")
         ) {
@@ -259,21 +287,32 @@ fun EffectsCategoryPanel(
           ),
           modifier = Modifier
             .fillMaxWidth()
-            .height(68.dp)
+            .height(86.dp)
             .clickable {
               isNoneSelected = false
               draftSelectedEffect = effect
+              strength = 1f
+              onApply(effect)
             }
             .testTag("effect_item_${effect.id}")
         ) {
-          Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier.padding(6.dp)
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(4.dp)
           ) {
+            EffectSwatch(
+              shaderKey = effect.shaderKey,
+              modifier = Modifier
+                .fillMaxWidth()
+                .height(40.dp)
+                .clip(RoundedCornerShape(6.dp))
+            )
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
               text = effect.name,
               color = Color.White,
-              fontSize = 11.sp,
+              fontSize = 10.sp,
               maxLines = 2,
               overflow = TextOverflow.Ellipsis,
               textAlign = TextAlign.Center
@@ -283,4 +322,18 @@ fun EffectsCategoryPanel(
       }
     }
   }
+}
+
+@Composable
+private fun EffectSwatch(shaderKey: String?, modifier: Modifier = Modifier) {
+  val image = remember(shaderKey) {
+    val pixels = EffectThumbnailRaster.argb(shaderKey, 48)
+    Bitmap.createBitmap(pixels, 48, 48, Bitmap.Config.ARGB_8888).asImageBitmap()
+  }
+  Image(
+    bitmap = image,
+    contentDescription = shaderKey,
+    contentScale = ContentScale.Crop,
+    modifier = modifier
+  )
 }

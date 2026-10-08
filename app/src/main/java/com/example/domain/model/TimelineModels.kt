@@ -330,8 +330,10 @@ data class VideoClip(
   val colorGradeJson: String? = null,
   /** Serialized com.vfx EffectStack (effect chain + parameter values) for this clip; null = no stack. Saves/undoes with the timeline. */
   val vfxStackJson: String? = null,
-  /** Face Reshape sliders as "eyes,slim,jaw,nose,chin,smile" (0..1 each); null = none. Saves/undoes with the timeline. */
+  /** Face Reshape sliders as "eyes,slim,jaw,nose,chin,smile,skin,teeth" (0..1 each); null = none. Saves/undoes with the timeline. */
   val faceReshape: String? = null,
+  /** Body reshape sliders as "reshape,waist,legs,shoulders,proportions" (0..1 each); null = none. */
+  val bodyReshape: String? = null,
   /** AR face filter baked into export as "filterId|scale|offsetY|opacity" (see ArOverlayCodec); null = none. Saves/undoes with the timeline. */
   val arOverlay: String? = null,
   /** Background-removal look as "strength,softness,mode,bgColor" (see BgRemoveCodec); null = defaults. Only used while [isBackgroundRemoved]. */

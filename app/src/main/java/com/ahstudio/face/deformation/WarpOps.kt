@@ -21,6 +21,10 @@ data class DeformationParams(
     val noseReshape: Float = 0f,
     val chinAdjust: Float = 0f,
     val smileAdjust: Float = 0f,
+    /** Bilateral-style smoothing inside the tracked face ellipse. */
+    val skinSmooth: Float = 0f,
+    /** Brighten / de-yellow the tracked mouth region. */
+    val teethWhiten: Float = 0f,
 ) {
     operator fun plus(o: DeformationParams) = DeformationParams(
         eyeEnlarge = (eyeEnlarge + o.eyeEnlarge).coerceIn(0f, 1f),
@@ -29,6 +33,8 @@ data class DeformationParams(
         noseReshape = (noseReshape + o.noseReshape).coerceIn(0f, 1f),
         chinAdjust = (chinAdjust + o.chinAdjust).coerceIn(0f, 1f),
         smileAdjust = (smileAdjust + o.smileAdjust).coerceIn(0f, 1f),
+        skinSmooth = (skinSmooth + o.skinSmooth).coerceIn(0f, 1f),
+        teethWhiten = (teethWhiten + o.teethWhiten).coerceIn(0f, 1f),
     )
 }
 

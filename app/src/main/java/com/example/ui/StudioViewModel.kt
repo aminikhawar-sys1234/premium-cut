@@ -284,7 +284,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     viewModelScope.launch {
       timelineEngine.timeline.collectLatest { timeline ->
         com.example.engine.color.ColorEngineHost.syncFromTimeline(timeline.videoClips)
-        hydrateFaceReshape(timeline.videoClips)
+        val mediaClips = timeline.videoClips + timeline.overlayClips
+        hydrateFaceReshape(mediaClips)
+        hydrateBodyReshape(mediaClips)
         hydrateArOverlays(timeline.videoClips)
         hydrateBgRemoval(timeline)
         hydrateMotionTracking()
@@ -1745,11 +1747,73 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     if (registry.faceSource == null && (force || _faceDeform.value.isNotEmpty())) {
       val tracker = com.ahstudio.face.tracking.ClipFaceTracker(
         context = getApplication<Application>().applicationContext,
-        uriFor = { id -> timelineEngine.timeline.value.videoClips.find { it.id == id }?.uri },
+        uriFor = { id -> mediaClip(id)?.uri },
       )
       clipFaceTracker = tracker
       registry.faceSource = tracker
     }
+  }
+
+  private var clipBodyTracker: com.example.engine.effects.ClipBodyTracker? = null
+  private var bodyHydrated: Map<String, com.example.engine.effects.BodyReshapeParams> = emptyMap()
+
+  /** Applies one catalog effect, or clears that category, on the selected main or overlay clip. */
+  fun applyCatalogEffect(
+    effect: com.example.engine.effects.registry.RegisteredEffect?,
+    category: com.example.engine.effects.registry.EffectCategory,
+    intensity: Float = effect?.intensity ?: 1f,
+  ) {
+    val clip = targetClipForEffects() ?: return
+    val next = if (effect == null) {
+      com.example.engine.effects.ProductionEffectApplicator.clearCategory(clip, category)
+    } else {
+      com.example.engine.effects.ProductionEffectApplicator.apply(clip, effect, intensity)
+    }
+    if (!timelineEngine.setClipProductionLook(clip.id, next)) return
+    val media = timelineEngine.timeline.value.let { it.videoClips + it.overlayClips }
+    hydrateFaceReshape(media)
+    hydrateBodyReshape(media)
+    hydrateBgRemoval(timelineEngine.timeline.value)
+    runCatching { engineController.invalidateClip(clip.id) }
+  }
+
+  /** Selected main video, selected overlay, or the main clip under the playhead. */
+  fun targetClipForEffects(): VideoClip? {
+    val tl = timelineEngine.timeline.value
+    val sel = timelineEngine.selectedElement.value
+    when (sel) {
+      is SelectedTrackElement.Overlay -> tl.overlayClips.find { it.id == sel.clipId }?.let { return it }
+      is SelectedTrackElement.Video -> tl.videoClips.find { it.id == sel.clipId }?.let { return it }
+      else -> Unit
+    }
+    return getSelectedVideoClip()
+  }
+
+  private fun mediaClip(id: String): VideoClip? {
+    val tl = timelineEngine.timeline.value
+    return tl.videoClips.find { it.id == id } ?: tl.overlayClips.find { it.id == id }
+  }
+
+  private fun ensureBodySource() {
+    if (com.example.engine.effects.BodyWarpRegistry.poseSource != null) return
+    val tracker = com.example.engine.effects.ClipBodyTracker(
+      context = getApplication<Application>().applicationContext,
+      uriFor = { id -> mediaClip(id)?.uri },
+    )
+    clipBodyTracker = tracker
+    com.example.engine.effects.BodyWarpRegistry.poseSource = tracker
+  }
+
+  private fun hydrateBodyReshape(clips: List<VideoClip>) {
+    val fromTimeline = clips.mapNotNull { c ->
+      c.bodyReshape?.let { c.id to com.example.engine.effects.BodyReshapeCodec.decode(it) }
+    }.toMap().filterValues { it.isActive() }
+    if (fromTimeline == bodyHydrated) return
+    val changed = (fromTimeline.keys + bodyHydrated.keys).filter { fromTimeline[it] != bodyHydrated[it] }
+    bodyHydrated = fromTimeline
+    com.example.engine.effects.BodyWarpRegistry.update(fromTimeline)
+    if (fromTimeline.isNotEmpty()) ensureBodySource()
+    changed.forEach { id -> runCatching { engineController.invalidateClip(id) } }
   }
 
   /** Rebuilds slider state from the timeline after project load / undo / redo. */
@@ -2544,10 +2608,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     super.onCleared()
     autoSaveJob?.cancel()
     com.ahstudio.face.deformation.FaceWarpRegistry.clear()
+    com.example.engine.effects.BodyWarpRegistry.clear()
     com.ahstudio.face.overlay.ArOverlayRegistry.clear()
     SubjectCutoutRegistry.clear()
     runCatching { clipFaceTracker?.shutdown() }
     clipFaceTracker = null
+    runCatching { clipBodyTracker?.shutdown() }
+    clipBodyTracker = null
     playbackEngine.release()
     audioEngine.release()
     videoExporter.release()

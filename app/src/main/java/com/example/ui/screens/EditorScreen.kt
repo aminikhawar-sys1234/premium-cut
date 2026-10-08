@@ -1103,9 +1103,10 @@ fun EditorScreen(
                   viewModel = viewModel,
                   onClose = { activeEffectsCategoryModal = null },
                   onApply = { effect ->
-                    if (effect != null && effect.effectType != null) {
-                      viewModel.timelineEngine.addEffectClip(effect.effectType)
-                    }
+                    viewModel.applyCatalogEffect(effect, activeEffectsCategoryModal!!)
+                  },
+                  onIntensity = { effect, amount ->
+                    viewModel.applyCatalogEffect(effect, activeEffectsCategoryModal!!, amount)
                   }
                 )
               }

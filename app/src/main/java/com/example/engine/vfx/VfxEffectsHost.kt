@@ -15,8 +15,7 @@ import com.vfx.engine.effects.BuiltinEffects
  * undoes and exports with the timeline). Every edit here is a pure JSON -> JSON transform, so the
  * panel stays stateless and the logic is unit-testable without Android.
  *
- * NOTE: this step wires the registry + parameter editing + persistence. GPU rendering of the stack
- * in the preview/export path is a separate step (see delivery notes).
+ * Preview and export both run this JSON through [com.example.engine.composition.gpu.VfxStackStage].
  */
 object VfxEffectsHost {
 

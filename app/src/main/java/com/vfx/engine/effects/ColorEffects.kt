@@ -16,6 +16,21 @@ import com.vfx.engine.graph.RenderContext
 object ColorEffects {
 
     fun all(): List<EffectDefinition> = listOf(
+        simpleEffect("color.hdr", "HDR Enhance", EffectCategory.COLOR,
+            listOf(FloatP("amount", "Amount", 0f, 1.5f, 0.01f, 0.75f)), EffectGlsl.HDR_ENHANCE,
+            description = "Shadow lift, highlight roll-off, local contrast and vibrance. One pass.")
+        { p, s, _ -> p.setFloat("u_amount", s.float("amount")) },
+
+        simpleEffect("color.pop", "Color Pop", EffectCategory.COLOR,
+            listOf(FloatP("amount", "Amount", 0f, 1f, 0.01f, 0.85f),
+                   FloatP("hue", "Kept Hue", 0f, 1f, 0.01f, 0.08f),
+                   FloatP("width", "Hue Width", 0.02f, 0.25f, 0.005f, 0.08f)), EffectGlsl.COLOR_POP,
+            description = "Desaturates the frame except a selected hue band. One pass.")
+        { p, s, _ ->
+            p.setFloat("u_amount", s.float("amount"))
+            p.setFloat("u_hueCenter", s.float("hue"))
+            p.setFloat("u_hueWidth", s.float("width")) },
+
         simpleEffect("color.brightness", "Brightness", EffectCategory.COLOR,
             listOf(FloatP("amount", "Amount", -1f, 1f, 0.01f, 0f)), EffectGlsl.BRIGHTNESS,
             description = "Adds a constant to RGB. Passes: 1. Space: gamma.")

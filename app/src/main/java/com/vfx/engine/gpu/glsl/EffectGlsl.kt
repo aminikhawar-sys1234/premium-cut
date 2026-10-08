@@ -595,6 +595,77 @@ vec4 process(vec4 c, vec2 uv){
     return c;
 }"""
 
+    const val GLITCH = """
+uniform float u_amount;
+vec4 process(vec4 c, vec2 uv){
+    float band = floor(uv.y * 28.0);
+    float tick = floor(u_time * 14.0);
+    float j = (hash21(vec2(band, tick)) - 0.5) * u_amount * 2.0;
+    float rowOn = step(0.72, hash21(vec2(band, tick * 0.37)));
+    vec2 shifted = clampUv(uv + vec2(j * rowOn, 0.0));
+    float tear = step(0.92, hash21(vec2(floor(u_time * 9.0), 3.0)));
+    shifted.x += tear * u_amount * 0.35;
+    c.r = texture(u_tex, clampUv(shifted + vec2(u_amount * 0.45, 0.0))).r;
+    c.g = texture(u_tex, shifted).g;
+    c.b = texture(u_tex, clampUv(shifted - vec2(u_amount * 0.45, 0.0))).b;
+    float scan = 0.94 + 0.06 * sin(uv.y * u_resolution.y * 1.6 + u_time * 40.0);
+    c.rgb *= scan;
+    return c;
+}"""
+
+    const val LIGHT_LEAK = """
+uniform float u_amount;
+uniform vec3 u_leakColor;
+vec4 process(vec4 c, vec2 uv){
+    vec2 origin = vec2(0.12 + 0.08 * sin(u_time * 0.35), 0.82);
+    float blob = exp(-length(uv - origin) * 3.2);
+    float streak = exp(-pow((uv.x * 1.4 - 0.2) * 2.2, 2.0)) * smoothstep(0.0, 0.45, uv.y);
+    vec3 leak = u_leakColor * (blob * 1.15 + streak * 0.55) * u_amount;
+    c.rgb = 1.0 - (1.0 - c.rgb) * (1.0 - clamp(leak, 0.0, 1.0));
+    return c;
+}"""
+
+    const val HDR_ENHANCE = """
+uniform float u_amount;
+vec4 process(vec4 c, vec2 uv){
+    float l = luma709(c.rgb);
+    float shadow = smoothstep(0.42, 0.0, l);
+    float highlight = smoothstep(0.58, 1.0, l);
+    vec3 mapped = c.rgb + c.rgb * shadow * 0.35 * u_amount - (c.rgb - vec3(l)) * highlight * 0.15 * u_amount;
+    mapped += shadow * 0.06 * u_amount;
+    float contrast = mix(1.0, 1.18, u_amount);
+    mapped = (mapped - 0.5) * contrast + 0.5;
+    float ll = luma709(mapped);
+    c.rgb = mix(vec3(ll), mapped, mix(1.0, 1.22, u_amount));
+    return c;
+}"""
+
+    const val COLOR_POP = """
+uniform float u_amount;
+uniform float u_hueCenter;
+uniform float u_hueWidth;
+vec4 process(vec4 c, vec2 uv){
+    float mx = max(c.r, max(c.g, c.b));
+    float mn = min(c.r, min(c.g, c.b));
+    float delta = mx - mn;
+    float hue = 0.0;
+    if (delta > 0.001) {
+        if (mx == c.r) hue = mod((c.g - c.b) / delta, 6.0);
+        else if (mx == c.g) hue = (c.b - c.r) / delta + 2.0;
+        else hue = (c.r - c.g) / delta + 4.0;
+        hue /= 6.0;
+    }
+    float dh = abs(hue - u_hueCenter);
+    dh = min(dh, 1.0 - dh);
+    float keep = 1.0 - smoothstep(u_hueWidth * 0.35, u_hueWidth, dh);
+    float satBoost = delta / max(mx, 0.001);
+    keep *= smoothstep(0.08, 0.22, satBoost);
+    float l = luma709(c.rgb);
+    vec3 grey = vec3(l);
+    c.rgb = mix(mix(grey, c.rgb, 1.0 - u_amount), c.rgb, keep);
+    return c;
+}"""
+
     const val RGB_SPLIT = """
 uniform vec2 u_splitDir;
 uniform float u_splitAmount;

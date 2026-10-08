@@ -3,6 +3,7 @@ package com.example.ui.components.effects
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AccessibilityNew
 import androidx.compose.material.icons.filled.AutoFixHigh
+import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.runtime.Composable
@@ -23,6 +24,11 @@ private val BodyEffectsTheme = NavItemColorTheme(
   iconTint = Color(0xFF10B981)
 )
 
+private val FaceEffectsTheme = NavItemColorTheme(
+  bgCircle = Color(0xFF3A2430),
+  iconTint = Color(0xFFF9A8D4)
+)
+
 private val PhotoEffectsTheme = NavItemColorTheme(
   bgCircle = Color(0xFF132F42),
   iconTint = Color(0xFF38BDF8)
@@ -37,11 +43,7 @@ private val AIEffectsTheme = NavItemColorTheme(
  * Dedicated Effects Sub-Navigation.
  * Replaces the main editor bottom navigation when "Effects" is selected.
  *
- * Contains 4 horizontally arranged options:
- * 1. Video Effects
- * 2. Body Effects
- * 3. Photo Effects
- * 4. AI Effects
+ * Video, Body, Face, Photo, and AI. The row scrolls when it does not fit.
  */
 @Composable
 fun EffectsToolsBottomBar(
@@ -68,6 +70,15 @@ fun EffectsToolsBottomBar(
       isSelected = activeCategory == EffectCategory.BODY_EFFECTS,
       testTag = EffectCategory.BODY_EFFECTS.tag,
       onClick = { onSelectCategory(EffectCategory.BODY_EFFECTS) }
+    ),
+    FuturisticNavItemData(
+      id = EffectCategory.FACE_EFFECTS.name,
+      label = EffectCategory.FACE_EFFECTS.displayName,
+      icon = Icons.Default.Face,
+      theme = FaceEffectsTheme,
+      isSelected = activeCategory == EffectCategory.FACE_EFFECTS,
+      testTag = EffectCategory.FACE_EFFECTS.tag,
+      onClick = { onSelectCategory(EffectCategory.FACE_EFFECTS) }
     ),
     FuturisticNavItemData(
       id = EffectCategory.PHOTO_EFFECTS.name,

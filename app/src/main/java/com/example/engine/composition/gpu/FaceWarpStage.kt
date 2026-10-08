@@ -6,6 +6,7 @@ import android.util.Log
 import com.ahstudio.face.deformation.FaceWarpMapper
 import com.ahstudio.face.deformation.FaceWarpRegistry
 import com.ahstudio.face.deformation.WarpOps
+import com.ahstudio.face.deformation.hasMeshWarp
 import com.ahstudio.face.rendering.FaceWarpPass
 import com.example.domain.model.VideoClip
 import com.example.engine.InterpolatedClipTransform
@@ -35,7 +36,7 @@ class FaceWarpStage {
     placementOverride: FaceWarpMapper.Placement? = null
   ): Int {
     if (disabled || clip == null || srcTex <= 0 || width <= 0 || height <= 0) return srcTex
-    val params = FaceWarpRegistry.paramsFor(clip.id) ?: return srcTex
+    val params = FaceWarpRegistry.paramsFor(clip.id)?.takeIf { it.hasMeshWarp() } ?: return srcTex
     val source = FaceWarpRegistry.faceSource ?: return srcTex
 
     val faces = try {

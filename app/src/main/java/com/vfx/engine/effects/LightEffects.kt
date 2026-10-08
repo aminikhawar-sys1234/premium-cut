@@ -45,6 +45,15 @@ object LightEffects {
             description = "Separable blur + screen combine. Passes: 3.")
         { GlowRuntime() },
 
+        simpleEffect("light.leak", "Light Leak", EffectCategory.LIGHT,
+            listOf(FloatP("amount", "Amount", 0f, 1.5f, 0.01f, 0.65f),
+                   ColorP("color", "Leak", floatArrayOf(1f, 0.45f, 0.12f, 1f))), EffectGlsl.LIGHT_LEAK,
+            description = "Screen-composited warm leak from a moving source. One pass.")
+        { p, s, _ ->
+            val col = s.floats("color")
+            p.setFloat("u_amount", s.float("amount"))
+            p.setVec3("u_leakColor", col[0], col[1], col[2]) },
+
         simpleEffect("light.rays", "Light Rays / Sunbeams", EffectCategory.LIGHT,
             listOf(Vec2P("pos", "Light Position", floatArrayOf(0.5f, 0.2f)),
                    FloatP("length", "Ray Length", 0f, 1f, 0.01f, 0.4f),

@@ -503,9 +503,10 @@ fun EffectsToolPanel(
     viewModel = viewModel,
     onClose = { viewModel.setActiveToolbarTab(null) },
     onApply = { effect ->
-      if (effect != null && effect.effectType != null) {
-        viewModel.timelineEngine.addEffectClip(effect.effectType)
-      }
+      viewModel.applyCatalogEffect(effect, com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS)
+    },
+    onIntensity = { effect, amount ->
+      viewModel.applyCatalogEffect(effect, com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS, amount)
     },
     modifier = modifier
   )

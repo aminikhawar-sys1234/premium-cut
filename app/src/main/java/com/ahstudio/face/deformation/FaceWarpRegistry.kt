@@ -31,6 +31,11 @@ object FaceWarpRegistry {
 
 fun DeformationParams.isActive(): Boolean =
     eyeEnlarge > 0.001f || faceSlim > 0.001f || jawSharp > 0.001f ||
+        noseReshape > 0.001f || chinAdjust > 0.001f || smileAdjust > 0.001f ||
+        skinSmooth > 0.001f || teethWhiten > 0.001f
+
+fun DeformationParams.hasMeshWarp(): Boolean =
+    eyeEnlarge > 0.001f || faceSlim > 0.001f || jawSharp > 0.001f ||
         noseReshape > 0.001f || chinAdjust > 0.001f || smileAdjust > 0.001f
 
 /**
@@ -171,13 +176,13 @@ object FaceWarpMapper {
 object DeformationCodec {
     fun encode(d: DeformationParams): String? =
         if (!d.isActive()) null
-        else listOf(d.eyeEnlarge, d.faceSlim, d.jawSharp, d.noseReshape, d.chinAdjust, d.smileAdjust)
+        else listOf(d.eyeEnlarge, d.faceSlim, d.jawSharp, d.noseReshape, d.chinAdjust, d.smileAdjust, d.skinSmooth, d.teethWhiten)
             .joinToString(",")
 
     fun decode(s: String?): DeformationParams {
         if (s.isNullOrBlank()) return DeformationParams()
         val v = s.split(',').map { it.trim().toFloatOrNull()?.coerceIn(0f, 1f) ?: 0f }
         fun at(i: Int) = v.getOrElse(i) { 0f }
-        return DeformationParams(at(0), at(1), at(2), at(3), at(4), at(5))
+        return DeformationParams(at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7))
     }
 }

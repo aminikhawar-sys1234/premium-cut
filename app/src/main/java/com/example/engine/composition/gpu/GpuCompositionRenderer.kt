@@ -190,6 +190,13 @@ class GpuCompositionRenderer(private val context: Context) {
   private val colorGradeStage = ColorGradeStage()
   private val vfxStackStage = VfxStackStage()
   private val faceWarpStage = FaceWarpStage()
+  private val bodyWarpStage = BodyWarpStage()
+  private val faceBeautyStage = FaceBeautyStage()
+  /** Second instances so an overlay pass cannot release the main clip's textures mid-frame. */
+  private val overlayVfxStage = VfxStackStage()
+  private val overlayFaceWarpStage = FaceWarpStage()
+  private val overlayBodyWarpStage = BodyWarpStage()
+  private val overlayFaceBeautyStage = FaceBeautyStage()
   private val arOverlayStage = ArOverlayStage()
   private val subjectCutoutStage = SubjectCutoutStage()
   private val fboTransitionA = GlFramebuffer()
@@ -362,23 +369,46 @@ class GpuCompositionRenderer(private val context: Context) {
       // Face Reshape sliders (Big Eyes / Slim Face / Jawline ...): mesh warp on the composed clip.
       // No-op for clips without reshape. The export path (deterministicMasks) waits for tracking
       // so exported frames are deterministic; the live preview never blocks the GL thread.
+      val trackedBlocking = flipYForEncoder || deterministicMasks
       val faceTexId = faceWarpStage.apply(
         clip = frame.activeClip,
         timelinePosMs = frame.timelinePosMs,
         srcTex = vfxTexId,
         width = viewportWidth,
         height = viewportHeight,
-        blocking = flipYForEncoder || deterministicMasks,
+        blocking = trackedBlocking,
+        transform = frame.activeClipTransform,
+        placementOverride = mainGeometry?.placement
+      )
+
+      val bodyTexId = bodyWarpStage.apply(
+        clip = frame.activeClip,
+        timelinePosMs = frame.timelinePosMs,
+        srcTex = faceTexId,
+        width = viewportWidth,
+        height = viewportHeight,
+        blocking = trackedBlocking,
+        transform = frame.activeClipTransform,
+        placementOverride = mainGeometry?.placement
+      )
+
+      val beautyTexId = faceBeautyStage.apply(
+        clip = frame.activeClip,
+        timelinePosMs = frame.timelinePosMs,
+        srcTex = bodyTexId,
+        width = viewportWidth,
+        height = viewportHeight,
+        blocking = trackedBlocking,
         transform = frame.activeClipTransform,
         placementOverride = mainGeometry?.placement
       )
 
       // Background removal (AI cutout): no-op for clips without it. Runs last so the mask is cut from
-      // exactly what is displayed (after grade / FX / face reshape).
+      // exactly what is displayed (after grade / FX / face / body).
       val main2dTexId = subjectCutoutStage.apply(
         clipId = frame.activeClip?.id,
         params = SubjectCutoutRegistry.paramsFor(frame.activeClip?.id),
-        srcTex = faceTexId,
+        srcTex = beautyTexId,
         width = viewportWidth,
         height = viewportHeight,
         analysisAspect = viewportWidth.toFloat() / max(1, viewportHeight),
@@ -452,6 +482,21 @@ class GpuCompositionRenderer(private val context: Context) {
           timelinePosMs = frame.timelinePosMs
         )
 
+        val ovFxTex = applyTrackedEffects(
+          clip = overlay.clip,
+          srcTex = ovRawTexId,
+          width = viewportWidth,
+          height = viewportHeight,
+          timelinePosMs = frame.timelinePosMs,
+          blocking = flipYForEncoder || deterministicMasks,
+          placement = fullBleedPlacement(viewportWidth, viewportHeight),
+          vfx = overlayVfxStage,
+          face = overlayFaceWarpStage,
+          body = overlayBodyWarpStage,
+          beauty = overlayFaceBeautyStage,
+        )
+        val ovSettled = settleOverlayTexture(overlay.clip.id, ovRawTexId, ovFxTex, viewportWidth, viewportHeight)
+
         // Background removal for PIP / overlay clips. The overlay texture is the clip's raw frame
         // (rotation is applied later by the layer matrix), so analyse it with its raw aspect and
         // rotate it upright for the segmenter only.
@@ -460,7 +505,7 @@ class GpuCompositionRenderer(private val context: Context) {
         val ov2dTexId = subjectCutoutStage.apply(
           clipId = overlay.clip.id,
           params = SubjectCutoutRegistry.paramsFor(overlay.clip.id),
-          srcTex = ovRawTexId,
+          srcTex = ovSettled,
           width = viewportWidth,
           height = viewportHeight,
           analysisAspect = ovRawW.toFloat() / max(1, ovRawH),
@@ -1663,6 +1708,12 @@ class GpuCompositionRenderer(private val context: Context) {
     colorGradeStage.onContextLost()
     vfxStackStage.onContextLost()
     faceWarpStage.onContextLost()
+    bodyWarpStage.onContextLost()
+    faceBeautyStage.onContextLost()
+    overlayVfxStage.onContextLost()
+    overlayFaceWarpStage.onContextLost()
+    overlayBodyWarpStage.onContextLost()
+    overlayFaceBeautyStage.onContextLost()
     arOverlayStage.onContextLost()
     subjectCutoutStage.onContextLost()
     textTextureCache.clear()
@@ -1686,6 +1737,12 @@ class GpuCompositionRenderer(private val context: Context) {
     colorGradeStage.release()
     vfxStackStage.release()
     faceWarpStage.release()
+    bodyWarpStage.release()
+    faceBeautyStage.release()
+    overlayVfxStage.release()
+    overlayFaceWarpStage.release()
+    overlayBodyWarpStage.release()
+    overlayFaceBeautyStage.release()
     arOverlayStage.release()
     subjectCutoutStage.release()
     fboMain2D.release()
@@ -1746,6 +1803,73 @@ class GpuCompositionRenderer(private val context: Context) {
       nativeHandle = 0L
     }
     Log.d(TAG, "GpuCompositionRenderer & Native Engine cleanly released")
+  }
+
+  /**
+   * Same effect chain as the main clip: vfx stack, face mesh, body pose warp, face beauty.
+   * Each layer uses its own stage instances so textures are not released out from under another layer.
+   */
+  private fun applyTrackedEffects(
+    clip: VideoClip,
+    srcTex: Int,
+    width: Int,
+    height: Int,
+    timelinePosMs: Long,
+    blocking: Boolean,
+    placement: com.ahstudio.face.deformation.FaceWarpMapper.Placement,
+    vfx: VfxStackStage,
+    face: FaceWarpStage,
+    body: BodyWarpStage,
+    beauty: FaceBeautyStage,
+  ): Int {
+    val vfxTex = vfx.apply(
+      clipId = clip.id,
+      stackJson = clip.vfxStackJson,
+      clipTimeMs = timelinePosMs - clip.timelineStartMs,
+      srcTex = srcTex,
+      width = width,
+      height = height
+    )
+    val faceTex = face.apply(
+      clip = clip,
+      timelinePosMs = timelinePosMs,
+      srcTex = vfxTex,
+      width = width,
+      height = height,
+      blocking = blocking,
+      placementOverride = placement
+    )
+    val bodyTex = body.apply(
+      clip = clip,
+      timelinePosMs = timelinePosMs,
+      srcTex = faceTex,
+      width = width,
+      height = height,
+      blocking = blocking,
+      placementOverride = placement
+    )
+    return beauty.apply(
+      clip = clip,
+      timelinePosMs = timelinePosMs,
+      srcTex = bodyTex,
+      width = width,
+      height = height,
+      blocking = blocking,
+      placementOverride = placement
+    )
+  }
+
+  /** Copies an effect-stage texture back into the overlay's own framebuffer before the next overlay reuses the stage. */
+  private fun settleOverlayTexture(clipId: String, rawTex: Int, processed: Int, width: Int, height: Int): Int {
+    if (processed <= 0 || processed == rawTex) return if (rawTex > 0) rawTex else processed
+    val fbo = fboOverlayMap[clipId] ?: return processed
+    if (fbo.getTextureId() == processed) return processed
+    fbo.bind()
+    GLES20.glViewport(0, 0, width, height)
+    GLES20.glDisable(GLES20.GL_BLEND)
+    blitToSurface(processed, flipY = false)
+    fbo.unbind()
+    return fbo.getTextureId()
   }
 
   private fun blitToSurface(textureId: Int, flipY: Boolean, flipX: Boolean = false) {

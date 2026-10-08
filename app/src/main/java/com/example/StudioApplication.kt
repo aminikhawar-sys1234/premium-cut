@@ -21,6 +21,7 @@ class StudioApplication : Application() {
     super.onCreate()
     instance = this
     com.example.engine.color.ColorEngineHost.init(this)
+    com.example.engine.effects.ProductionEffectCatalog.install()
     
     // Global safety uncaught exception handler: logs error and prevents unnecessary hard crashes
     val defaultHandler = Thread.getDefaultUncaughtExceptionHandler()

@@ -47,6 +47,11 @@ object DistortEffects {
             p.setFloat("u_waveSpeed", s.float("speed"))
             p.setFloat("u_waveAmp", s.float("amplitude")) },
 
+        simpleEffect("distort.glitch", "Glitch", EffectCategory.DISTORTION,
+            listOf(FloatP("amount", "Displacement", 0f, 0.08f, 0.001f, 0.02f)), EffectGlsl.GLITCH,
+            description = "Slice displacement plus RGB channel tear. One pass.")
+        { p, s, _ -> p.setFloat("u_amount", s.float("amount") * s.intensity.coerceAtLeast(0.05f)) },
+
         simpleEffect("distort.turbulence", "Turbulence", EffectCategory.DISTORTION,
             listOf(FloatP("frequency", "Frequency", 0.5f, 20f, 0.5f, 4f),
                    FloatP("amplitude", "Amplitude", 0f, 0.1f, 0.001f, 0.02f),

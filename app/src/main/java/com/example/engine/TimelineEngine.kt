@@ -3152,10 +3152,44 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
 
   /** Stores a clip's com.vfx effect stack (EffectStack JSON). Slider bursts share one undo step. */
   fun setClipVfxStack(clipId: String, stackJson: String?): Boolean {
-    if (_timeline.value.videoClips.none { it.id == clipId }) return false
-    recordHistoryCoalesced("vfx_stack:$clipId", TimelineActionType.VFX_STACK_EDIT)
-    _timeline.value = _timeline.value.copy(
-      videoClips = _timeline.value.videoClips.map { if (it.id == clipId) it.copy(vfxStackJson = stackJson) else it }
+    return updateClipFields(clipId, "vfx_stack:$clipId", TimelineActionType.VFX_STACK_EDIT) { clip ->
+      if (clip.vfxStackJson == stackJson) null else clip.copy(vfxStackJson = stackJson)
+    }
+  }
+
+  /**
+   * Writes the production effect fields for one main or overlay clip in a single undo step.
+   * Preview and export read these same fields.
+   */
+  fun setClipProductionLook(clipId: String, look: VideoClip): Boolean {
+    return updateClipFields(clipId, "production_fx:$clipId", TimelineActionType.VFX_STACK_EDIT) { clip ->
+      if (clip.vfxStackJson == look.vfxStackJson && clip.faceReshape == look.faceReshape &&
+        clip.bodyReshape == look.bodyReshape && clip.isBackgroundRemoved == look.isBackgroundRemoved &&
+        clip.bgRemove == look.bgRemove
+      ) null else clip.copy(
+        vfxStackJson = look.vfxStackJson,
+        faceReshape = look.faceReshape,
+        bodyReshape = look.bodyReshape,
+        isBackgroundRemoved = look.isBackgroundRemoved,
+        bgRemove = look.bgRemove,
+      )
+    }
+  }
+
+  private fun updateClipFields(
+    clipId: String,
+    historyKey: String,
+    action: TimelineActionType,
+    transform: (VideoClip) -> VideoClip?,
+  ): Boolean {
+    val tl = _timeline.value
+    val current = (tl.videoClips + tl.overlayClips).firstOrNull { it.id == clipId } ?: return false
+    val updated = transform(current) ?: return true
+    recordHistoryCoalesced(historyKey, action)
+    val apply: (VideoClip) -> VideoClip = { c -> if (c.id == clipId) updated else c }
+    _timeline.value = tl.copy(
+      videoClips = tl.videoClips.map(apply),
+      overlayClips = tl.overlayClips.map(apply)
     )
     return true
   }
@@ -3213,13 +3247,16 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
 
   /** Stores a clip's Face Reshape slider values (see [VideoClip.faceReshape]). Slider bursts share one undo step. */
   fun setClipFaceReshape(clipId: String, encoded: String?): Boolean {
-    val clip = _timeline.value.videoClips.find { it.id == clipId } ?: return false
-    if (clip.faceReshape == encoded) return true
-    recordHistoryCoalesced("face_reshape:$clipId", TimelineActionType.FACE_RESHAPE_EDIT)
-    _timeline.value = _timeline.value.copy(
-      videoClips = _timeline.value.videoClips.map { if (it.id == clipId) it.copy(faceReshape = encoded) else it }
-    )
-    return true
+    return updateClipFields(clipId, "face_reshape:$clipId", TimelineActionType.FACE_RESHAPE_EDIT) { clip ->
+      if (clip.faceReshape == encoded) null else clip.copy(faceReshape = encoded)
+    }
+  }
+
+  /** Stores body-reshape strengths (see [VideoClip.bodyReshape]). Slider bursts share one undo step. */
+  fun setClipBodyReshape(clipId: String, encoded: String?): Boolean {
+    return updateClipFields(clipId, "body_reshape:$clipId", TimelineActionType.FACE_RESHAPE_EDIT) { clip ->
+      if (clip.bodyReshape == encoded) null else clip.copy(bodyReshape = encoded)
+    }
   }
 
   /** Stores a clip's AR face filter (see [VideoClip.arOverlay]). Slider bursts share one undo step. */

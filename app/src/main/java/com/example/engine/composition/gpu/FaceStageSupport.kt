@@ -43,6 +43,25 @@ internal fun faceClipPlacement(
   )
 }
 
+/**
+ * Placement for an overlay texture that already fills its framebuffer edge to edge.
+ * Landmarks stay in source 0..1, which lines up with that full-frame texture.
+ */
+internal fun fullBleedPlacement(width: Int, height: Int): FaceWarpMapper.Placement =
+  FaceWarpMapper.Placement.forClip(
+    viewportWidth = width,
+    viewportHeight = height,
+    rawWidth = width,
+    rawHeight = height,
+    naturalRotation = 0,
+    userRotation = 0,
+    flipHorizontal = false,
+    flipVertical = false,
+    cropScale = 1f,
+    cropOffsetX = 0f,
+    cropOffsetY = 0f,
+  )
+
 /** One face in viewport pixels: pivot, half extents along the face's own axes, and quad rotation. */
 internal class FaceGeometry(
   val centerX: Float, val centerY: Float,

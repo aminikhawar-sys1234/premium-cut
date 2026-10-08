@@ -9,6 +9,7 @@ import com.example.domain.model.EffectType
 enum class EffectCategory(val displayName: String, val tag: String) {
   VIDEO_EFFECTS("Video Effects", "nav_video_effects"),
   BODY_EFFECTS("Body Effects", "nav_body_effects"),
+  FACE_EFFECTS("Face Effects", "nav_face_effects"),
   PHOTO_EFFECTS("Photo Effects", "nav_photo_effects"),
   AI_EFFECTS("AI Effects", "nav_ai_effects")
 }
@@ -24,7 +25,11 @@ data class RegisteredEffect(
   val shaderKey: String? = null,
   val intensity: Float = 1.0f,
   val previewThumbnailUrl: String? = null,
-  val isCustom: Boolean = false
+  val isCustom: Boolean = false,
+  /** Parameter ids the implementation actually reads. Intensity is always one of them. */
+  val parameters: List<String> = listOf("intensity"),
+  val supportsPreview: Boolean = true,
+  val supportsExport: Boolean = true
 )
 
 /**
