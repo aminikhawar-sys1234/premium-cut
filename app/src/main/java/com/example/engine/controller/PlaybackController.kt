@@ -39,7 +39,6 @@ class PlaybackController(
 ) {
   companion object {
     private const val TAG = "PlaybackController"
-    private const val DRIFT_CORRECTION_THRESHOLD_MS = 120L
   }
 
   private val appContext = context.applicationContext
@@ -69,6 +68,7 @@ class PlaybackController(
   private var disposed = false
   private var pendingCommand: Job? = null
   private var internalPlayerSeeking = false
+  private var lastDriftCorrectionElapsedMs = 0L
 
   init {
     _playbackManager = PlaybackManager(
@@ -130,7 +130,12 @@ class PlaybackController(
     )
     _timelinePositionMs.value = boundedPos
 
-    syncExoPlayerToTimelineState(exact = !_timelineState.value.isPlaying)
+    // While playing, do not re-seek the current clip. A timeline snapshot refresh
+    // (filters, undo, autosave) must not snap the decoder back to a keyframe.
+    val clipChanged = _timelineState.value.activeClip?.id != currentLoadedClipId
+    if (!_timelineState.value.isPlaying || clipChanged) {
+      syncExoPlayerToTimelineState(exact = true)
+    }
   }
 
   fun setTimeline(timeline: Timeline) = updateTimeline(timeline)
@@ -222,7 +227,8 @@ class PlaybackController(
     _timelinePositionMs.value = targetPos
     _state.value = EnginePlaybackState.PLAYING
 
-    syncExoPlayerToTimelineState(exact = false)
+    // Exact seek: Play must show the frame under the CTI, not the previous keyframe.
+    syncExoPlayerToTimelineState(exact = true)
   }
 
   /** Pauses timeline playback and guarantees exact frame lock between playhead and preview. */
@@ -262,12 +268,27 @@ class PlaybackController(
     if (currentClip?.id != nextClip?.id) {
       handleClipTransition(nextClip, bounded, resumeAfter = _timelineState.value.isPlaying)
     } else if (_timelineState.value.isPlaying && nextClip != null && nextClip.isVideo) {
-      // Check for drift during playback
-      val expectedSourcePos = nextClip.timelineToSourceMs(bounded)
-      val playerPos = playbackManager.currentPosition
-      if (Math.abs(playerPos - expectedSourcePos) > DRIFT_CORRECTION_THRESHOLD_MS) {
-        playbackManager.seekToFast(expectedSourcePos)
-      }
+      correctSourceDriftIfNeeded(nextClip, bounded)
+    }
+  }
+
+  /**
+   * One exact corrective seek when the decoder is actually lost, never a
+   * closest-keyframe seek on every tick. Keyframe seeks land 1–2s early and
+   * the next tick seeks again, so the preview jumps backward for the whole play.
+   */
+  private fun correctSourceDriftIfNeeded(clip: VideoClip, timelinePosMs: Long) {
+    val ready = try {
+      playbackManager.playbackState == Player.STATE_READY && playbackManager.player.isPlaying
+    } catch (_: Throwable) {
+      false
+    }
+    val expectedSourcePos = clip.timelineToSourceMs(timelinePosMs)
+    val playerPos = try { playbackManager.currentPosition } catch (_: Throwable) { return }
+    val sinceCorrection = SystemClock.elapsedRealtime() - lastDriftCorrectionElapsedMs
+    if (PlaybackSyncPolicy.shouldCorrectSourceDrift(playerPos, expectedSourcePos, ready, sinceCorrection)) {
+      lastDriftCorrectionElapsedMs = SystemClock.elapsedRealtime()
+      playbackManager.seekToExact(expectedSourcePos)
     }
   }
 
@@ -318,6 +339,7 @@ class PlaybackController(
         } else {
           playbackManager.seekToFast(sourcePos)
         }
+        lastDriftCorrectionElapsedMs = SystemClock.elapsedRealtime()
       } finally {
         internalPlayerSeeking = false
       }

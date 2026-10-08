@@ -51,7 +51,6 @@ class MasterPlaybackClock(
   @Volatile private var lastAudioPositionMs = -1L
   @Volatile private var lastAudioTimestampNs = 0L
   @Volatile private var lastRebaseTimestampNs = 0L
-  private val AUDIO_SYNC_GRACE_PERIOD_MS = 300L
 
   private var tickerJob: Job? = null
   private var choreographerCallback: Choreographer.FrameCallback? = null
@@ -171,8 +170,7 @@ class MasterPlaybackClock(
 
   /**
    * Authoritative clock calculation.
-   * Locked to AudioTrack presentation timestamps (PTS) when audio is available.
-   * Uses monotonic nanosecond interpolation locked to VSYNC.
+   * Monotonic from the CTI anchor. The media player follows this clock.
    */
   fun calculateCurrentPosition(): Long = synchronized(clockLock) {
     if (!_isPlaying.value) return anchorPositionMs
@@ -184,33 +182,19 @@ class MasterPlaybackClock(
     val monotonicElapsedNs = (vsyncNs - anchorTimeNs).coerceAtLeast(0L)
     val monotonicMs = anchorPositionMs + TimeUnit.NANOSECONDS.toMillis(monotonicElapsedNs)
 
-    val timeSinceRebaseMs = TimeUnit.NANOSECONDS.toMillis(nowNs - lastRebaseTimestampNs)
-    if (timeSinceRebaseMs < AUDIO_SYNC_GRACE_PERIOD_MS) {
-      return monotonicMs.coerceAtLeast(0L)
-    }
-
-    // Synchronize with hardware audio clock PTS if available
-    try {
-      val provider = audioClockProvider
-      val audioPos = provider?.getAudioPositionMs()
-      if (audioPos != null && audioPos >= 0L) {
-        val drift = audioPos - monotonicMs
-        // If drift exceeds 150ms tolerance (e.g. audio hardware stall, bluetooth latency switch, or underrun)
-        // re-anchor to the audio clock. Otherwise, let monotonic VSYNC clock drive smooth jitter-free playback.
-        if (kotlin.math.abs(drift) > 150L && kotlin.math.abs(drift) <= 2000L) {
-          lastAudioPositionMs = audioPos
-          lastAudioTimestampNs = vsyncNs
-          anchorPositionMs = audioPos
-          anchorTimeNs = vsyncNs
-          lastRebaseTimestampNs = nowNs
-          return audioPos.coerceAtLeast(0L)
-        }
+    // The media player is a slave of this clock. Its currentPosition is source time and
+    // lags by a GOP after a keyframe seek (commonly 1–2s). Rebasing onto it pulled the
+    // CTI backward and made the next Play start at the wrong place.
+    if (PlaybackSyncPolicy.shouldRebaseMasterClock(monotonicMs, lastAudioPositionMs)) {
+      val external = try { audioClockProvider?.getAudioPositionMs() } catch (_: Throwable) { null }
+      if (external != null && external >= 0L) {
+        anchorPositionMs = external
+        anchorTimeNs = vsyncNs
+        lastRebaseTimestampNs = nowNs
+        return external
       }
-    } catch (_: Throwable) {
-      // Audio provider safely ignored if player is transitioning or detached
     }
 
-    // High-precision monotonic VSYNC clock
     return monotonicMs.coerceAtLeast(0L)
   }
 
