@@ -3,6 +3,7 @@ package com.example.engine.playback
 import android.content.Context
 import android.graphics.ColorMatrix
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.MediaItem
@@ -20,6 +21,7 @@ import com.example.domain.model.effectiveAdjustments
 import com.example.domain.model.timelineToSourceMs
 import com.example.engine.composition.ColorFilterGenerator
 import com.example.engine.controller.CustomVideoEngineController
+import com.example.engine.controller.PlaybackSyncPolicy
 import com.example.engine.media.MediaRelinkManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,7 +52,6 @@ class VideoPlaybackEngine(
   companion object {
     private const val TAG = "VideoPlaybackEngine"
     private const val UI_TICK_MS = 16L
-    private const val SECONDARY_DRIFT_RESEEK_MS = 350L
     private const val PAUSED_SEEK_EPSILON_MS = 30L
   }
 
@@ -103,6 +104,7 @@ class VideoPlaybackEngine(
   private val overlayLoadedUris = ConcurrentHashMap<String, String>()
   private val audioTrackPlayers = ConcurrentHashMap<String, ExoPlayer>()
   private val audioLoadedUris = ConcurrentHashMap<String, String>()
+  private val secondaryCorrectionAtMs = ConcurrentHashMap<String, Long>()
 
   init {
     player.addListener(object : Player.Listener {
@@ -131,11 +133,24 @@ class VideoPlaybackEngine(
    * the source position would issue a new seek on every sync tick (seek storm -> repeated audio "tuk tuk").
    * The initial seek is already issued when playWhenReady is switched on.
    */
-  private fun needsDriftReseek(p: ExoPlayer, sourceMs: Long): Boolean {
+  private fun needsDriftReseek(playerId: String, p: ExoPlayer, sourceMs: Long): Boolean {
     val state = try { p.playbackState } catch (_: Exception) { return false }
     if (state == Player.STATE_BUFFERING || state == Player.STATE_IDLE) return false
+    val playing = try { p.isPlaying } catch (_: Exception) { return false }
     val playerPos = try { p.currentPosition } catch (_: Exception) { return false }
-    return kotlin.math.abs(playerPos - sourceMs) > SECONDARY_DRIFT_RESEEK_MS
+    val since = SystemClock.elapsedRealtime() - (secondaryCorrectionAtMs[playerId] ?: Long.MIN_VALUE)
+    return PlaybackSyncPolicy.shouldCorrectSourceDrift(playerPos, sourceMs, playing, since)
+  }
+
+  /** Exact seek so overlay and audio players stay on the CTI instead of the previous keyframe. */
+  private fun seekSecondaryExact(playerId: String, p: ExoPlayer, sourceMs: Long) {
+    try {
+      p.setSeekParameters(SeekParameters.EXACT)
+      p.seekTo(sourceMs.coerceAtLeast(0L))
+      secondaryCorrectionAtMs[playerId] = SystemClock.elapsedRealtime()
+    } catch (e: Exception) {
+      Log.w(TAG, "Secondary seek failed", e)
+    }
   }
 
   /** Paused scrub position: skip the seek when the player is already on (nearly) the requested frame. */
@@ -161,7 +176,7 @@ class VideoPlaybackEngine(
           p = try {
             ExoPlayer.Builder(context.applicationContext, DefaultRenderersFactory(context.applicationContext).setEnableDecoderFallback(true))
               .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(500, 5000, 250, 500).build())
-              .setSeekParameters(SeekParameters.CLOSEST_SYNC).build().apply { repeatMode = Player.REPEAT_MODE_OFF }
+              .setSeekParameters(SeekParameters.EXACT).build().apply { repeatMode = Player.REPEAT_MODE_OFF }
           } catch (e: Exception) {
             Log.w(TAG, "Overlay player creation failed", e); continue
           }
@@ -184,10 +199,10 @@ class VideoPlaybackEngine(
           if (active && engineController.timelineSyncManager.isPlaying) {
             val isPlayWhenReady = try { p.playWhenReady } catch (_: Exception) { false }
             if (!isPlayWhenReady) {
-              p.seekTo(source)
+              seekSecondaryExact(overlay.id, p, source)
               p.playWhenReady = true
-            } else if (needsDriftReseek(p, source)) {
-              p.seekTo(source)
+            } else if (needsDriftReseek(overlay.id, p, source)) {
+              seekSecondaryExact(overlay.id, p, source)
             }
           } else {
             val isPlayWhenReady = try { p.playWhenReady } catch (_: Exception) { false }
@@ -196,7 +211,7 @@ class VideoPlaybackEngine(
             }
             if (!engineController.timelineSyncManager.isPlaying) {
               val pausedTarget = source.coerceAtLeast(0L)
-              if (needsPausedSeek(p, pausedTarget)) p.seekTo(pausedTarget)
+              if (needsPausedSeek(p, pausedTarget)) seekSecondaryExact(overlay.id, p, pausedTarget)
             }
           }
         } catch (e: Exception) {
@@ -236,7 +251,7 @@ class VideoPlaybackEngine(
           p = try {
             ExoPlayer.Builder(context.applicationContext, DefaultRenderersFactory(context.applicationContext).setEnableDecoderFallback(true))
               .setLoadControl(DefaultLoadControl.Builder().setBufferDurationsMs(1000, 6000, 400, 800).build())
-              .setSeekParameters(SeekParameters.CLOSEST_SYNC).build().apply { repeatMode = Player.REPEAT_MODE_OFF }
+              .setSeekParameters(SeekParameters.EXACT).build().apply { repeatMode = Player.REPEAT_MODE_OFF }
           } catch (e: Exception) {
             Log.w(TAG, "Audio player creation failed", e); continue
           }
@@ -268,10 +283,10 @@ class VideoPlaybackEngine(
           if (active && engineController.timelineSyncManager.isPlaying) {
             val isPlayWhenReady = try { p.playWhenReady } catch (_: Exception) { false }
             if (!isPlayWhenReady) {
-              p.seekTo(source)
+              seekSecondaryExact(audio.id, p, source)
               p.playWhenReady = true
-            } else if (needsDriftReseek(p, source)) {
-              p.seekTo(source)
+            } else if (needsDriftReseek(audio.id, p, source)) {
+              seekSecondaryExact(audio.id, p, source)
             }
           } else {
             val isPlayWhenReady = try { p.playWhenReady } catch (_: Exception) { false }
@@ -280,7 +295,7 @@ class VideoPlaybackEngine(
             }
             if (!engineController.timelineSyncManager.isPlaying) {
               val pausedTarget = source.coerceAtLeast(0L)
-              if (needsPausedSeek(p, pausedTarget)) p.seekTo(pausedTarget)
+              if (needsPausedSeek(p, pausedTarget)) seekSecondaryExact(audio.id, p, pausedTarget)
             }
           }
         } catch (e: Exception) {

@@ -460,7 +460,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     wasPlayingBeforeScrub = false
     isSyncingFromPlayback = true
     try {
-      timelineEngine.setPosition(finalPos)
+      timelineEngine.setPosition(finalPos, snap = false)
       timelineEngine.stopScrubbing()
     } finally {
       isSyncingFromPlayback = false

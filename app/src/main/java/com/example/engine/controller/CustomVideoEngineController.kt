@@ -233,7 +233,7 @@ class CustomVideoEngineController(
       playbackController.seekTo(
         nextClip.timelineToSourceMs(nextTimelinePos),
         resumeAfter = resumeAfter && timelineSyncManager.isPlaying,
-        exact = false
+        exact = true
       )
     } else {
       // Image/gap: pause only the source player. Do NOT stop the master timeline.

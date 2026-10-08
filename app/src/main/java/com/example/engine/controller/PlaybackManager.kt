@@ -44,7 +44,7 @@ class PlaybackManager(
       )
       .setPrioritizeTimeOverSizeThresholds(true)
       .build()
-  ).setSeekParameters(SeekParameters.CLOSEST_SYNC).build().apply {
+  ).setSeekParameters(SeekParameters.EXACT).build().apply {
     playWhenReady = false
     repeatMode = Player.REPEAT_MODE_OFF
   }
