@@ -54,6 +54,17 @@ class AsyncFramePipelineMetrics {
   val gpuToCpuCopies = AtomicLong()
   val decodeTimeNs = AtomicLong()
   val gpuRenderTimeNs = AtomicLong()
+  /** Wall time spent blocked on eglSwapBuffers (i.e. waiting for the video encoder). */
+  val encodeWaitTimeNs = AtomicLong()
+  /** Wall time of the composited render call itself (GPU work + readbacks). */
+  val composeTimeNs = AtomicLong()
+  /**
+   * Frames that had to come from a MediaMetadataRetriever still-frame extraction because no codec
+   * could decode the clip. Those frames each cost a retriever seek + decode (~50-200 ms), so this
+   * counter is the first thing to look at when an export is far slower than realtime.
+   */
+  val fallbackFrames = AtomicLong()
+  val fallbackTimeNs = AtomicLong()
 
   fun reset() {
     decodedFrames.set(0)
@@ -63,6 +74,10 @@ class AsyncFramePipelineMetrics {
     gpuToCpuCopies.set(0)
     decodeTimeNs.set(0)
     gpuRenderTimeNs.set(0)
+    encodeWaitTimeNs.set(0)
+    composeTimeNs.set(0)
+    fallbackFrames.set(0)
+    fallbackTimeNs.set(0)
   }
 
   fun snapshot() = mapOf(
@@ -72,6 +87,18 @@ class AsyncFramePipelineMetrics {
     "zeroCopyFrames" to zeroCopyFrames.get(),
     "gpuToCpuCopies" to gpuToCpuCopies.get()
   )
+
+  /** Human readable per-stage breakdown of one attempt, for the export log. */
+  fun describe(): String {
+    val frames = gpuFrames.get().coerceAtLeast(1L)
+    fun perFrame(ns: Long) = "%.2fms".format(ns / 1_000_000.0 / frames)
+    val fallbacks = fallbackFrames.get()
+    return "frames=$frames decode=${perFrame(decodeTimeNs.get())}/frame " +
+      "compose=${perFrame(composeTimeNs.get())}/frame " +
+      "gpuRender=${perFrame(gpuRenderTimeNs.get())}/frame " +
+      "encodeWait=${perFrame(encodeWaitTimeNs.get())}/frame " +
+      "fallback=$fallbacks(${perFrame(fallbackTimeNs.get())}/frame)"
+  }
 }
 
 /**
@@ -223,10 +250,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
     // Mix audio once; every retry reuses it.
     var hasAudio = audioProcessor.hasActiveAudio(timeline)
+    val mixStartNs = System.nanoTime()
     val masterPcm = if (hasAudio) {
       audioProcessor.mixTimelineAudio(timeline, durationMs) { userCancelled.get() }
     } else {
       ShortArray(0)
+    }
+    if (hasAudio) {
+      Log.i(
+        tag,
+        "Audio mix finished in ${(System.nanoTime() - mixStartNs) / 1_000_000}ms " +
+          "(${masterPcm.size} samples, ${masterPcm.size / (audioProcessor.sampleRate * audioProcessor.channelCount)}s)"
+      )
     }
     checkUserCancelled()
     if (masterPcm.isEmpty()) hasAudio = false
@@ -385,6 +420,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
     plannedTotalFrames = totalFrames
 
     Log.i(tag, "Starting Hardware GPU Export: ${exportWidth}x${exportHeight} @ ${fps}fps ($durationMs ms, $totalFrames frames)")
+    val attemptStartNs = System.nanoTime()
 
     val stop = AtomicBoolean(userCancelled.get())
     currentStop = stop
@@ -393,9 +429,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
     val audioEos = AtomicBoolean(false)
     val lastOutputNs = AtomicLong(System.nanoTime())
 
-    val glThread = HandlerThread("AH-GPU-Pipeline-$attemptNo").apply { start() }
+    // The export is a frame pipeline on a loaded device (the editor UI keeps rendering progress
+    // while it runs), so the two pipeline threads must not fall behind the UI thread. DISPLAY
+    // priority for the GL submit thread keeps the encoder fed without stuttering the UI;
+    // FOREGROUND for the decode thread.
+    val glThread = HandlerThread("AH-GPU-Pipeline-$attemptNo", android.os.Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     val glHandler = Handler(glThread.looper)
-    val decoderThread = HandlerThread("AH-Decoder-Pipeline-$attemptNo").apply { start() }
+    val decoderThread = HandlerThread("AH-Decoder-Pipeline-$attemptNo", android.os.Process.THREAD_PRIORITY_FOREGROUND).apply { start() }
     val decoderHandler = Handler(decoderThread.looper)
 
     var eglCore: EglCore? = null
@@ -511,7 +551,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       // 6. Drain thread: the ONLY consumer of encoder output (video + audio) -> muxer.
       val drainDone = CountDownLatch(1)
-      val drain = Executors.newSingleThreadExecutor { r -> Thread(r, "AH-GPU-MuxDrain") }
+      // The drain thread feeds the muxer; if it is starved, eglSwapBuffers blocks the render
+      // thread and the whole export slows down with it.
+      val drain = Executors.newSingleThreadExecutor { r ->
+        Thread({
+          android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_FOREGROUND)
+          r.run()
+        }, "AH-GPU-MuxDrain")
+      }
       drainExecutor = drain
       drain.execute {
         try {
@@ -826,7 +873,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             }
 
             // 3. Compose (video + AR + effects + text + stickers) into the encoder Surface's back buffer
-            val renderStart = System.nanoTime()
+            val composeStart = System.nanoTime()
             val rend = gpuRenderer ?: throw IllegalStateException("GPU renderer is not initialised")
             rend.render(
               frame = effectiveFrame,
@@ -846,11 +893,16 @@ class AsyncFramePipelineEngine(private val context: Context) {
               transitionAfter = transitionAfter,
               deterministicMasks = true
             )
-            // Complete all rendering before handing the buffer to MediaCodec
-            GLES20.glFinish()
+            // Submit the frame without a full pipeline stall: eglSwapBuffers already orders the
+            // rendering against the encoder, and glFinish() per frame serialised the GPU with the
+            // CPU (the next frame's decode could only start once the GPU was completely idle).
+            // glFlush() only makes sure the commands are handed to the driver.
+            GLES20.glFlush()
+            metrics.composeTimeNs.addAndGet(System.nanoTime() - composeStart)
 
             // Black-frame guard: sample the real back buffer on a few frames (cheap, diagnostic + hard fail
-            // only if EVERY sampled frame of a video project is black).
+            // only if EVERY sampled frame of a video project is black). The readback in here synchronises
+            // the GPU on its own, so no glFinish() is needed for correctness.
             if (frameIndex in probeFrames && mainTexId > 0) {
               probes++
               if (isBackBufferBlack(exportWidth, exportHeight)) blackProbes++
@@ -861,10 +913,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
             lastEglPtsNs = targetPtsNs
             val win = windowSurface ?: throw IllegalStateException("Encoder window surface is not initialised")
             win.setPresentationTime(targetPtsNs)
+            val swapStart = System.nanoTime()
             if (!win.swapBuffers()) {
               throw ExportPipelineException("Submitting frame $frameIndex to the video encoder failed (eglSwapBuffers).")
             }
-            metrics.gpuRenderTimeNs.addAndGet(System.nanoTime() - renderStart)
+            metrics.encodeWaitTimeNs.addAndGet(System.nanoTime() - swapStart)
+            metrics.gpuRenderTimeNs.addAndGet(System.nanoTime() - composeStart)
             metrics.gpuFrames.incrementAndGet()
 
             // 4. Audio, pro-rata with the video position (never blocks the GL thread for long)
@@ -967,7 +1021,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
       if (coordinator.timestampCorrections > 0L) {
         Log.w(tag, "Muxer corrected ${coordinator.timestampCorrections} non-monotonic timestamp(s)")
       }
-      Log.i(tag, "Hardware Export Finished: ${outputFile.absolutePath} (${outputFile.length()} bytes, video samples=$written/$submitted, audio samples=${coordinator.audioSamplesWritten})")
+      val wallMs = (System.nanoTime() - attemptStartNs) / 1_000_000
+      val realtimeSpeed = if (wallMs > 0) (durationMs.toDouble() / wallMs) else 0.0
+      Log.i(
+        tag,
+        "Hardware Export Finished: ${outputFile.absolutePath} (${outputFile.length()} bytes, " +
+          "video samples=$written/$submitted, audio samples=${coordinator.audioSamplesWritten})"
+      )
+      Log.i(
+        tag,
+        "Export performance: ${wallMs}ms for ${durationMs}ms of video " +
+          "(${"%.2f".format(realtimeSpeed)}x realtime) | ${metrics.describe()}"
+      )
       ExportDiagnostics.finished(outputFile.absolutePath, exportWidth, exportHeight, durationMs, outputFile.length())
       return outputFile
     } finally {
@@ -1013,19 +1078,25 @@ class AsyncFramePipelineEngine(private val context: Context) {
     if (t is ExportPipelineException || t is CancellationException) t
     else ExportPipelineException("$prefix: ${t.message ?: t.javaClass.simpleName}", t)
 
-  /** Samples an 8x8 grid of the current (back) framebuffer; true when every sample is essentially black. */
+  /**
+   * Samples an 8x8 grid of the current (back) framebuffer; true when every sample is essentially black.
+   *
+   * One row per readback instead of one pixel: a glReadPixels is a full GPU pipeline round trip, so
+   * 64 single-pixel reads cost tens of milliseconds per probed frame, while 8 row reads of
+   * [width] x 1 pixels cost almost the same as one (the transfer is ~8 KB either way).
+   */
   private fun isBackBufferBlack(width: Int, height: Int): Boolean {
     return try {
-      val px = ByteBuffer.allocateDirect(4)
+      val row = ByteBuffer.allocateDirect(width * 4)
       for (gy in 0 until 8) {
+        val y = ((gy + 0.5f) / 8f * height).toInt().coerceIn(0, height - 1)
+        row.clear()
+        GLES20.glReadPixels(0, y, width, 1, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, row)
         for (gx in 0 until 8) {
-          val x = ((gx + 0.5f) / 8f * width).toInt().coerceIn(0, width - 1)
-          val y = ((gy + 0.5f) / 8f * height).toInt().coerceIn(0, height - 1)
-          px.clear()
-          GLES20.glReadPixels(x, y, 1, 1, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px)
-          val r = px.get(0).toInt() and 0xFF
-          val g = px.get(1).toInt() and 0xFF
-          val b = px.get(2).toInt() and 0xFF
+          val x = (((gx + 0.5f) / 8f * width).toInt().coerceIn(0, width - 1)) * 4
+          val r = row.get(x).toInt() and 0xFF
+          val g = row.get(x + 1).toInt() and 0xFF
+          val b = row.get(x + 2).toInt() and 0xFF
           if (r > 6 || g > 6 || b > 6) return false
         }
       }
@@ -1039,6 +1110,22 @@ class AsyncFramePipelineEngine(private val context: Context) {
   private val fallbackRetrievers = mutableMapOf<String, MediaMetadataRetriever>()
 
   private fun fetchFallbackBitmap(clip: VideoClip, sourcePosMs: Long, maxW: Int, maxH: Int): Bitmap? {
+    val startedNs = System.nanoTime()
+    if (metrics.fallbackFrames.incrementAndGet() == 1L) {
+      Log.w(
+        tag,
+        "Clip ${clip.name} has no working hardware/software decoder: falling back to " +
+          "MediaMetadataRetriever still-frame extraction for this clip (much slower per frame)."
+      )
+    }
+    try {
+      return extractFallbackBitmap(clip, sourcePosMs, maxW, maxH)
+    } finally {
+      metrics.fallbackTimeNs.addAndGet(System.nanoTime() - startedNs)
+    }
+  }
+
+  private fun extractFallbackBitmap(clip: VideoClip, sourcePosMs: Long, maxW: Int, maxH: Int): Bitmap? {
     return try {
       val retriever = fallbackRetrievers.getOrPut(clip.uri) {
         MediaMetadataRetriever().apply {

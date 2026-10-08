@@ -22,6 +22,29 @@ object FontManager {
   private const val TAG = "FontManager"
   private const val FONTS_DIR = "custom_fonts"
 
+  /**
+   * Typeface cache.
+   *
+   * [loadTypeface] is called once per text layer **per rendered frame** (preview and export).
+   * `Typeface.createFromFile` re-parses the font file on every call, and even the system font
+   * variants rebuild a native typeface, so an animated text layer used to spend milliseconds per
+   * frame just loading a font it already had. Bounded LRU so a project with many fonts cannot
+   * grow it without limit.
+   */
+  private const val TYPEFACE_CACHE_SIZE = 24
+  private val typefaceCache = object : LinkedHashMap<String, Typeface>(32, 0.75f, true) {
+    override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Typeface>?) = size > TYPEFACE_CACHE_SIZE
+  }
+
+  private fun cachedTypeface(key: String, create: () -> Typeface): Typeface {
+    synchronized(typefaceCache) {
+      typefaceCache[key]?.let { return it }
+      val created = create()
+      typefaceCache[key] = created
+      return created
+    }
+  }
+
   val BUILT_IN_FONTS = emptyList<FontOption>()
 
   fun getAvailableFonts(context: Context): List<FontOption> {
@@ -94,25 +117,35 @@ object FontManager {
     fontWeight: Int = 700,
     isItalic: Boolean = false
   ): Typeface {
-    // 1. Try custom font path first if present
+    val style = when {
+      fontWeight >= 700 && isItalic -> Typeface.BOLD_ITALIC
+      fontWeight >= 700 -> Typeface.BOLD
+      isItalic -> Typeface.ITALIC
+      else -> Typeface.NORMAL
+    }
+
+    // 1. Try custom font path first if present (parsing the file once, not once per frame)
     if (!customFontPath.isNullOrBlank()) {
       val file = File(customFontPath)
       if (file.exists()) {
-        try {
-          val customTypeface = Typeface.createFromFile(file)
-          val style = when {
-            fontWeight >= 700 && isItalic -> Typeface.BOLD_ITALIC
-            fontWeight >= 700 -> Typeface.BOLD
-            isItalic -> Typeface.ITALIC
-            else -> Typeface.NORMAL
-          }
-          return Typeface.create(customTypeface, style)
+        val custom = try {
+          cachedTypeface("file:$customFontPath") { Typeface.createFromFile(file) }
         } catch (e: Exception) {
+          // Broken font file: fall through to the built-in family mapping, exactly as before.
           Log.w(TAG, "Could not load custom font at $customFontPath: ${e.message}")
+          null
+        }
+        if (custom != null) {
+          return cachedTypeface("file:$customFontPath#$style") { Typeface.create(custom, style) }
         }
       }
     }
 
+    val familyKey = "builtin:${fontFamily.lowercase()}#$style"
+    return cachedTypeface(familyKey) { createBuiltInTypeface(fontFamily, style) }
+  }
+
+  private fun createBuiltInTypeface(fontFamily: String, style: Int): Typeface {
     // 2. Map Urdu / English built-in typefaces
     val lower = fontFamily.lowercase()
     val baseTypeface = when {
@@ -164,13 +197,6 @@ object FontManager {
         }
       }
       else -> Typeface.DEFAULT
-    }
-
-    val style = when {
-      fontWeight >= 700 && isItalic -> Typeface.BOLD_ITALIC
-      fontWeight >= 700 -> Typeface.BOLD
-      isItalic -> Typeface.ITALIC
-      else -> Typeface.NORMAL
     }
 
     return Typeface.create(baseTypeface, style)

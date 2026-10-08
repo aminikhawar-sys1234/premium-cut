@@ -824,14 +824,30 @@ object TextLayerRenderer {
     canvas.restore()
   }
 
+  /**
+   * Rasterises one text frame into a bitmap.
+   *
+   * [reuse] lets a caller that renders the same viewport size every frame (animated text during
+   * export / preview) hand in its own scratch bitmap: the bitmap is cleared and drawn again
+   * instead of allocating a fresh full-viewport ARGB bitmap per frame. The returned bitmap is the
+   * one passed in that case, so the caller keeps ownership and must not recycle it.
+   */
   fun renderToBitmap(
     clip: TextClip,
     currentPosMs: Long,
     width: Int,
     height: Int,
-    context: Context
+    context: Context,
+    reuse: Bitmap? = null
   ): Bitmap {
-    val bitmap = Bitmap.createBitmap(max(width, 64), max(height, 64), Bitmap.Config.ARGB_8888)
+    val targetW = max(width, 64)
+    val targetH = max(height, 64)
+    val bitmap = if (reuse != null && !reuse.isRecycled && reuse.width == targetW && reuse.height == targetH) {
+      reuse.eraseColor(Color.TRANSPARENT)
+      reuse
+    } else {
+      Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+    }
     val canvas = Canvas(bitmap)
     draw(canvas, clip, currentPosMs, width, height, context)
     return bitmap
