@@ -33,8 +33,18 @@ class TrackingSamplerTest {
         assertFalse(TrackingSampler.shouldRedetect(1, 0, 0.9f, 0f, 16))
         assertTrue(TrackingSampler.shouldRedetect(16, 0, 0.9f, 0f, 16))
         assertTrue(TrackingSampler.shouldRedetect(3, 1, 0.9f, 0f, 16))
+        assertFalse(TrackingSampler.shouldRedetect(3, 2, 0.9f, 0f, 16, 3))
+        assertTrue(TrackingSampler.shouldRedetect(3, 3, 0.9f, 0f, 16, 3))
         assertTrue(TrackingSampler.shouldRedetect(3, 0, 0.20f, 0f, 16))
         assertTrue(TrackingSampler.shouldRedetect(3, 0, 0.9f, 0.25f, 16))
+    }
+
+    @Test
+    fun lostLockDoesNotAbortRemainingDuration() {
+        assertTrue(TrackingSampler.isRecovering(TrackingSampler.LOST_FRAMES))
+        assertFalse(TrackingSampler.isUnrecoverableYet(TrackingSampler.LOST_FRAMES))
+        assertTrue(TrackingSampler.isUnrecoverableYet(TrackingSampler.RECOVERY_WINDOW_FRAMES))
+        assertTrue(TrackingSampler.RECOVERY_WINDOW_FRAMES > TrackingSampler.LOST_FRAMES)
     }
 
     @Test

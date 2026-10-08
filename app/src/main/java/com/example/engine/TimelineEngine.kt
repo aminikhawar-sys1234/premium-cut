@@ -3191,6 +3191,26 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     return true
   }
 
+  /** Independent overlay-to-track binding on a video / PIP clip. Null removes it. */
+  fun setClipTrackBind(clipId: String, encoded: String?): Boolean {
+    val inVideo = _timeline.value.videoClips.find { it.id == clipId }
+    if (inVideo != null) {
+      if (inVideo.trackBindJson == encoded) return true
+      recordHistory()
+      _timeline.value = _timeline.value.copy(
+        videoClips = _timeline.value.videoClips.map { if (it.id == clipId) it.copy(trackBindJson = encoded) else it }
+      )
+      return true
+    }
+    val inOverlay = _timeline.value.overlayClips.find { it.id == clipId } ?: return false
+    if (inOverlay.trackBindJson == encoded) return true
+    recordHistory()
+    _timeline.value = _timeline.value.copy(
+      overlayClips = _timeline.value.overlayClips.map { if (it.id == clipId) it.copy(trackBindJson = encoded) else it }
+    )
+    return true
+  }
+
   /** Stores a clip's Face Reshape slider values (see [VideoClip.faceReshape]). Slider bursts share one undo step. */
   fun setClipFaceReshape(clipId: String, encoded: String?): Boolean {
     val clip = _timeline.value.videoClips.find { it.id == clipId } ?: return false

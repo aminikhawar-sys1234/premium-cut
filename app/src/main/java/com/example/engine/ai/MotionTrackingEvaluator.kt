@@ -41,6 +41,14 @@ class MotionTrackingEvaluator(private val trackingResult: TrackingResult) {
         if (span <= 0L) return k1
 
         val t = (timestampUs - k1.timestampUs).toFloat() / span.toFloat()
+        // Temporary lock-loss / occlusion: do not spline across a low-confidence gap
+        // (that would slide the overlay through empty space until re-acquisition).
+        if (k1.confidence < 0.2f && k2.confidence < 0.2f) {
+            return k1.copy(timestampUs = timestampUs)
+        }
+        if (k1.confidence < 0.2f && k2.confidence >= 0.2f && t < 0.92f) {
+            return k1.copy(timestampUs = timestampUs)
+        }
         // Phantom neighbours reflect the end segments so a 2-key track stays linear.
         val k0 = if (i1 > 0) keys[i1 - 1] else null
         val k3 = if (i2 < keys.size - 1) keys[i2 + 1] else null

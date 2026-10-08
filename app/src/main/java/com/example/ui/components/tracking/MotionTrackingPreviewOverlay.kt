@@ -32,9 +32,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.engine.ai.MotionTrackingEvaluator
 import com.example.engine.ai.MotionTrackingUiState
 import com.example.engine.ai.NormalizedRect
 import com.example.engine.ai.TrackingCategory
+import com.example.engine.ai.TrackingCoordinateSpace
+import com.example.engine.ai.TrackingEngineState
 import kotlin.math.roundToInt
 
 private val EmeraldAccent = Color(0xFF00D1B2)
@@ -48,9 +51,11 @@ private val BoxBorder = Color(0xFF00E5FF)
 @Composable
 fun MotionTrackingPreviewOverlay(
     uiState: MotionTrackingUiState,
-    currentPosMs: Long,
-    clipStartMs: Long,
-    clipDurationMs: Long,
+    sourceTimeUs: Long,
+    videoWidth: Int = 0,
+    videoHeight: Int = 0,
+    naturalRotation: Int = 0,
+    canvasAspect: Float = 9f / 16f,
     onUpdateRegion: (NormalizedRect) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -69,21 +74,27 @@ fun MotionTrackingPreviewOverlay(
         val activeResult = uiState.activeResult
         if (activeResult != null && activeResult.keyframes.isNotEmpty()) {
             Canvas(modifier = Modifier.fillMaxSize()) {
+                fun mapPoint(cx: Float, cy: Float): Offset {
+                    val (px, py) = TrackingCoordinateSpace.videoNormToOverlayPx(
+                        cx, cy, w, h, videoWidth, videoHeight, naturalRotation, canvasAspect
+                    )
+                    return Offset(px, py)
+                }
                 val path = Path()
                 var first = true
                 for (kf in activeResult.keyframes) {
-                    val kfX = kf.centerX * w
-                    val kfY = kf.centerY * h
+                    if (kf.confidence < 0.15f) continue
+                    val pt = mapPoint(kf.centerX, kf.centerY)
                     if (first) {
-                        path.moveTo(kfX, kfY)
+                        path.moveTo(pt.x, pt.y)
                         first = false
                     } else {
-                        path.lineTo(kfX, kfY)
+                        path.lineTo(pt.x, pt.y)
                     }
                     drawCircle(
                         color = CyanBlue.copy(alpha = 0.7f),
                         radius = 3.dp.toPx(),
-                        center = Offset(kfX, kfY)
+                        center = pt
                     )
                 }
                 drawPath(
@@ -92,18 +103,15 @@ fun MotionTrackingPreviewOverlay(
                     style = Stroke(width = 2.dp.toPx())
                 )
 
-                // Current tracking keyframe indicator
-                val currentUs = currentPosMs * 1000L
-                val currentKf = activeResult.keyframes.minByOrNull {
-                    kotlin.math.abs(it.timestampUs - currentUs)
-                }
-                if (currentKf != null) {
-                    val curX = currentKf.centerX * w
-                    val curY = currentKf.centerY * h
+                val currentKf = MotionTrackingEvaluator(activeResult).evaluate(sourceTimeUs)
+                val lost = currentKf.confidence < 0.15f ||
+                    uiState.engineState == TrackingEngineState.LOST
+                if (!lost) {
+                    val cur = mapPoint(currentKf.centerX, currentKf.centerY)
                     drawCircle(
-                        color = Color.Yellow,
+                        color = if (uiState.engineState == TrackingEngineState.RECOVERING) Color(0xFFFFC107) else Color.Yellow,
                         radius = 6.dp.toPx(),
-                        center = Offset(curX, curY),
+                        center = cur,
                         style = Stroke(width = 2.dp.toPx())
                     )
                 }

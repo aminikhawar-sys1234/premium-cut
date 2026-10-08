@@ -51,6 +51,21 @@ class MotionTrackerEngine {
     companion object {
         private const val TAG = "MotionTrackerEngine"
         private const val MLKIT_TIMEOUT_MS = 450L
+        private val BODY_LANDMARK_IDS = intArrayOf(
+            PoseLandmark.NOSE,
+            PoseLandmark.LEFT_SHOULDER,
+            PoseLandmark.RIGHT_SHOULDER,
+            PoseLandmark.LEFT_ELBOW,
+            PoseLandmark.RIGHT_ELBOW,
+            PoseLandmark.LEFT_WRIST,
+            PoseLandmark.RIGHT_WRIST,
+            PoseLandmark.LEFT_HIP,
+            PoseLandmark.RIGHT_HIP,
+            PoseLandmark.LEFT_KNEE,
+            PoseLandmark.RIGHT_KNEE,
+            PoseLandmark.LEFT_ANKLE,
+            PoseLandmark.RIGHT_ANKLE
+        )
 
         suspend fun trackObjectMotion(
             context: Context? = null,
@@ -91,12 +106,15 @@ class MotionTrackerEngine {
         }
     }
 
+    private var argbScratch: IntArray = IntArray(0)
+
     private data class DetectedTarget(
         val box: NormalizedRect,
         val rotationDeg: Float,
         val confidence: Float,
         val landmarks: List<Pair<Float, Float>>,
-        val trackingId: Int? = null
+        val trackingId: Int? = null,
+        val anchorIndex: Int = 0
     )
 
     suspend fun analyzeMotion(
@@ -139,8 +157,8 @@ class MotionTrackerEngine {
             coroutineContext.ensureActive()
 
             when (category) {
-                TrackingCategory.FACE -> trackFaceInternal(retriever, startUs, durationUs, settings, keyframes, ::report)
-                TrackingCategory.BODY -> trackBodyInternal(retriever, startUs, durationUs, settings, keyframes, ::report)
+                TrackingCategory.FACE -> trackFaceInternal(retriever, initialBox, startUs, durationUs, settings, keyframes, ::report)
+                TrackingCategory.BODY -> trackBodyInternal(retriever, initialBox, startUs, durationUs, settings, keyframes, ::report)
                 TrackingCategory.MOTION -> trackMotionPointsInternal(retriever, initialBox, startUs, durationUs, settings, keyframes, ::report)
                 else -> trackObjectInternal(retriever, initialBox, startUs, durationUs, settings, keyframes, ::report)
             }
@@ -288,19 +306,27 @@ class MotionTrackerEngine {
                             )
                         )
                         currentBox = predicted
+                    } else if (keyframes.isNotEmpty()) {
+                        keyframes.add(keyframes.last().copy(timestampUs = currentUs, confidence = 0.12f))
                     }
                     if (currFrame != refFrame && !currFrame.isRecycled) currFrame.recycle()
-                    if (consecutiveLosses >= TrackingSampler.LOST_FRAMES) {
+                    if (TrackingSampler.isUnrecoverableYet(consecutiveLosses) &&
+                        consecutiveLosses == TrackingSampler.RECOVERY_WINDOW_FRAMES
+                    ) {
                         val p = ((currentUs - startUs).toFloat() / safeDurationUs.toFloat()).coerceIn(0f, 1f)
-                        report(p, "Object target lost", TrackingEngineState.LOST, true)
-                        break
+                        report(p, "Object target lost — still scanning", TrackingEngineState.LOST, true)
                     }
                 }
             }
 
             frameIndex++
             val p = ((currentUs - startUs).toFloat() / safeDurationUs.toFloat()).coerceIn(0f, 1f)
-            report(p, "Tracking object... ${(p * 100).toInt()}%", TrackingEngineState.TRACKING, false)
+            val state = when {
+                TrackingSampler.isUnrecoverableYet(consecutiveLosses) -> TrackingEngineState.LOST
+                TrackingSampler.isRecovering(consecutiveLosses) -> TrackingEngineState.RECOVERING
+                else -> TrackingEngineState.TRACKING
+            }
+            report(p, "Tracking object... ${(p * 100).toInt()}%", state, false)
             currentUs += timeStepUs
         }
 
@@ -310,6 +336,7 @@ class MotionTrackerEngine {
 
     private suspend fun trackFaceInternal(
         retriever: MediaMetadataRetriever,
+        initialBox: NormalizedRect,
         startUs: Long,
         durationUs: Long,
         settings: MotionTrackingSettings,
@@ -330,13 +357,14 @@ class MotionTrackerEngine {
             label = "face",
             lostMessage = "Face not detected in video",
             detect = { bitmap, preferLandmarks, last ->
-                detectFace(bitmap, if (preferLandmarks) landmarkDetector else lockDetector, last)
+                detectFace(bitmap, if (preferLandmarks) landmarkDetector else lockDetector, last, initialBox)
             }
         )
     }
 
     private suspend fun trackBodyInternal(
         retriever: MediaMetadataRetriever,
+        initialBox: NormalizedRect,
         startUs: Long,
         durationUs: Long,
         settings: MotionTrackingSettings,
@@ -354,7 +382,7 @@ class MotionTrackerEngine {
             report = report,
             label = "body",
             lostMessage = "Body pose not detected in video",
-            detect = { bitmap, _, last -> detectBody(bitmap, detector, last) }
+            detect = { bitmap, _, last -> detectBody(bitmap, detector, last, initialBox) }
         )
     }
 
@@ -446,7 +474,12 @@ class MotionTrackerEngine {
             coroutineContext.ensureActive()
             val jumpHint = TrackingSampler.jumpDistance(currentBox, lastGoodBox)
             val redetect = TrackingSampler.shouldRedetect(frameIndex, consecutiveLosses, lastConfidence, jumpHint)
-            val state = if (redetect) TrackingEngineState.REDETECTING else TrackingEngineState.TRACKING
+            val state = when {
+                TrackingSampler.isUnrecoverableYet(consecutiveLosses) -> TrackingEngineState.LOST
+                TrackingSampler.isRecovering(consecutiveLosses) -> TrackingEngineState.RECOVERING
+                redetect -> TrackingEngineState.REDETECTING
+                else -> TrackingEngineState.TRACKING
+            }
 
             val gray = frameGray(retriever, currentUs, detectW, detectH, closestSync = false)
             var emitted = false
@@ -553,11 +586,16 @@ class MotionTrackerEngine {
                     )
                     currentBox = predicted
                     lastConfidence = 0.22f
+                } else if (keyframes.isNotEmpty()) {
+                    val held = keyframes.last()
+                    keyframes.add(held.copy(timestampUs = currentUs, confidence = 0.12f))
+                    lastConfidence = 0.12f
                 }
-                if (consecutiveLosses >= TrackingSampler.LOST_FRAMES) {
+                if (TrackingSampler.isUnrecoverableYet(consecutiveLosses) &&
+                    consecutiveLosses == TrackingSampler.RECOVERY_WINDOW_FRAMES
+                ) {
                     val p = ((currentUs - startUs).toFloat() / safeDurationUs.toFloat()).coerceIn(0f, 1f)
-                    report(p, "${label.replaceFirstChar { it.uppercase() }} target lost", TrackingEngineState.LOST, true)
-                    break
+                    report(p, "${label.replaceFirstChar { it.uppercase() }} target lost — still scanning", TrackingEngineState.LOST, true)
                 }
             }
 
@@ -580,20 +618,39 @@ class MotionTrackerEngine {
         Point2(box.left * w, box.bottom * h)
     )
 
-    private fun detectFace(frame: Bitmap, detector: com.google.mlkit.vision.face.FaceDetector, last: DetectedTarget?): DetectedTarget? {
+    private fun detectFace(
+        frame: Bitmap,
+        detector: com.google.mlkit.vision.face.FaceDetector,
+        last: DetectedTarget?,
+        hintBox: NormalizedRect?
+    ): DetectedTarget? {
         val faces = runDetector { detector.process(InputImage.fromBitmap(frame, 0)) } ?: return null
         if (faces.isEmpty()) return null
         val fw = frame.width.toFloat().coerceAtLeast(1f)
         val fh = frame.height.toFloat().coerceAtLeast(1f)
+        fun faceBox(f: Face): NormalizedRect {
+            val box = f.boundingBox
+            val cx = (box.centerX().toFloat() / fw).coerceIn(0f, 1f)
+            val cy = (box.centerY().toFloat() / fh).coerceIn(0f, 1f)
+            val fWidth = (box.width().toFloat() / fw).coerceAtLeast(0.01f)
+            val fHeight = (box.height().toFloat() / fh).coerceAtLeast(0.01f)
+            return TrackingSampler.boxFromCenter(cx, cy, fWidth, fHeight)
+        }
         val primary: Face = if (last != null) {
             val byId = last.trackingId?.let { id -> faces.firstOrNull { it.trackingId == id } }
             byId ?: faces.minByOrNull { f ->
-                val fcx = f.boundingBox.centerX().toFloat() / fw
-                val fcy = f.boundingBox.centerY().toFloat() / fh
-                val fwNorm = f.boundingBox.width().toFloat() / fw
-                val dist = hypot(fcx - last.box.centerX, fcy - last.box.centerY)
-                dist + abs(fwNorm - last.box.width)
+                val fb = faceBox(f)
+                TrackingSampler.jumpDistance(fb, last.box) + abs(fb.width - last.box.width)
             }!!
+        } else if (hintBox != null) {
+            val nearest = faces.minByOrNull { TrackingSampler.jumpDistance(faceBox(it), hintBox) }!!
+            val nearBox = faceBox(nearest)
+            val overlap = TrackingSampler.overlapRatio(nearBox, hintBox)
+            if (overlap > 0.05f || TrackingSampler.jumpDistance(nearBox, hintBox) < 0.45f) {
+                nearest
+            } else {
+                faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }!!
+            }
         } else {
             faces.maxByOrNull { it.boundingBox.width() * it.boundingBox.height() }!!
         }
@@ -625,17 +682,25 @@ class MotionTrackerEngine {
     private fun detectBody(
         frame: Bitmap,
         detector: com.google.mlkit.vision.pose.PoseDetector,
-        last: DetectedTarget?
+        last: DetectedTarget?,
+        hintBox: NormalizedRect?
     ): DetectedTarget? {
         val pose = runDetector { detector.process(InputImage.fromBitmap(frame, 0)) } ?: return null
-        val visible = pose.allPoseLandmarks.filter { it.inFrameLikelihood > 0.4f }
-        if (visible.size < 4) return null
         val fw = frame.width.toFloat().coerceAtLeast(1f)
         val fh = frame.height.toFloat().coerceAtLeast(1f)
-        val avgX = visible.map { it.position.x }.average().toFloat() / fw
-        val avgY = visible.map { it.position.y }.average().toFloat() / fh
+        val ordered = BODY_LANDMARK_IDS.map { id -> pose.getPoseLandmark(id) }
+        val visiblePairs = ordered.map { lm ->
+            if (lm != null && lm.inFrameLikelihood > 0.4f) {
+                (lm.position.x / fw) to (lm.position.y / fh)
+            } else null
+        }
+        val visibleCount = visiblePairs.count { it != null }
+        if (visibleCount < 4) return null
+
         val leftShoulder = pose.getPoseLandmark(PoseLandmark.LEFT_SHOULDER)
         val rightShoulder = pose.getPoseLandmark(PoseLandmark.RIGHT_SHOULDER)
+        val leftHip = pose.getPoseLandmark(PoseLandmark.LEFT_HIP)
+        val rightHip = pose.getPoseLandmark(PoseLandmark.RIGHT_HIP)
         var rotDeg = last?.rotationDeg ?: 0f
         var span = last?.box?.width ?: 0.2f
         if (leftShoulder != null && rightShoulder != null) {
@@ -644,8 +709,46 @@ class MotionTrackerEngine {
             span = sqrt(dx * dx + dy * dy).coerceAtLeast(0.02f)
             rotDeg = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
         }
+
+        val torsoX = listOfNotNull(
+            leftShoulder?.position?.x, rightShoulder?.position?.x,
+            leftHip?.position?.x, rightHip?.position?.x
+        ).average().toFloat() / fw
+        val torsoY = listOfNotNull(
+            leftShoulder?.position?.y, rightShoulder?.position?.y,
+            leftHip?.position?.y, rightHip?.position?.y
+        ).average().toFloat() / fh
+
+        val hint = last?.box ?: hintBox
+        val anchorIndex = last?.anchorIndex ?: run {
+            if (hint == null) 0
+            else {
+                var bestIdx = 0
+                var bestDist = Float.MAX_VALUE
+                visiblePairs.forEachIndexed { i, p ->
+                    if (p == null) return@forEachIndexed
+                    val d = hypot(p.first - hint.centerX, p.second - hint.centerY)
+                    if (d < bestDist) {
+                        bestDist = d
+                        bestIdx = i
+                    }
+                }
+                if (bestDist < 0.22f) bestIdx else 0
+            }
+        }
+        val anchor = visiblePairs.getOrNull(anchorIndex)
+        val cx = when {
+            anchor != null -> anchor.first
+            hint != null && last != null -> last.box.centerX
+            else -> torsoX.takeIf { it.isFinite() } ?: 0.5f
+        }
+        val cy = when {
+            anchor != null -> anchor.second
+            hint != null && last != null -> last.box.centerY
+            else -> torsoY.takeIf { it.isFinite() } ?: 0.5f
+        }
         val half = (span * 1.2f).coerceIn(0.08f, 0.45f)
-        val box = TrackingSampler.boxFromCenter(avgX, avgY, half * 2f, half * 2f)
+        val box = TrackingSampler.boxFromCenter(cx, cy, half * 2f, half * 2f)
         if (last != null && TrackingSampler.jumpDistance(box, last.box) > 0.55f && last.confidence > 0.5f) {
             return null
         }
@@ -653,7 +756,8 @@ class MotionTrackerEngine {
             box = box,
             rotationDeg = rotDeg,
             confidence = 0.90f,
-            landmarks = visible.map { it.position.x / fw to it.position.y / fh }
+            landmarks = visiblePairs.map { it ?: (-1f to -1f) },
+            anchorIndex = anchorIndex
         )
     }
 
@@ -717,10 +821,10 @@ class MotionTrackerEngine {
         val w = ref.width
         val h = ref.height
         val corners = boxCorners(initialBox, w, h)
-        val tracker = PlaneTracker(ref, corners, model)
+        var tracker = PlaneTracker(ref, corners, model)
         if (!tracker.isReady) return false
 
-        val converter = TrackFrameConverter(
+        var converter = TrackFrameConverter(
             corners, w, h, settings.followPosition, settings.followScale, settings.followRotation
         )
         keyframes.add(
@@ -755,11 +859,27 @@ class MotionTrackerEngine {
                                 confidence = 0.22f
                             )
                         )
+                    } else if (lastGood != null) {
+                        keyframes.add(lastGood.copy(timestampUs = currentUs, confidence = 0.12f))
                     }
-                    if (consecutiveLosses >= TrackingSampler.LOST_FRAMES) {
+                    if (TrackingSampler.isUnrecoverableYet(consecutiveLosses) &&
+                        consecutiveLosses == TrackingSampler.RECOVERY_WINDOW_FRAMES
+                    ) {
                         val p = ((currentUs - startUs).toFloat() / safeDurationUs.toFloat()).coerceIn(0f, 1f)
-                        report(p, "Tracking lost ($label)", TrackingEngineState.LOST, true)
-                        break
+                        report(p, "Tracking lost ($label) — still scanning", TrackingEngineState.LOST, true)
+                    }
+                    val seedBox = lastGood?.let {
+                        TrackingSampler.boxFromCenter(it.centerX, it.centerY, initialBox.width * it.scaleX, initialBox.height * it.scaleY)
+                    } ?: initialBox
+                    if (TrackingSampler.shouldRedetect(0, consecutiveLosses, 0.1f) && gray != null) {
+                        val reseeded = PlaneTracker(gray, boxCorners(seedBox, w, h), model)
+                        if (reseeded.isReady) {
+                            tracker = reseeded
+                            converter = TrackFrameConverter(
+                                boxCorners(seedBox, w, h), w, h,
+                                settings.followPosition, settings.followScale, settings.followRotation
+                            )
+                        }
                     }
                 } else {
                     consecutiveLosses = 0
@@ -770,7 +890,12 @@ class MotionTrackerEngine {
                 }
             }
             val p = ((currentUs - startUs).toFloat() / safeDurationUs.toFloat()).coerceIn(0f, 1f)
-            report(p, "Tracking $label... ${(p * 100).toInt()}%", TrackingEngineState.TRACKING, false)
+            val state = when {
+                TrackingSampler.isUnrecoverableYet(consecutiveLosses) -> TrackingEngineState.LOST
+                TrackingSampler.isRecovering(consecutiveLosses) -> TrackingEngineState.RECOVERING
+                else -> TrackingEngineState.TRACKING
+            }
+            report(p, "Tracking $label... ${(p * 100).toInt()}%", state, false)
             currentUs += timeStepUs
         }
         return true
@@ -804,9 +929,10 @@ class MotionTrackerEngine {
     private fun bitmapToGray(bmp: Bitmap): GrayImage {
         val bw = bmp.width
         val bh = bmp.height
-        val px = IntArray(bw * bh)
-        bmp.getPixels(px, 0, bw, 0, 0, bw, bh)
-        return GrayImage.fromArgb(px, bw, bh)
+        val n = bw * bh
+        if (argbScratch.size < n) argbScratch = IntArray(n)
+        bmp.getPixels(argbScratch, 0, bw, 0, 0, bw, bh)
+        return GrayImage.fromArgb(argbScratch, bw, bh)
     }
 
     /**

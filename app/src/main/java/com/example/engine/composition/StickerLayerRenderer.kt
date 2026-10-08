@@ -23,7 +23,7 @@ object StickerLayerRenderer {
     val relTimeMs = (currentPosMs - clip.timelineStartMs).coerceAtLeast(0L)
     val timeSec = relTimeMs / 1000f
 
-    val baseTransform = if (clip.keyframes.isNotEmpty()) {
+    val baseTransform = if (clip.keyframes.isNotEmpty() || !clip.trackBindJson.isNullOrBlank()) {
       com.example.engine.KeyframeInterpolator.interpolate(clip, relTimeMs)
     } else null
 

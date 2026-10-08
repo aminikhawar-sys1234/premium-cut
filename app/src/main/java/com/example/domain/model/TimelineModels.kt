@@ -48,8 +48,10 @@ data class MaskSettings(
   val feather: Float = 0.1f,     // 0f to 1f edge softness
   val opacity: Float = 1.0f,     // 0f to 1f
   val isInverted: Boolean = false,
-  /** When true, preview/export sample [VideoClip.motionTrackJson] to drive mask pose. */
-  val followTracking: Boolean = false
+  /** When true, preview/export sample [VideoClip.motionTrackJson] or [trackBindJson] to drive mask pose. */
+  val followTracking: Boolean = false,
+  /** Independent overlay binding (OverlayTrackCodec) so this mask is not overwritten by a later track. */
+  val trackBindJson: String? = null
 )
 
 enum class SpeedCurvePreset(val displayName: String) {
@@ -320,6 +322,8 @@ data class VideoClip(
   val stabilize: String? = null,
   /** Object/Face/Body/Motion track encoded by MotionTrackCodec; null = none. Saves/undoes with the timeline. */
   val motionTrackJson: String? = null,
+  /** Independent overlay-to-track binding (OverlayTrackCodec) for PIP / overlay clips. */
+  val trackBindJson: String? = null,
   /** Independent NLE lane index. Main video defaults to lane 0; overlays use additional lanes. */
   val trackIndex: Int = 0,
   /** Serialized ColorState for this clip's grade; null = ungraded. Lives in the project so it saves, undoes and exports with the timeline. */
@@ -592,7 +596,9 @@ data class TextClip(
   /** Expression + bone-parent script (see ClipMotion.kt). */
   val motion: ClipMotionScript = ClipMotionScript(),
   /** Id of the diarized speaker this caption belongs to (null = not from a speaker-detected run). Persisted with the project. */
-  val speakerId: String? = null
+  val speakerId: String? = null,
+  /** Independent overlay-to-track binding (OverlayTrackCodec). Preview and export sample the same record. */
+  val trackBindJson: String? = null
 ) : TimelineClip {
   override val clipId: String get() = id
   override val trackId: String get() = "track_text_$trackIndex"
@@ -674,7 +680,9 @@ data class StickerClip(
   override val keyframes: List<ClipKeyframe> = emptyList(),
   val trackIndex: Int = 1,
   /** Expression + bone-parent script (see ClipMotion.kt). */
-  val motion: ClipMotionScript = ClipMotionScript()
+  val motion: ClipMotionScript = ClipMotionScript(),
+  /** Independent overlay-to-track binding (OverlayTrackCodec). Preview and export sample the same record. */
+  val trackBindJson: String? = null
 ) : TimelineClip {
   override val clipId: String get() = id
   override val trackId: String get() = "track_sticker_$trackIndex"
@@ -1025,7 +1033,9 @@ data class EffectClip(
   val targetClipId: String? = null,
   val isLocked: Boolean = false,
   val isHidden: Boolean = false,
-  val trackIndex: Int = 1
+  val trackIndex: Int = 1,
+  /** Independent overlay-to-track binding (OverlayTrackCodec) for tracked blur / mosaic regions. */
+  val trackBindJson: String? = null
 ) : TimelineClip {
   override val clipId: String get() = id
   override val trackId: String get() = "track_effect_$trackIndex"
@@ -1064,7 +1074,9 @@ data class ShapeClip(
   val isLocked: Boolean = false,
   val isHidden: Boolean = false,
   override val keyframes: List<ClipKeyframe> = emptyList(),
-  val trackIndex: Int = 1
+  val trackIndex: Int = 1,
+  /** Independent overlay-to-track binding (OverlayTrackCodec). */
+  val trackBindJson: String? = null
 ) : TimelineClip {
   override val clipId: String get() = id
   override val trackId: String get() = "track_shape_$trackIndex"

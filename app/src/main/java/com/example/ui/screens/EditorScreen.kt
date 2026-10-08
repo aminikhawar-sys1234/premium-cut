@@ -669,11 +669,15 @@ fun EditorScreen(
           val activeTrackClip = viewModel.getSelectedVideoClip()
           com.example.ui.components.tracking.MotionTrackingPreviewOverlay(
             uiState = trackingUiState,
-            currentPosMs = activeTrackClip?.timelineToSourceMs(currentPosMs) ?: currentPosMs,
-            clipStartMs = activeTrackClip?.timelineStartMs ?: 0L,
-            clipDurationMs = activeTrackClip?.durationMs ?: timeline.totalDurationMs,
+            sourceTimeUs = (activeTrackClip?.timelineToSourceMs(currentPosMs) ?: currentPosMs) * 1000L,
+            videoWidth = activeTrackClip?.width ?: 0,
+            videoHeight = activeTrackClip?.height ?: 0,
+            naturalRotation = activeTrackClip?.naturalRotation ?: 0,
+            canvasAspect = aspectRatio.ratio,
             onUpdateRegion = { viewModel.updateTrackingRegion(it) },
-            modifier = Modifier.fillMaxSize()
+            modifier = Modifier
+              .fillMaxHeight(0.98f)
+              .aspectRatio(aspectRatio.ratio, matchHeightConstraintsFirst = true)
           )
         }
 
@@ -1685,6 +1689,7 @@ fun VideoPreviewSurface(
   modifier: Modifier = Modifier
 ) {
   val context = LocalContext.current
+  com.example.engine.ai.TrackingEvalContext.bind(timeline)
   // Find current active video clip
   val activeClip = remember(timeline.videoClips, currentPosMs) {
     timeline.videoClips.find {

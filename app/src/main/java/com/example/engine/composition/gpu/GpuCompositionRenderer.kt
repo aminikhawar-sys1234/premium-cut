@@ -1020,7 +1020,7 @@ class GpuCompositionRenderer(private val context: Context) {
       effectParam = keyframeEffectParam,
       effectColorMatrix = effectColorMatrix,
       mask = clip?.let {
-        com.example.engine.ai.MotionTrackCodec.applyToMask(
+        com.example.engine.ai.OverlayTrackCodec.applyToMask(
           it.mask,
           it.motionTrackJson,
           frame.clipSourcePosMs * 1000L
@@ -1220,7 +1220,7 @@ class GpuCompositionRenderer(private val context: Context) {
       blur = overlay.blur,
       effectParam = overlay.effectParam,
       effectColorMatrix = effectColorMatrix,
-      mask = com.example.engine.ai.MotionTrackCodec.applyToMask(
+      mask = com.example.engine.ai.OverlayTrackCodec.applyToMask(
         overlay.clip.mask,
         overlay.clip.motionTrackJson,
         overlay.sourcePosMs * 1000L

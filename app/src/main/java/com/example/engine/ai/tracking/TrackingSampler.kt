@@ -19,6 +19,10 @@ object TrackingSampler {
     const val JUMP_REJECT = 0.28f
     const val LOST_FRAMES = 6
     const val PREDICT_FRAMES = 2
+    /** Keep scanning / re-detecting this many frames after lock is lost before reporting LOST. */
+    const val RECOVERY_WINDOW_FRAMES = 24
+    /** While recovering, run the expensive detector every N lost frames instead of every frame. */
+    const val LOST_REDETECT_INTERVAL = 3
     const val DETECT_WIDTH = 256
     const val TRACK_WIDTH = 320
     const val FEATURE_WIDTH = 480
@@ -60,13 +64,44 @@ object TrackingSampler {
         consecutiveLosses: Int,
         lastConfidence: Float,
         jumpDistance: Float = 0f,
-        baseInterval: Int = REDETECT_INTERVAL
+        baseInterval: Int = REDETECT_INTERVAL,
+        lostRedetectInterval: Int = LOST_REDETECT_INTERVAL
     ): Boolean {
-        if (consecutiveLosses > 0) return true
+        if (consecutiveLosses > 0) {
+            val step = lostRedetectInterval.coerceAtLeast(1)
+            return consecutiveLosses == 1 || consecutiveLosses % step == 0
+        }
         if (lastConfidence < CONFIDENCE_REDETECT) return true
         if (jumpDistance > JUMP_REDETECT) return true
         val interval = baseInterval.coerceAtLeast(2)
         return frameIndex > 0 && frameIndex % interval == 0
+    }
+
+    /**
+     * Temporary lock loss: enter RECOVERING and keep the clip running.
+     * Never used to abort the remaining duration.
+     */
+    fun isRecovering(consecutiveLosses: Int): Boolean =
+        consecutiveLosses >= LOST_FRAMES
+
+    /**
+     * Target has been unavailable for the full recovery window. Report LOST but
+     * keep scanning so a re-entering target can be acquired again.
+     */
+    fun isUnrecoverableYet(consecutiveLosses: Int): Boolean =
+        consecutiveLosses >= RECOVERY_WINDOW_FRAMES
+
+    /** Overlap of two normalized boxes in [0, 1]. */
+    fun overlapRatio(a: NormalizedRect, b: NormalizedRect): Float {
+        val left = maxOf(a.left, b.left)
+        val top = maxOf(a.top, b.top)
+        val right = minOf(a.right, b.right)
+        val bottom = minOf(a.bottom, b.bottom)
+        val w = (right - left).coerceAtLeast(0f)
+        val h = (bottom - top).coerceAtLeast(0f)
+        val inter = w * h
+        val union = a.width * a.height + b.width * b.height - inter
+        return if (union <= 1e-6f) 0f else (inter / union).coerceIn(0f, 1f)
     }
 
     fun jumpDistance(a: NormalizedRect, b: NormalizedRect): Float {

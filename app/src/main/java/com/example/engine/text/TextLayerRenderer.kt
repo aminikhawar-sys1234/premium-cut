@@ -63,7 +63,7 @@ object TextLayerRenderer {
     val animDur = clip.animDurationMs.coerceAtLeast(100L)
     val progress = (relTime.toFloat() / animDur).coerceIn(0f, 1f)
 
-    val baseTransform = if (clip.keyframes.isNotEmpty()) {
+    val baseTransform = if (clip.keyframes.isNotEmpty() || !clip.trackBindJson.isNullOrBlank()) {
       com.example.engine.KeyframeInterpolator.interpolate(clip, relTime)
     } else null
 

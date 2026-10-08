@@ -53,7 +53,12 @@ object KeyframeInterpolator {
 
   /** Same as [interpolate] but WITHOUT expressions / rig (what expressions read as `value`). */
   fun interpolateRaw(clip: VideoClip, relTimeMs: Long): InterpolatedClipTransform {
-    val base = interpolateBaseKeyframes(clip, relTimeMs)
+    val bound = com.example.engine.ai.OverlayTrackCodec.toInterpolated(
+      clip.trackBindJson, clip.timelineStartMs, relTimeMs,
+      clip.cropOffsetX, clip.cropOffsetY, clip.cropScale, clip.rotationDegrees.toFloat(),
+      clip.opacity, clip.volume
+    )
+    val base = bound ?: interpolateBaseKeyframes(clip, relTimeMs)
     return if (clip.animation.hasAnimation) {
       applyAnimation(base, clip, relTimeMs)
     } else {
@@ -70,6 +75,10 @@ object KeyframeInterpolator {
 
   /** Same as [interpolate] but WITHOUT expressions / rig (what expressions read as `value`). */
   fun interpolateRaw(clip: StickerClip, relTimeMs: Long): InterpolatedClipTransform {
+    com.example.engine.ai.OverlayTrackCodec.toInterpolated(
+      clip.trackBindJson, clip.timelineStartMs, relTimeMs,
+      clip.posX, clip.posY, clip.scale, clip.rotation, clip.opacity
+    )?.let { return it }
     val keyframes = clip.keyframes.sortedBy { it.timeMs }
     if (keyframes.isEmpty()) {
       return InterpolatedClipTransform(
@@ -134,6 +143,10 @@ object KeyframeInterpolator {
 
   /** Same as [interpolate] but WITHOUT expressions / rig (what expressions read as `value`). */
   fun interpolateRaw(clip: TextClip, relTimeMs: Long): InterpolatedClipTransform {
+    com.example.engine.ai.OverlayTrackCodec.toInterpolated(
+      clip.trackBindJson, clip.timelineStartMs, relTimeMs,
+      clip.posX, clip.posY, clip.scale, clip.rotation, clip.opacity
+    )?.let { return it }
     val keyframes = clip.keyframes.sortedBy { it.timeMs }
     if (keyframes.isEmpty()) {
       return InterpolatedClipTransform(

@@ -17,6 +17,12 @@ import com.example.engine.text.TextLayerRenderer
 class TimelineEvaluator {
 
   fun evaluate(timeline: Timeline, timeMs: Long): TimelineFrameState {
+    return com.example.engine.ai.TrackingEvalContext.withTimeline(timeline) {
+      evaluateWithTrackingContext(timeline, timeMs)
+    }
+  }
+
+  private fun evaluateWithTrackingContext(timeline: Timeline, timeMs: Long): TimelineFrameState {
     val posMs = timeMs.coerceAtLeast(0L)
 
     val isVideoHidden = timeline.trackSettings[TrackType.MAIN_VIDEO]?.isHidden == true
@@ -92,7 +98,7 @@ class TimelineEvaluator {
       }.sortedWith(compareBy({ it.trackIndex }, { it.timelineStartMs })).map { clip ->
         val relMs = posMs - clip.timelineStartMs
         val kf = KeyframeInterpolator.interpolate(clip, relMs)
-        val effectiveClip = if (clip.keyframes.isNotEmpty()) {
+        val effectiveClip = if (clip.keyframes.isNotEmpty() || !clip.trackBindJson.isNullOrBlank()) {
           clip.copy(
             posX = kf.posX,
             posY = kf.posY,
