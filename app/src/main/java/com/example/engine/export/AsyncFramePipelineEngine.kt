@@ -122,8 +122,9 @@ private class HardwareClipDecoder(
   private val textureSource = HardwareVideoTextureSource()
 
   val textureId: Int get() = textureSource.oesTextureId
-  val width: Int get() = textureSource.effectiveWidth
-  val height: Int get() = textureSource.effectiveHeight
+  /** Raw encoded size. Display rotation is applied by the GPU compositor, not here. */
+  val width: Int get() = textureSource.width
+  val height: Int get() = textureSource.height
   val transformMatrix: FloatArray get() = textureSource.transformMatrix
 
   fun init(): Boolean {
@@ -273,6 +274,11 @@ class AsyncFramePipelineEngine(private val context: Context) {
     if (first.mime != avc) {
       list += first.copy(mime = avc, bitrateBps = (first.bitrateBps.toLong() * 4 / 3).coerceAtMost(120_000_000L).toInt())
     }
+    val hevc = MediaFormat.MIMETYPE_VIDEO_HEVC
+    if (first.mime != hevc) {
+      list += first.copy(mime = hevc, bitrateBps = (first.bitrateBps.toLong() * 3 / 4).coerceAtLeast(1_000_000L).toInt())
+    }
+    // Size fallback is only for 2K/4K. 1080p must stay exactly 1920x1080 (or 1080x1920 portrait).
     val tooBig = max(first.width, first.height) > 1920
     if (tooBig || first.fps > 30) {
       val (w, h) = if (tooBig) ExportDimensionResolver.fit(first.width, first.height, 1920) else first.width to first.height
@@ -284,7 +290,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
         requestedWidth = first.requestedWidth, requestedHeight = first.requestedHeight, requestedFps = first.requestedFps
       )
     }
-    return list
+    return list.distinctBy { "${it.mime}:${it.width}x${it.height}@${it.fps}" }
   }
 
   private fun buildVideoFormat(plan: EncoderPlan, relaxed: Boolean): MediaFormat =
@@ -302,6 +308,60 @@ class AsyncFramePipelineEngine(private val context: Context) {
         }
       }
     }
+
+  private data class OpenedEncoder(
+    val codec: MediaCodec,
+    val inputSurface: Surface,
+    val format: MediaFormat,
+    val hardware: Boolean
+  )
+
+  /**
+   * Configure a surface-input encoder at exactly [plan.width] x [plan.height].
+   * Tries hardware then software, with and without profile/level — never a smaller resolution.
+   */
+  private fun openVideoEncoder(plan: EncoderPlan): OpenedEncoder {
+    val candidates = decoderManager.listExportEncoderCandidates(plan.mime, plan.width, plan.height, requireSurface = true)
+      .ifEmpty { listOf(DecoderManager.EncoderCandidate("", plan.mime, hardware = true)) }
+    var lastError: Throwable? = null
+    for (candidate in candidates) {
+      var codec: MediaCodec? = null
+      try {
+        codec = if (candidate.name.isNotBlank()) {
+          MediaCodec.createByCodecName(candidate.name)
+        } else {
+          MediaCodec.createEncoderByType(plan.mime)
+        }
+        val hardware = !candidate.name.lowercase().let {
+          it.contains("google") || it.contains("android") || it.contains("software") || it.startsWith("c2.android.")
+        } && candidate.hardware
+        for (relaxed in listOf(false, true)) {
+          val format = buildVideoFormat(plan, relaxed)
+          if (!relaxed) {
+            ExportCodecFormat.applyCompatibleProfileLevel(format, codec, plan.width, plan.height, plan.fps)
+          }
+          try {
+            codec.configure(format, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+            val surface = codec.createInputSurface()
+            return OpenedEncoder(codec, surface, format, hardware || candidate.hardware)
+          } catch (cfg: Exception) {
+            lastError = cfg
+            ExportDiagnostics.configureError(codec.name, plan.mime, plan.width, plan.height, cfg)
+            try { codec.reset() } catch (_: Exception) {}
+          }
+        }
+        try { codec.release() } catch (_: Exception) {}
+      } catch (t: Throwable) {
+        lastError = t
+        ExportDiagnostics.configureError(candidate.name.ifBlank { plan.mime }, plan.mime, plan.width, plan.height, t)
+        try { codec?.release() } catch (_: Exception) {}
+      }
+    }
+    throw ExportPipelineException(
+      "No encoder could be configured for ${plan.width}x${plan.height} ${plan.mime} (requested ${plan.requestedWidth}x${plan.requestedHeight}). ${lastError?.message ?: ""}",
+      lastError
+    )
+  }
 
   /** One complete export try with its own threads, codecs, EGL context and muxer. */
   private fun runAttempt(
@@ -366,26 +426,30 @@ class AsyncFramePipelineEngine(private val context: Context) {
         }
       }
 
-      // 2. Video encoder (surface input)
-      val (chosenEncoder, isHardwareEncoder) = decoderManager.createEncoder(
-        mimeType = plan.mime,
-        width = exportWidth,
-        height = exportHeight,
-        requireSurface = true
-      )
-      videoEncoderRef = chosenEncoder
-      val videoEncoder: MediaCodec = chosenEncoder
-      val surface: Surface = try {
-        videoEncoder.configure(buildVideoFormat(plan, relaxed = false), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        videoEncoder.createInputSurface()
-      } catch (cfgEx: Exception) {
-        Log.w(tag, "Video encoder configure failed for ${plan.mime}: ${cfgEx.message}; retrying relaxed configuration", cfgEx)
-        try { videoEncoder.reset() } catch (_: Exception) {}
-        videoEncoder.configure(buildVideoFormat(plan, relaxed = true), null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-        videoEncoder.createInputSurface()
-      }
+      // 2. Video encoder (surface input). Size is always the plan size — never silently 720p.
+      val opened = openVideoEncoder(plan)
+      videoEncoderRef = opened.codec
+      val videoEncoder: MediaCodec = opened.codec
+      val surface: Surface = opened.inputSurface
       encoderInputSurface = surface
-      Log.i(tag, "Video Encoder initialized: ${videoEncoder.name} (hardwareAccelerated=$isHardwareEncoder, surface=true)")
+      val configuredFormat = opened.format
+      Log.i(tag, "Video Encoder initialized: ${videoEncoder.name} (hardwareAccelerated=${opened.hardware}, surface=true, ${exportWidth}x${exportHeight})")
+      ExportDiagnostics.session(
+        requestedWidth = plan.requestedWidth,
+        requestedHeight = plan.requestedHeight,
+        plan = plan,
+        codecName = videoEncoder.name,
+        mime = plan.mime,
+        profile = ExportCodecFormat.profileOf(configuredFormat),
+        level = ExportCodecFormat.levelOf(configuredFormat),
+        bitrateBps = plan.bitrateBps,
+        fps = fps,
+        rotationHint = ExportOrientationPolicy.MUXER_ORIENTATION_HINT_DEGREES,
+        eglWidth = exportWidth,
+        eglHeight = exportHeight,
+        flipYForEncoder = ExportOrientationPolicy.FLIP_Y_FOR_ENCODER,
+        surfaceTransformLogged = true
+      )
 
       // 3. EGL + GPU composition on the dedicated GL thread, bound to the encoder Surface
       val glInitLatch = CountDownLatch(1)
@@ -441,7 +505,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       val localMuxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
       val coordinator = MuxerCoordinator(localMuxer, aenc != null)
       muxerCoordinator = coordinator
-      coordinator.setOrientationHint(0)
+      coordinator.setOrientationHint(ExportOrientationPolicy.MUXER_ORIENTATION_HINT_DEGREES)
 
       videoEncoder.start()
 
@@ -483,6 +547,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
                   drainedSomething = true
                   val newFormat = videoEncoder.outputFormat
                   Log.i(tag, "Video encoder output format changed: $newFormat")
+                  ExportDiagnostics.encoderOutputFormat(newFormat)
                   coordinator.setVideoFormat(newFormat)
                 } else {
                   break // INFO_TRY_AGAIN_LATER (or buffers-changed): nothing more right now
@@ -775,7 +840,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
               timelineAdjustments = timeline.adjustments,
               timelineFilter = timeline.filter,
               chromaKey = timeline.chromaKey,
-              flipYForEncoder = false,
+              flipYForEncoder = ExportOrientationPolicy.FLIP_Y_FOR_ENCODER,
               flipXForEncoder = false,
               transitionBefore = transitionBefore,
               transitionAfter = transitionAfter,
@@ -903,6 +968,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
         Log.w(tag, "Muxer corrected ${coordinator.timestampCorrections} non-monotonic timestamp(s)")
       }
       Log.i(tag, "Hardware Export Finished: ${outputFile.absolutePath} (${outputFile.length()} bytes, video samples=$written/$submitted, audio samples=${coordinator.audioSamplesWritten})")
+      ExportDiagnostics.finished(outputFile.absolutePath, exportWidth, exportHeight, durationMs, outputFile.length())
       return outputFile
     } finally {
       // Stop everything, then release in dependency order:

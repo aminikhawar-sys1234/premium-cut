@@ -96,6 +96,8 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
   private val surfaceLock = Any()
 
   val transformMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
+  private var loggedTransform = false
+  private var clipIdForLog: String = ""
   private var glHandler: Handler? = null
 
   /**
@@ -111,6 +113,7 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
   ): Boolean {
     if (isInitialized) return true
     this.glHandler = glHandler
+    this.clipIdForLog = clip.id
 
     try {
       // 1. Initialize MediaExtractor
@@ -198,7 +201,12 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       // The GPU compositor applies clip.naturalRotation itself (see GpuCompositionRenderer).
       // MediaCodec would otherwise also bake KEY_ROTATION into the SurfaceTexture transform
       // matrix, rotating the frame twice (upside-down / sideways export).
-      try { trackFormat.setInteger(MediaFormat.KEY_ROTATION, 0) } catch (_: Exception) {}
+      try {
+        trackFormat.setInteger(
+          MediaFormat.KEY_ROTATION,
+          com.example.engine.export.ExportOrientationPolicy.DECODER_KEY_ROTATION_DEGREES
+        )
+      } catch (_: Exception) {}
       dec.configure(trackFormat, decoderSurface, null, 0)
       dec.start()
 
@@ -413,6 +421,12 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       try {
         st.updateTexImage()
         st.getTransformMatrix(transformMatrix)
+        if (!loggedTransform) {
+          loggedTransform = true
+          com.example.engine.export.ExportDiagnostics.transformMatrixOnce(
+            clipIdForLog, rotationDegrees, transformMatrix
+          )
+        }
       } catch (e: Exception) {
         Log.w(TAG, "updateTexImage failed: ${e.message}")
       }

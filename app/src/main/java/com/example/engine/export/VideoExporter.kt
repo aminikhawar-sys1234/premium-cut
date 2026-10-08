@@ -180,6 +180,7 @@ class MuxerCoordinator(
       }
       isStarted = true
       Log.d(tag, "MediaMuxer started successfully (videoTrack=$videoTrackIndex, audioTrack=$audioTrackIndex)")
+      com.example.engine.export.ExportDiagnostics.muxerStarted(videoTrackIndex, audioTrackIndex)
       flushPending()
     }
   }

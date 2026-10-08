@@ -108,9 +108,16 @@ object ExportEncoderPlanner {
         else listOf(MediaFormat.MIMETYPE_VIDEO_AVC, MediaFormat.MIMETYPE_VIDEO_HEVC)
     }
 
+    // 1080p (and below) must stay at the requested pixel size. 1920x1080 is even but not
+    // 16-aligned; isSizeSupported() often returns false and the old ladder silently fell
+    // through to 1280x720 — which is the 1080p-only "export failed" the user hit, while
+    // 720p/2K/4K (all 16-aligned) succeeded. 2K/4K may still drop size when the SoC cannot
+    // encode them.
+    val allowSizeDegrade = max(requestedW, requestedH) >= 2160
+
     var best: Triple<String, Int, Triple<Int, Int, Int>>? = null // mime, score, (w,h,fps)
     for (mime in mimes) {
-      val fit = fitToEncoder(mime, requestedW, requestedH, requestedFps) ?: continue
+      val fit = fitToEncoder(mime, requestedW, requestedH, requestedFps, allowSizeDegrade) ?: continue
       val (w, h, fps) = fit
       val full = w == requestedW && h == requestedH && fps == requestedFps
       val score = if (full) Int.MAX_VALUE else w * h / 1000 * 10 + fps
@@ -131,30 +138,58 @@ object ExportEncoderPlanner {
   private data class Quad(val mime: String, val w: Int, val h: Int, val fps: Int)
 
   /** Returns (w, h, fps) the best matching surface-input encoder supports, or null if none/unknown. */
-  private fun fitToEncoder(mime: String, w: Int, h: Int, fps: Int): Triple<Int, Int, Int>? {
+  private fun fitToEncoder(
+    mime: String,
+    w: Int,
+    h: Int,
+    fps: Int,
+    allowSizeDegrade: Boolean
+  ): Triple<Int, Int, Int>? {
     val codecs = encodersFor(mime)
     if (codecs.isEmpty()) return null
-    val aspect = w.toDouble() / h
     val sizes = ArrayList<Pair<Int, Int>>()
     sizes += w to h
-    for (longSide in LONG_SIDE_LADDER) {
-      if (longSide >= max(w, h)) continue
-      val scale = longSide.toDouble() / max(w, h)
-      sizes += ExportDimensionResolver.fit((w * scale).roundToInt(), (h * scale).roundToInt(), longSide)
+    if (allowSizeDegrade) {
+      for (longSide in LONG_SIDE_LADDER) {
+        if (longSide >= max(w, h)) continue
+        val scale = longSide.toDouble() / max(w, h)
+        sizes += ExportDimensionResolver.fit((w * scale).roundToInt(), (h * scale).roundToInt(), longSide)
+      }
     }
     val fpsOptions = listOf(fps, 30, 24).filter { it <= fps }.distinct()
     for ((sw, sh) in sizes) {
       for (f in fpsOptions) {
         for (caps in codecs) {
           val vc = caps.videoCapabilities ?: continue
-          val ok = runCatching {
-            (vc.isSizeSupported(sw, sh)) && vc.areSizeAndRateSupported(sw, sh, f.toDouble())
+          val strict = runCatching {
+            vc.isSizeSupported(sw, sh) && vc.areSizeAndRateSupported(sw, sh, f.toDouble())
           }.getOrDefault(false)
-          if (ok) return Triple(sw, sh, f)
+          if (strict) return Triple(sw, sh, f)
         }
       }
     }
-    return null
+    // Alignment-tolerant pass: 1920x1080 is in range on almost every SoC even when
+    // isSizeSupported is false because 1080 % 16 != 0. Keep the exact size.
+    for (f in fpsOptions) {
+      for (caps in codecs) {
+        val vc = caps.videoCapabilities ?: continue
+        if (withinSupportedRange(vc, w, h, f)) return Triple(w, h, f)
+      }
+    }
+    return if (allowSizeDegrade) null else Triple(w, h, fpsOptions.first())
+  }
+
+  internal fun withinSupportedRange(
+    vc: MediaCodecInfo.VideoCapabilities,
+    w: Int,
+    h: Int,
+    fps: Int
+  ): Boolean {
+    val widths = runCatching { vc.supportedWidths }.getOrNull() ?: return true
+    val heights = runCatching { vc.supportedHeights }.getOrNull() ?: return true
+    if (w < widths.lower || w > widths.upper) return false
+    if (h < heights.lower || h > heights.upper) return false
+    return runCatching { vc.supportedFrameRates.upper + 0.001 >= fps }.getOrDefault(true)
   }
 
   private fun encodersFor(mime: String): List<MediaCodecInfo.CodecCapabilities> {

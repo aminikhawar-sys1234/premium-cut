@@ -117,6 +117,184 @@ class ExportOrientationAndPipelineTest {
   }
 
   @Test
+  fun testExportOrientationPolicy_EncoderBlitFlipsYAndMuxerHintIsZero() {
+    assertEquals(0, ExportOrientationPolicy.MUXER_ORIENTATION_HINT_DEGREES)
+    assertEquals(0, ExportOrientationPolicy.DECODER_KEY_ROTATION_DEGREES)
+    assertTrue(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER)
+    assertEquals(-90f, ExportOrientationPolicy.glRotationDegrees(90f), 0.01f)
+    assertEquals(-180f, ExportOrientationPolicy.glRotationDegrees(180f), 0.01f)
+    assertEquals(-270f, ExportOrientationPolicy.glRotationDegrees(270f), 0.01f)
+  }
+
+  @Test
+  fun testExportOrientationPolicy_PortraitAndLandscapeDisplaySize() {
+    assertEquals(1920 to 1080, ExportOrientationPolicy.displaySize(1920, 1080, 0))
+    assertEquals(1080 to 1920, ExportOrientationPolicy.displaySize(1920, 1080, 90))
+    assertEquals(1920 to 1080, ExportOrientationPolicy.displaySize(1920, 1080, 180))
+    assertEquals(1080 to 1920, ExportOrientationPolicy.displaySize(1920, 1080, 270))
+    assertEquals(1080 to 1920, ExportOrientationPolicy.displaySize(1080, 1920, 0))
+  }
+
+  @Test
+  fun test1080pStaysExactly1920x1080And1080x1920() {
+    val landscape = ExportDimensionResolver.resolve(Resolution.RES_1080P, AspectRatio.RATIO_16_9)
+    assertEquals(1920, landscape.first)
+    assertEquals(1080, landscape.second)
+    val portrait = ExportDimensionResolver.resolve(Resolution.RES_1080P, AspectRatio.RATIO_9_16)
+    assertEquals(1080, portrait.first)
+    assertEquals(1920, portrait.second)
+    assertEquals(0, landscape.first % 2)
+    assertEquals(0, landscape.second % 2)
+  }
+
+  @Test
+  fun testAllStandardResolutionsStayEvenAndMatchRequestedLabel() {
+    val landscape = mapOf(
+      Resolution.RES_480P to (854 to 480),
+      Resolution.RES_720P to (1280 to 720),
+      Resolution.RES_1080P to (1920 to 1080),
+      Resolution.RES_2K to (2560 to 1440),
+      Resolution.RES_4K to (3840 to 2160)
+    )
+    for ((res, expected) in landscape) {
+      val got = ExportDimensionResolver.resolve(res, AspectRatio.RATIO_16_9)
+      assertEquals("$res landscape", expected, got)
+    }
+    val portrait1080 = ExportDimensionResolver.resolve(Resolution.RES_1080P, AspectRatio.RATIO_9_16)
+    assertEquals(1080 to 1920, portrait1080)
+  }
+
+  @Test
+  fun testEncoderPlannerDoesNotDegrade1080pTo720p() {
+    val config = ExportConfig(resolution = Resolution.RES_1080P, frameRate = FrameRate.FPS_30, codecProfile = CodecProfile.H264_AVC)
+    val plan = ExportEncoderPlanner.plan(config, 1920, 1080, 30)
+    assertEquals("1080p width must stay 1920", 1920, plan.width)
+    assertEquals("1080p height must stay 1080", 1080, plan.height)
+    assertEquals(1920, plan.requestedWidth)
+    assertEquals(1080, plan.requestedHeight)
+    assertTrue("1080p bitrate must stay in a real FHD range", plan.bitrateBps in 2_000_000..40_000_000)
+
+    val portrait = ExportEncoderPlanner.plan(config, 1080, 1920, 30)
+    assertEquals(1080, portrait.width)
+    assertEquals(1920, portrait.height)
+  }
+
+  @Test
+  fun test480p720p2k4kPlannerKeepsRequestedCanvas() {
+    data class Case(val res: Resolution, val w: Int, val h: Int)
+    val cases = listOf(
+      Case(Resolution.RES_480P, 854, 480),
+      Case(Resolution.RES_720P, 1280, 720),
+      Case(Resolution.RES_2K, 2560, 1440),
+      Case(Resolution.RES_4K, 3840, 2160)
+    )
+    for (c in cases) {
+      val plan = ExportEncoderPlanner.plan(
+        ExportConfig(resolution = c.res, frameRate = FrameRate.FPS_30),
+        c.w, c.h, 30
+      )
+      assertEquals("${c.res} requested width", c.w, plan.requestedWidth)
+      assertEquals("${c.res} requested height", c.h, plan.requestedHeight)
+      if (c.res == Resolution.RES_480P || c.res == Resolution.RES_720P) {
+        assertEquals("${c.res} encoded width", c.w, plan.width)
+        assertEquals("${c.res} encoded height", c.h, plan.height)
+      }
+    }
+  }
+
+  @Test
+  fun test1080pAvcNeedsLevel4Macroblocks() {
+    val mbs = ExportCodecFormat.macroblocks(1920, 1080)
+    assertEquals(120 * 68, mbs)
+    assertTrue("1080p exceeds AVC Level 3.1 (3600 MB)", mbs > 3600)
+    assertTrue("1080p fits AVC Level 4.0 (8192 MB)", mbs <= 8192)
+    assertEquals(ExportCodecFormat.macroblocks(1280, 720), 80 * 45)
+  }
+
+  @Test
+  fun testExported1080pMustNotValidateAs720p() {
+    val p = ExportContentProbe(width = 1280, height = 720, frames = emptyList())
+    val verdict = ExportContentRules.check(
+      p,
+      ExportExpectations(expectedDurationMs = 10_000L, expectedDimensions = 1920 to 1080, checkFrames = false, requireAudio = false)
+    )
+    assertEquals(ExportFailure.DIMENSION_MISMATCH, verdict?.failure)
+  }
+
+  @Test
+  fun testExportedExact1080pAndPortraitAreAccepted() {
+    val landscape = ExportContentProbe(width = 1920, height = 1080, frames = emptyList())
+    assertNull(
+      ExportContentRules.check(
+        landscape,
+        ExportExpectations(expectedDurationMs = 10_000L, expectedDimensions = 1920 to 1080, checkFrames = false, requireAudio = false)
+      )
+    )
+    val portrait = ExportContentProbe(width = 1080, height = 1920, frames = emptyList())
+    assertNull(
+      ExportContentRules.check(
+        portrait,
+        ExportExpectations(expectedDurationMs = 10_000L, expectedDimensions = 1080 to 1920, checkFrames = false, requireAudio = false)
+      )
+    )
+  }
+
+  @Test
+  fun testRotationMetadataOnExportIsRejected() {
+    val rotated = ExportContentProbe(width = 1920, height = 1080, rotationDegrees = 90, frames = emptyList())
+    val verdict = ExportContentRules.check(
+      rotated,
+      ExportExpectations(expectedDurationMs = 10_000L, expectedDimensions = 1920 to 1080, expectedRotation = 0, checkFrames = false, requireAudio = false)
+    )
+    assertEquals(ExportFailure.BAD_ROTATION, verdict?.failure)
+  }
+
+  @Test
+  fun testAudioTrackPreservedAndInSyncWithVideo() {
+    val p = ExportContentProbe(
+      hasAudioTrack = true,
+      width = 1920,
+      height = 1080,
+      videoDurationMs = 10_000L,
+      audioDurationMs = 10_040L,
+      containerDurationMs = 10_000L,
+      frames = emptyList()
+    )
+    assertNull(
+      ExportContentRules.check(
+        p,
+        ExportExpectations(
+          expectedDurationMs = 10_000L,
+          expectedDimensions = 1920 to 1080,
+          requireAudio = true,
+          checkFrames = false
+        )
+      )
+    )
+    val drifted = ExportContentProbe(
+      hasAudioTrack = true,
+      width = 1920,
+      height = 1080,
+      videoDurationMs = 10_000L,
+      audioDurationMs = 12_000L,
+      containerDurationMs = 10_000L,
+      frames = emptyList()
+    )
+    assertEquals(
+      ExportFailure.AV_DURATION_MISMATCH,
+      ExportContentRules.check(
+        drifted,
+        ExportExpectations(
+          expectedDurationMs = 10_000L,
+          expectedDimensions = 1920 to 1080,
+          requireAudio = true,
+          checkFrames = false
+        )
+      )?.failure
+    )
+  }
+
+  @Test
   fun testCodecCapabilityInspector_HandlesHighResGracefully() {
     val report = ProfessionalCodecCapabilities.inspect(
       config = ExportConfig(

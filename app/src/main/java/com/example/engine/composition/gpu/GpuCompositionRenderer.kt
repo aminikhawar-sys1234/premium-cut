@@ -505,7 +505,7 @@ class GpuCompositionRenderer(private val context: Context) {
           val ovMatrix = FloatArray(16)
           Matrix.setIdentityM(ovMatrix, 0)
           Matrix.translateM(ovMatrix, 0, overlay.clip.cropOffsetX + overlay.posX, -(overlay.clip.cropOffsetY + overlay.posY), 0f)
-          Matrix.rotateM(ovMatrix, 0, -totalRot, 0f, 0f, 1f)
+          Matrix.rotateM(ovMatrix, 0, com.example.engine.export.ExportOrientationPolicy.glRotationDegrees(totalRot), 0f, 0f, 1f)
           Matrix.scaleM(ovMatrix, 0, localScaleX, localScaleY, 1f)
 
           val calculatedZ = 100 + (i * 10)
@@ -888,7 +888,7 @@ class GpuCompositionRenderer(private val context: Context) {
       val localScaleY = (if (isTransposed) screenFitX else screenFitY) * userScaleY
 
       Matrix.translateM(mvpMatrix, 0, clip.cropOffsetX + kf.posX, -(clip.cropOffsetY + kf.posY), 0f)
-      Matrix.rotateM(mvpMatrix, 0, -totalRot, 0f, 0f, 1f)
+      Matrix.rotateM(mvpMatrix, 0, com.example.engine.export.ExportOrientationPolicy.glRotationDegrees(totalRot), 0f, 0f, 1f)
       Matrix.scaleM(mvpMatrix, 0, localScaleX, localScaleY, 1f)
 
       if (clip.motionBlurEnabled) {

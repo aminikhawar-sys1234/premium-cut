@@ -332,7 +332,9 @@ class DecoderManager {
           continue
         }
         val vc = caps.videoCapabilities
-        if (vc != null && width > 0 && height > 0 && !vc.isSizeSupported(width, height)) {
+        if (vc != null && width > 0 && height > 0 &&
+          !vc.isSizeSupported(width, height) && !sizeInSupportedRange(vc, width, height)
+        ) {
           continue
         }
 
@@ -368,14 +370,14 @@ class DecoderManager {
     height: Int = 1080,
     requireSurface: Boolean = true
   ): Pair<MediaCodec, Boolean> {
-    val hwName = findHardwareEncoderName(mimeType, width, height, requireSurface)
-    if (hwName != null) {
+    val candidates = listExportEncoderCandidates(mimeType, width, height, requireSurface)
+    for (candidate in candidates) {
       try {
-        val codec = MediaCodec.createByCodecName(hwName)
-        Log.i(TAG, "Successfully created hardware video encoder: $hwName")
-        return Pair(codec, true)
+        val codec = MediaCodec.createByCodecName(candidate.name)
+        Log.i(TAG, "Created video encoder: ${candidate.name} (hardware=${candidate.hardware})")
+        return Pair(codec, candidate.hardware)
       } catch (e: Exception) {
-        Log.w(TAG, "Failed creating hardware encoder by name $hwName, falling back to createEncoderByType", e)
+        Log.w(TAG, "Failed creating encoder ${candidate.name}", e)
       }
     }
 
@@ -383,6 +385,48 @@ class DecoderManager {
     val isHw = !isSoftwareCodec(fallbackCodec)
     Log.i(TAG, "Created fallback video encoder: ${fallbackCodec.name} (hardwareAccelerated=$isHw)")
     return Pair(fallbackCodec, isHw)
+  }
+
+  data class EncoderCandidate(val name: String, val mime: String, val hardware: Boolean)
+
+  /**
+   * Hardware first (including encoders that reject 16-alignment on 1080p but still accept
+   * 1920x1080 at configure()), then software. Size is never changed here.
+   */
+  fun listExportEncoderCandidates(
+    mimeType: String,
+    width: Int,
+    height: Int,
+    requireSurface: Boolean = true
+  ): List<EncoderCandidate> {
+    val out = ArrayList<Triple<Int, Boolean, EncoderCandidate>>()
+    try {
+      for (info in MediaCodecList(MediaCodecList.REGULAR_CODECS).codecInfos) {
+        if (!info.isEncoder) continue
+        if (info.supportedTypes.none { it.equals(mimeType, ignoreCase = true) }) continue
+        val caps = runCatching { info.getCapabilitiesForType(mimeType) }.getOrNull() ?: continue
+        if (requireSurface && !caps.colorFormats.contains(MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)) {
+          continue
+        }
+        val vc = caps.videoCapabilities
+        val strict = vc == null || width <= 0 || height <= 0 || vc.isSizeSupported(width, height)
+        val inRange = vc == null || width <= 0 || height <= 0 || sizeInSupportedRange(vc, width, height)
+        if (!strict && !inRange) continue
+        val hw = isHardwareAccelerated(info)
+        var score = if (hw) 50 else 10
+        if (strict) score += 20
+        out += Triple(score, hw, EncoderCandidate(info.name, mimeType, hw))
+      }
+    } catch (e: Exception) {
+      Log.w(TAG, "Error listing export encoders for $mimeType", e)
+    }
+    return out.sortedByDescending { it.first }.map { it.third }
+  }
+
+  private fun sizeInSupportedRange(vc: MediaCodecInfo.VideoCapabilities, width: Int, height: Int): Boolean {
+    val widths = runCatching { vc.supportedWidths }.getOrNull() ?: return true
+    val heights = runCatching { vc.supportedHeights }.getOrNull() ?: return true
+    return width in widths.lower..widths.upper && height in heights.lower..heights.upper
   }
 
   /**

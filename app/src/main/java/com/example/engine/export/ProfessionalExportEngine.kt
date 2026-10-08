@@ -365,8 +365,10 @@ class ProfessionalExportEngine(private val context: Context) {
       checkCancelled()
 
       _progress.value = ProfessionalExportProgress(ProfessionalExportStage.VERIFYING, 0.96f, plan.durationMs, message = "Verifying exported video integrity...")
-      val planned = pipeline.activePlan?.let { it.width to it.height } ?: dimensions
-      val validation = ExportValidator.validate(rendered, config, plan.durationMs, requireAudio && hasAudio, planned)
+      val encoded = pipeline.activePlan?.let { it.width to it.height } ?: dimensions
+      // 1080p and below must match the requested canvas exactly; 2K/4K may use a capability fallback size.
+      val expectedDims = if (max(dimensions.first, dimensions.second) <= 1920) dimensions else encoded
+      val validation = ExportValidator.validate(rendered, config, plan.durationMs, requireAudio && hasAudio, expectedDims)
       Log.i(tag, "[VALIDATION_RESULT] valid=${validation.valid} message=${validation.message} duration=${validation.durationMs}ms videoCodec=${validation.videoCodec} audioCodec=${validation.audioCodec} res=${validation.width}x${validation.height}")
       if (!validation.valid) {
         // Never hand a broken file to the user as a successful export. The project is untouched, so the user can retry.
