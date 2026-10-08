@@ -226,4 +226,17 @@ class Media3EffectPipelineTest {
     assertTrue("Should include ColorGradingGlEffect", effects.any { it is ColorGradingGlEffect })
     assertTrue("Should include CustomShaderGlEffect for Anime", effects.any { it is CustomShaderGlEffect && it.name == "AnimeCelShadingEffect" })
   }
+
+  @Test
+  fun testPreviewFilterEffects_selectedPresetIsNotNoOp() {
+    val clip = VideoClip(
+      name = "Look",
+      filter = FilterSettings(type = FilterType.FOUR_K, intensity = 1.0f)
+    )
+    val timeline = Timeline(videoClips = listOf(clip))
+    val effects = PreviewFilterEffects.effectsFor(clip, timeline)
+    assertTrue(effects.any { it is ColorGradingGlEffect && !it.isNoOp(1920, 1080) })
+    val reset = PreviewFilterEffects.effectsFor(clip.copy(filter = FilterSettings()), Timeline())
+    assertTrue(reset.none { it is ColorGradingGlEffect })
+  }
 }

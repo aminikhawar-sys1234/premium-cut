@@ -252,6 +252,7 @@ fun FilterToolsPanel(
                 val reset = FilterSettings(type = FilterType.NONE, intensity = 1.0f)
                 currentFilter = reset
                 viewModel.timelineEngine.updateFilter(reset, selectedClip?.id)
+                viewModel.refreshCurrentFrame()
               }
               FilterToolsTab.ADJUST -> {
                 val reset = currentAdjustments.copy(
@@ -421,6 +422,7 @@ fun FilterToolsPanel(
               onFilterChange = { newFilter ->
                 currentFilter = newFilter
                 viewModel.timelineEngine.updateFilter(newFilter, selectedClip?.id)
+                viewModel.refreshCurrentFrame()
               }
             )
           }
@@ -709,6 +711,7 @@ private fun FiltersTabContent(
                 .clip(RoundedCornerShape(4.dp))
                 .clickable {
                   viewModel.timelineEngine.applyFilterToAllClips(currentFilter)
+                  viewModel.refreshCurrentFrame()
                 }
                 .testTag("filter_apply_all_button")
             ) {

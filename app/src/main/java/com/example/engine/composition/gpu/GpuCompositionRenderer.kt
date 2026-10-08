@@ -1005,7 +1005,7 @@ class GpuCompositionRenderer(private val context: Context) {
       }
     }
 
-    val effectiveFilter = clip?.filter ?: FilterSettings()
+    val effectiveFilter = clip?.filter ?: filter
     bindCommonUniforms(
       program = program,
       textureId = textureId,

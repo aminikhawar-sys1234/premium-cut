@@ -17,11 +17,11 @@ import androidx.media3.exoplayer.SeekParameters
 import com.example.domain.model.Timeline
 import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
-import com.example.domain.model.effectiveAdjustments
 import com.example.domain.model.timelineToSourceMs
-import com.example.engine.composition.ColorFilterGenerator
 import com.example.engine.controller.CustomVideoEngineController
 import com.example.engine.controller.PlaybackSyncPolicy
+import com.example.engine.effects.media3.Media3EffectPipeline
+import com.example.engine.effects.media3.PreviewFilterEffects
 import com.example.engine.media.MediaRelinkManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -84,7 +84,10 @@ class VideoPlaybackEngine(
     onTimelinePositionChanged = { pos ->
       currentPosMs = pos
       _currentPositionMs.value = pos
-      _activeClip.value = findClipAt(pos)
+      val nextClip = findClipAt(pos)
+      val lookChanged = PreviewFilterEffects.signature(nextClip, currentTimeline) != lastPreviewFilterSignature
+      _activeClip.value = nextClip
+      if (lookChanged) applyActiveLookToPlayers()
       syncOverlayPlayers(pos)
       syncAudioTrackPlayers(pos)
       onTimelinePositionChanged(pos)
@@ -105,6 +108,8 @@ class VideoPlaybackEngine(
   private val audioTrackPlayers = ConcurrentHashMap<String, ExoPlayer>()
   private val audioLoadedUris = ConcurrentHashMap<String, String>()
   private val secondaryCorrectionAtMs = ConcurrentHashMap<String, Long>()
+  private var lastPreviewFilterSignature: String? = null
+  private val lastOverlayFilterSignatures = ConcurrentHashMap<String, String>()
 
   init {
     player.addListener(object : Player.Listener {
@@ -121,8 +126,38 @@ class VideoPlaybackEngine(
 
   fun isPlayableInPlayer(uriString: String?): Boolean = MediaRelinkManager.isRealPlayableMedia(context, uriString)
 
+  /**
+   * Applies the selected Filters-tools look to the live ExoPlayer preview.
+   * The ColorMatrix argument is the same combined look used by export; the
+   * Media3 ColorGrading shader is built from the active clip's filter + adjustments.
+   */
   fun applyVideoFilter(colorMatrix: ColorMatrix?) {
-    // Existing GPU composition layer remains responsible for realtime filter/shader application.
+    applyActiveLookToPlayers()
+  }
+
+  /** Pushes clip-local (or timeline) filter + adjustments onto ExoPlayer via Media3 effects. */
+  fun applyActiveLookToPlayers() {
+    val clip = _activeClip.value
+    val sig = PreviewFilterEffects.signature(clip, currentTimeline)
+    if (sig != lastPreviewFilterSignature) {
+      lastPreviewFilterSignature = sig
+      val effects = PreviewFilterEffects.effectsFor(clip, currentTimeline)
+      Media3EffectPipeline.applyRealtimeEffects(player, effects)
+      Log.d(TAG, "Applied preview filter ${PreviewFilterEffects.effectiveFilter(clip, currentTimeline).type} effects=${effects.size}")
+    }
+    applyOverlayLooks()
+  }
+
+  private fun applyOverlayLooks() {
+    val activeIds = currentTimeline.overlayClips.map { it.id }.toSet()
+    lastOverlayFilterSignatures.keys.toList().filter { it !in activeIds }.forEach { lastOverlayFilterSignatures.remove(it) }
+    for (overlay in currentTimeline.overlayClips) {
+      val p = overlayPlayers[overlay.id] ?: continue
+      val sig = PreviewFilterEffects.signature(overlay, currentTimeline)
+      if (lastOverlayFilterSignatures[overlay.id] == sig) continue
+      lastOverlayFilterSignatures[overlay.id] = sig
+      Media3EffectPipeline.applyRealtimeEffects(p, PreviewFilterEffects.effectsFor(overlay, currentTimeline))
+    }
   }
 
   fun getOverlayPlayer(clipId: String): ExoPlayer? = try { overlayPlayers[clipId] } catch (_: Exception) { null }
@@ -218,6 +253,7 @@ class VideoPlaybackEngine(
           Log.w(TAG, "Overlay sync error", e)
         }
       }
+      applyOverlayLooks()
     } catch (e: Exception) {
       Log.w(TAG, "syncOverlayPlayers error", e)
     }
@@ -309,11 +345,12 @@ class VideoPlaybackEngine(
 
   fun updateTimeline(timeline: Timeline) {
     currentTimeline = timeline
-    engineController.updateTimeline(timeline)
     currentPosMs = currentPosMs.coerceIn(0L, timeline.totalDurationMs.coerceAtLeast(0L))
     _currentPositionMs.value = currentPosMs
     _activeClip.value = findClipAt(currentPosMs)
-    applyVideoFilter(ColorFilterGenerator.createCombinedMatrix(_activeClip.value.effectiveAdjustments(timeline), timeline.filter, _activeClip.value?.filter))
+    // Bind the look before the controller seeks so a paused preview shows the new filter.
+    applyActiveLookToPlayers()
+    engineController.updateTimeline(timeline)
     syncOverlayPlayers(currentPosMs)
     syncAudioTrackPlayers(currentPosMs)
   }

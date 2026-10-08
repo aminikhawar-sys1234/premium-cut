@@ -4,6 +4,8 @@ import com.example.domain.model.*
 import com.example.engine.SelectedTrackElement
 import com.example.engine.TimelineEngine
 import com.example.engine.composition.ColorFilterGenerator
+import com.example.engine.effects.media3.ColorGradingGlEffect
+import com.example.engine.effects.media3.PreviewFilterEffects
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -157,5 +159,71 @@ class VideoFiltersTest {
     val afterRemove = timelineEngine.timeline.value
     assertEquals(FilterType.NONE, afterRemove.videoClips.find { it.id == "v1" }!!.filter?.type)
     assertEquals(FilterType.GOLDEN_AUTUMN, afterRemove.videoClips.find { it.id == "v2" }!!.filter?.type)
+  }
+
+  @Test
+  fun testApplyFilterToAllClipsWritesEveryVideoAndOverlay() {
+    timelineEngine.loadTimeline(
+      Timeline(
+        videoClips = listOf(
+          VideoClip(id = "v1", name = "v1", uri = "uri1", durationMs = 4000L, timelineStartMs = 0L),
+          VideoClip(id = "v2", name = "v2", uri = "uri2", durationMs = 4000L, timelineStartMs = 4000L)
+        ),
+        overlayClips = listOf(
+          VideoClip(id = "ov1", name = "ov1", uri = "ov", durationMs = 2000L, timelineStartMs = 0L)
+        )
+      )
+    )
+    val look = FilterSettings(type = FilterType.BLACK_AND_WHITE, intensity = 0.8f)
+    timelineEngine.applyFilterToAllClips(look)
+    val tl = timelineEngine.timeline.value
+    assertTrue(tl.videoClips.all { it.filter?.type == FilterType.BLACK_AND_WHITE && it.filter?.intensity == 0.8f })
+    assertEquals(FilterType.BLACK_AND_WHITE, tl.overlayClips.single().filter?.type)
+    assertEquals(FilterType.NONE, tl.filter.type)
+  }
+
+  @Test
+  fun testPreviewFilterEffectsBuildRealColorGradingForSelectedLook() {
+    val clip = VideoClip(
+      id = "v1",
+      name = "v1",
+      uri = "uri1",
+      durationMs = 5000L,
+      filter = FilterSettings(type = FilterType.FOUR_K, intensity = 1.0f)
+    )
+    val timeline = Timeline(videoClips = listOf(clip))
+
+    val noneEffects = PreviewFilterEffects.effectsFor(clip.copy(filter = FilterSettings()), timeline)
+    assertTrue("Original look must not inject a ColorGrading pass", noneEffects.none { it is ColorGradingGlEffect })
+
+    val fourK = PreviewFilterEffects.effectsFor(clip, timeline)
+    assertTrue("4K must produce a real ColorGradingGlEffect for ExoPlayer", fourK.any { it is ColorGradingGlEffect })
+    assertFalse((fourK.single { it is ColorGradingGlEffect } as ColorGradingGlEffect).isNoOp(1920, 1080))
+
+    val cinematic = FilterSettings(type = FilterType.CINEMATIC, intensity = 0.75f)
+    val bw = FilterSettings(type = FilterType.BLACK_AND_WHITE, intensity = 1.0f)
+    assertNotEquals(
+      PreviewFilterEffects.signature(VideoAdjustments(), cinematic),
+      PreviewFilterEffects.signature(VideoAdjustments(), bw)
+    )
+    assertTrue(PreviewFilterEffects.isActiveLook(cinematic))
+    assertFalse(PreviewFilterEffects.isActiveLook(FilterSettings()))
+  }
+
+  @Test
+  fun testPreviewFilterEffectsPreferClipFilterOverTimelineFilter() {
+    val clip = VideoClip(
+      id = "v1",
+      name = "v1",
+      uri = "uri1",
+      durationMs = 3000L,
+      filter = FilterSettings(type = FilterType.GOLDEN_AUTUMN, intensity = 1.0f)
+    )
+    val timeline = Timeline(
+      videoClips = listOf(clip),
+      filter = FilterSettings(type = FilterType.OCEANIC_VIEW, intensity = 1.0f)
+    )
+    assertEquals(FilterType.GOLDEN_AUTUMN, PreviewFilterEffects.effectiveFilter(clip, timeline).type)
+    assertEquals(FilterType.OCEANIC_VIEW, PreviewFilterEffects.effectiveFilter(null, timeline).type)
   }
 }
