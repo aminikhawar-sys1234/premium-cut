@@ -79,4 +79,17 @@ class SubjectCutoutTest {
     assertEquals(0xFF000000.toInt(), argb[0])   // top row: transparent -> black
     assertEquals(0xFFFF0000.toInt(), argb[1])   // bottom row: red
   }
+
+  @Test
+  fun compositeForegroundUsesMaskAlphaAndDoesNotInventCoverage() {
+    val src = intArrayOf(0xFF112233.toInt(), 0xFF445566.toInt())
+    val mask = byteArrayOf(0, 255.toByte())
+    val (cutout, matte) = MaskGeometry.compositeForeground(src, mask)!!
+    assertEquals(0x00112233, cutout[0])
+    assertEquals(0xFF445566.toInt(), cutout[1])
+    assertEquals(0xFF000000.toInt(), matte[0])
+    assertEquals(0xFFFFFFFF.toInt(), matte[1])
+    assertNull(MaskGeometry.compositeForeground(src, byteArrayOf(1)))
+    assertNull(MaskGeometry.compositeForeground(intArrayOf(), byteArrayOf()))
+  }
 }

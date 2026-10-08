@@ -64,6 +64,22 @@ object MaskGeometry {
   }
 
   /** Flips row order (top-down <-> bottom-up). */
+  /**
+   * Writes foreground alpha from [mask] onto [srcArgb]. First array is the cutout, second is the gray matte.
+   * Null when the arrays disagree or are empty.
+   */
+  fun compositeForeground(srcArgb: IntArray, mask: ByteArray): Pair<IntArray, IntArray>? {
+    if (srcArgb.isEmpty() || srcArgb.size != mask.size) return null
+    val cutout = IntArray(srcArgb.size)
+    val matte = IntArray(srcArgb.size)
+    for (i in srcArgb.indices) {
+      val a = mask[i].toInt() and 0xff
+      cutout[i] = (a shl 24) or (srcArgb[i] and 0x00ffffff)
+      matte[i] = (0xFF shl 24) or (a shl 16) or (a shl 8) or a
+    }
+    return cutout to matte
+  }
+
   fun flipRows(src: ByteArray, w: Int, h: Int): ByteArray {
     val out = ByteArray(src.size)
     for (y in 0 until h) System.arraycopy(src, y * w, out, (h - 1 - y) * w, w)
@@ -157,5 +173,44 @@ object SubjectMaskWorker {
     } finally {
       bitmap?.recycle()
     }
+  }
+
+  /**
+   * Foreground confidence, one byte per pixel, top-down, matching [bitmap]'s orientation.
+   * Null when the on-device subject model is missing or the frame cannot be segmented.
+   * Does not invent a mask.
+   */
+  fun segmentTopDown(bitmap: Bitmap): ByteArray? {
+    if (bitmap.width <= 0 || bitmap.height <= 0) return null
+    val seg = segmenter ?: return null
+    return try {
+      val result = Tasks.await(seg.process(InputImage.fromBitmap(bitmap, 0)), TIMEOUT_S, TimeUnit.SECONDS)
+      val buf = result.foregroundConfidenceMask ?: return null
+      val n = bitmap.width * bitmap.height
+      buf.rewind()
+      if (buf.remaining() < n) return null
+      ByteArray(n) { i ->
+        (buf.get().coerceIn(0f, 1f) * 255f + 0.5f).toInt().coerceIn(0, 255).toByte()
+      }
+    } catch (t: Throwable) {
+      Log.w(TAG, "Subject segmentation failed", t)
+      null
+    }
+  }
+
+  /**
+   * Applies a top-down foreground mask to [source]. Returns the transparent cutout and a gray matte.
+   * Null when the mask does not cover the bitmap. Does not invent pixels and does not recycle [source].
+   */
+  fun applyForeground(source: Bitmap, mask: ByteArray): Pair<Bitmap, Bitmap>? {
+    val w = source.width
+    val h = source.height
+    if (w <= 0 || h <= 0 || mask.size < w * h) return null
+    val src = IntArray(w * h)
+    source.getPixels(src, 0, w, 0, 0, w, h)
+    val (cutoutPx, mattePx) = MaskGeometry.compositeForeground(src, mask.copyOf(w * h)) ?: return null
+    val cutout = Bitmap.createBitmap(cutoutPx, w, h, Bitmap.Config.ARGB_8888)
+    val matte = Bitmap.createBitmap(mattePx, w, h, Bitmap.Config.ARGB_8888)
+    return cutout to matte
   }
 }

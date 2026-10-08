@@ -2,6 +2,10 @@ package com.example.ui
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
+import android.net.Uri
+import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.AIToolsService
@@ -2239,23 +2243,94 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
-  fun runAIBackgroundRemoval(inputBitmap: Bitmap, onResult: (Bitmap, Bitmap) -> Unit) {
+  /**
+   * Decodes one real frame from the selected clip and segments it with the on-device subject model.
+   * Does not paint a stand-in image and does not fall back to border-color removal.
+   */
+  fun runSubjectCutoutPreview(onResult: (Bitmap, Bitmap) -> Unit) {
     viewModelScope.launch {
       _isAIBusy.value = true
-      _aiStatusMessage.value = "AI computing color clustering and edge alpha matting..."
+      _aiStatusMessage.value = "Decoding a frame from the selected clip..."
+      var frame: Bitmap? = null
       try {
-        val cutoutRes = aiTools.removeBackground(inputBitmap)
-        val maskRes = aiTools.generateAlphaMask(inputBitmap)
-        val cutout = cutoutRes.getOrThrow()
-        val mask = maskRes.getOrThrow()
-        onResult(cutout, mask)
-        _aiStatusMessage.value = "Background removal complete!"
+        val clip = targetClipForEffects()
+        if (clip == null || clip.uri.isBlank()) {
+          _aiStatusMessage.value = "No clip with media is selected. Import a video or photo first."
+          return@launch
+        }
+        val playhead = timelineEngine.currentPositionMs.value
+        frame = withContext(Dispatchers.IO) { decodeClipFrame(clip, playhead) }
+        if (frame == null) {
+          _aiStatusMessage.value = "Could not decode a frame from this clip. Nothing was generated."
+          return@launch
+        }
+        _aiStatusMessage.value = "Segmenting the decoded frame with the on-device subject model..."
+        val decoded = frame
+        val pair = withContext(Dispatchers.Default) {
+          val mask = com.example.engine.ai.cutout.SubjectMaskWorker.segmentTopDown(decoded)
+          if (mask == null) null else com.example.engine.ai.cutout.SubjectMaskWorker.applyForeground(decoded, mask)
+        }
+        if (pair == null) {
+          _aiStatusMessage.value = "Subject model is unavailable or returned no mask. No cutout was invented."
+          return@launch
+        }
+        onResult(pair.first, pair.second)
+        _aiStatusMessage.value = "Cutout uses the on-device subject mask of one decoded frame. It is a preview, not a timeline effect."
       } catch (e: Exception) {
-        _aiStatusMessage.value = e.message ?: "Background removal failed."
+        _aiStatusMessage.value = e.message ?: "Subject cutout failed."
       } finally {
+        frame?.let { if (!it.isRecycled) it.recycle() }
         _isAIBusy.value = false
       }
     }
+  }
+
+  private fun decodeClipFrame(clip: VideoClip, timelineMs: Long): Bitmap? {
+    val context = getApplication<Application>().applicationContext
+    if (!clip.isVideo || clip.mimeType.startsWith("image/")) {
+      return decodeStill(context, clip.uri)
+    }
+    val sourceUs = clip.timelineToSourceMs(timelineMs) * 1000L
+    val retriever = MediaMetadataRetriever()
+    return try {
+      val parsed = Uri.parse(clip.uri)
+      if (parsed.scheme == "content" || parsed.scheme == "android.resource") {
+        retriever.setDataSource(context, parsed)
+      } else {
+        val file = File(clip.uri)
+        if (file.isFile) retriever.setDataSource(file.absolutePath)
+        else retriever.setDataSource(context, parsed)
+      }
+      if (Build.VERSION.SDK_INT >= 27) {
+        retriever.getScaledFrameAtTime(sourceUs, MediaMetadataRetriever.OPTION_CLOSEST, 480, 480)
+      } else {
+        retriever.getFrameAtTime(sourceUs, MediaMetadataRetriever.OPTION_CLOSEST)
+      }
+    } catch (_: Throwable) {
+      null
+    } finally {
+      runCatching { retriever.release() }
+    }
+  }
+
+  private fun decodeStill(context: android.content.Context, uri: String): Bitmap? {
+    fun open() = runCatching {
+      val parsed = Uri.parse(uri)
+      if (parsed.scheme == "content" || parsed.scheme == "android.resource") {
+        context.contentResolver.openInputStream(parsed)
+      } else {
+        val file = File(uri)
+        if (file.isFile) file.inputStream() else context.contentResolver.openInputStream(parsed)
+      }
+    }.getOrNull()
+    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+    open()?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    val maxDim = maxOf(bounds.outWidth, bounds.outHeight)
+    if (maxDim <= 0) return null
+    var sample = 1
+    while (maxDim / sample > 480) sample *= 2
+    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+    return open()?.use { BitmapFactory.decodeStream(it, null, opts) }
   }
 
   fun runAINoiseReduction() {
@@ -2307,13 +2382,19 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       try {
         val result = aiTools.synthesizeSpeech(text, pitch, speed)
         val file = result.getOrThrow()
-        val durationMs = ((text.split(" ").size / (2.5f * speed)) * 1000L).toLong().coerceIn(1500L, 30000L)
+        val durationMs = com.example.engine.audio.WavDuration.durationMs(file)
+        if (durationMs == null || durationMs <= 0L) {
+          _aiStatusMessage.value = "Speech was synthesized, but its duration could not be read. It was not added."
+          return@launch
+        }
         val newAudioClip = AudioClip(
           id = UUID.randomUUID().toString(),
           title = "AI Voice: ${text.take(20)}...",
           uri = file.absolutePath,
           timelineStartMs = timelineEngine.currentPositionMs.value,
           durationMs = durationMs,
+          sourceEndMs = durationMs,
+          sourceTotalDurationMs = durationMs,
           volume = 1.0f
         )
         val currentAudio = timelineEngine.timeline.value.audioClips.toMutableList().apply { add(newAudioClip) }
@@ -2330,12 +2411,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun runAIHighlightAnalysis() {
     viewModelScope.launch {
       _isAIBusy.value = true
-      _aiStatusMessage.value = "AI scanning visual motion and highlight moments..."
+      _aiStatusMessage.value = "Requesting highlight times from the project title and duration..."
       try {
         val result = aiTools.analyzeHighlights(timelineEngine.timeline.value)
         val highlights = result.getOrThrow()
         _aiHighlights.value = highlights
-        _aiStatusMessage.value = "Found ${highlights.size} optimal scene moments!"
+        _aiStatusMessage.value = "The model suggested ${highlights.size} time ranges from the title and duration. It did not see the frames."
       } catch (e: Exception) {
         _aiStatusMessage.value = e.message ?: "Highlight analysis unavailable."
       } finally {
@@ -2347,13 +2428,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun runAIAutoEdit() {
     viewModelScope.launch {
       _isAIBusy.value = true
-      _aiStatusMessage.value = "AI Auto-Edit: Analyzing clips, beat synchronization & pacing..."
+      _aiStatusMessage.value = "Building a paced montage from clip durations..."
       try {
         val clips = timelineEngine.timeline.value.videoClips
         val result = aiTools.autoEditMontage(clips)
         val editedTimeline = result.getOrThrow()
         timelineEngine.replaceTimelineKeepingState(editedTimeline)
-        _aiStatusMessage.value = "Montage generated with transitions & timing!"
+        _aiStatusMessage.value = "Montage built from fixed slice lengths and a rotating transition list."
       } catch (e: Exception) {
         _aiStatusMessage.value = e.message ?: "Auto-edit failed."
       } finally {

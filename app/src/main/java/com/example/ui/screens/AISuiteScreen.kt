@@ -355,28 +355,20 @@ fun AISuiteScreen(
       item {
         AIFeatureCard(
           title = "AI Background Removal & Alpha Mask",
-          description = "Processes the actual video frame or image to isolate subjects with smooth edge alpha matting.",
+          description = "Decodes one frame from the selected clip and segments it with the on-device subject model. If the model or the frame is missing, nothing is shown.",
           icon = Icons.Default.AutoFixHigh
         ) {
           Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            val hasMedia = timeline.videoClips.any { it.uri.isNotBlank() } ||
+              timeline.overlayClips.any { it.uri.isNotBlank() }
             Button(
               onClick = {
-                // Generate a frame from current composition
-                val bmp = Bitmap.createBitmap(480, 480, Bitmap.Config.ARGB_8888)
-                val canvas = android.graphics.Canvas(bmp)
-                canvas.drawColor(android.graphics.Color.DKGRAY)
-                val paint = android.graphics.Paint().apply {
-                  color = android.graphics.Color.WHITE
-                  isAntiAlias = true
-                }
-                canvas.drawCircle(240f, 240f, 150f, paint)
-
-                viewModel.runAIBackgroundRemoval(bmp) { cutout, mask ->
+                viewModel.runSubjectCutoutPreview { cutout, mask ->
                   cutoutBitmap = cutout
                   alphaMaskBitmap = mask
                 }
               },
-              enabled = !isAIBusy,
+              enabled = !isAIBusy && hasMedia,
               colors = ButtonDefaults.buttonColors(containerColor = StudioSurfaceVariant, contentColor = CyanAccent),
               shape = RoundedCornerShape(18.dp),
               modifier = Modifier.testTag("remove_background_button")
@@ -508,7 +500,7 @@ fun AISuiteScreen(
       item {
         AIFeatureCard(
           title = "AI Highlight & Viral Moments",
-          description = "Scans video composition, duration, and pacing to detect optimal hooks for social reels.",
+          description = "Asks the model for time ranges using the project title and total duration. It does not look at the frames.",
           icon = Icons.Default.FlashOn
         ) {
           Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -570,7 +562,7 @@ fun AISuiteScreen(
       item {
         AIFeatureCard(
           title = "AI Auto-Edit Montage",
-          description = "Analyzes imported clips, trims dead time, sets rhythmic speeds, adds transitions, and generates an editable timeline.",
+          description = "Rebuilds the timeline from fixed slice lengths, a speed step, and a rotating transition list. It does not analyze picture content.",
           icon = Icons.Default.MovieFilter
         ) {
           PrimaryPillButton(
