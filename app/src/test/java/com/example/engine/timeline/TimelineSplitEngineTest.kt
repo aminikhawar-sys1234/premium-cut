@@ -120,4 +120,25 @@ class TimelineSplitEngineTest {
     assertNull(TimelineSplitEngine.splitClipInTimeline(timeline, "nope", 1000, unlocked))
     assertNull(TimelineSplitEngine.splitClipInTimeline(timeline, "v1", 3000, unlocked))
   }
+
+  @Test
+  fun repeatedSplitsKeepUniqueIdsAndOrderedSourceWindows() {
+    var timeline = Timeline(videoClips = listOf(video("v", 0, 10_000)))
+    val cuts = listOf(2_000L, 4_000L, 6_000L, 8_000L)
+    for (cut in cuts) {
+      val target = timeline.videoClips.first { clip ->
+        TimelineSplitEngine.isInsideSplitRange(cut, clip.timelineStartMs, clip.durationMs)
+      }
+      val split = TimelineSplitEngine.splitClipInTimeline(timeline, target.id, cut, unlocked)
+      assertNotNull(split)
+      timeline = split!!.timeline
+      val ids = timeline.videoClips.map { it.id }
+      assertEquals(ids.size, ids.toSet().size)
+      timeline.videoClips.forEach {
+        assertTrue(it.sourceStartMs <= it.sourceEndMs)
+        assertTrue(it.durationMs > 0L)
+      }
+    }
+    assertEquals(5, timeline.videoClips.size)
+  }
 }

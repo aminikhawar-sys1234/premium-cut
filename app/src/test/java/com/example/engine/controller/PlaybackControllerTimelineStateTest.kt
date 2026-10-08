@@ -4,6 +4,7 @@ import android.content.Context
 import androidx.test.core.app.ApplicationProvider
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
+import com.example.engine.timeline.TimelineSplitEngine
 import org.junit.Assert.*
 import org.junit.Assume.assumeNoException
 import org.junit.Before
@@ -196,5 +197,41 @@ class PlaybackControllerTimelineStateTest {
     val state = playbackController.timelineState.value
     assertEquals(0L, state.positionMs)
     assertTrue(state.isPlaying)
+  }
+
+  @Test
+  fun testRepeatedSplitRebindsSameIdHeadAndNewTail() {
+    val original = VideoClip(
+      id = "clip_1",
+      name = "vid1.mp4",
+      uri = "content://media/vid1.mp4",
+      durationMs = 10_000L,
+      timelineStartMs = 0L,
+      sourceStartMs = 0L,
+      sourceEndMs = 10_000L,
+      isVideo = true
+    )
+    playbackController.updateTimeline(Timeline(videoClips = listOf(original)))
+    playbackController.seekToTimeline(4_000L, resumeAfter = false, exact = true)
+
+    val afterFirst = TimelineSplitEngine.splitClipInTimeline(
+      Timeline(videoClips = listOf(original)),
+      "clip_1",
+      4_000L
+    ) { _, _ -> false }!!
+    playbackController.updateTimeline(afterFirst.timeline)
+    var state = playbackController.timelineState.value
+    assertEquals(2, state.timeline.videoClips.size)
+    assertEquals(afterFirst.tailId, state.activeClip?.id)
+
+    val tail = afterFirst.timeline.videoClips[1]
+    playbackController.seekToTimeline(7_000L, resumeAfter = false, exact = true)
+    val afterSecond = TimelineSplitEngine.splitClipInTimeline(afterFirst.timeline, tail.id, 7_000L) { _, _ -> false }!!
+    playbackController.updateTimeline(afterSecond.timeline)
+    state = playbackController.timelineState.value
+    assertEquals(3, state.timeline.videoClips.size)
+    assertEquals(3, state.timeline.videoClips.map { it.id }.toSet().size)
+    assertNotNull(state.activeClip)
+    state.timeline.videoClips.forEach { assertTrue(it.sourceStartMs <= it.sourceEndMs) }
   }
 }

@@ -902,6 +902,7 @@ private fun DynamicLaneRow(
     ) {
       // Lane Clips Rendering
       for (clip in lane.clips) {
+        key(clip.id) {
         val isSelected = when (lane.kind) {
           LaneKind.MAIN_VIDEO -> (selectedElement as? SelectedTrackElement.Video)?.clipId == clip.id
           LaneKind.OVERLAY -> (selectedElement as? SelectedTrackElement.Overlay)?.clipId == clip.id
@@ -977,6 +978,7 @@ private fun DynamicLaneRow(
             if (it.naturalRotation != 0) it.naturalRotation else it.rotationDegrees
           } ?: 0
         )
+        }
       }
 
       // 2. Add Element Quick Pill for active secondary lane

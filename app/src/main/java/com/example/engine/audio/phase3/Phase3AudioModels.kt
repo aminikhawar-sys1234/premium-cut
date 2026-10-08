@@ -51,7 +51,9 @@ data class TimelineAudioClip(
     } else {
       sourceStartMs + scaledOffsetMs
     }
-    return rawSourceMs.coerceIn(sourceStartMs, sourceEndMs)
+    val lo = minOf(sourceStartMs, sourceEndMs)
+    val hi = maxOf(sourceStartMs, sourceEndMs)
+    return if (rawSourceMs < lo) lo else if (rawSourceMs > hi) hi else rawSourceMs
   }
 
   fun timelineToSourceSample(timelineSample: Long, sampleRate: Int): Long {

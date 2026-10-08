@@ -376,13 +376,21 @@ object AudioWaveformManager {
     totalSourceDurationMs: Long
   ): List<Float> {
     if (fullWaveform.isEmpty()) return emptyList()
-    val totalDur = totalSourceDurationMs.coerceAtLeast(100L)
-    val startRatio = (sourceStartMs.toFloat() / totalDur).coerceIn(0f, 1f)
-    val endRatio = (sourceEndMs.toFloat() / totalDur).coerceIn(startRatio + 0.01f, 1f)
+    val totalDur = totalSourceDurationMs.coerceAtLeast(1L)
+    val windowStart = minOf(sourceStartMs, sourceEndMs).coerceAtLeast(0L)
+    val windowEnd = maxOf(sourceStartMs, sourceEndMs).coerceAtLeast(windowStart)
+    val startRatio = (windowStart.toFloat() / totalDur).coerceIn(0f, 1f)
+    val endRatio = (windowEnd.toFloat() / totalDur).coerceIn(0f, 1f)
+    val loRatio = minOf(startRatio, endRatio)
+    val hiRatio = maxOf(startRatio, endRatio)
 
-    val startIndex = (startRatio * fullWaveform.size).toInt().coerceIn(0, fullWaveform.size - 1)
-    val endIndex = (endRatio * fullWaveform.size).toInt().coerceIn(startIndex + 1, fullWaveform.size)
-
+    val lastIndex = (fullWaveform.size - 1).coerceAtLeast(0)
+    val startIndex = (loRatio * fullWaveform.size).toInt().coerceIn(0, lastIndex)
+    val exclusiveEnd = (hiRatio * fullWaveform.size).toInt().coerceIn(0, fullWaveform.size)
+    val endIndex = maxOf(exclusiveEnd, startIndex + 1).coerceAtMost(fullWaveform.size)
+    if (startIndex >= endIndex) {
+      return listOf(fullWaveform[startIndex])
+    }
     val sublist = fullWaveform.subList(startIndex, endIndex)
     return if (sublist.isNotEmpty()) sublist else fullWaveform
   }

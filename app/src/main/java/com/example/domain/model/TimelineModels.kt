@@ -367,18 +367,23 @@ data class VideoClip(
     else com.ahstudio.animation.speed.SpeedPresets.rampFor(speedCurve.preset.name, speedCurve.bezierPoints)
 
   fun timelineToSourceMs(timelinePosMs: Long): Long {
-    val offset = (timelinePosMs - timelineStartMs).coerceIn(0L, durationMs)
+    val dur = durationMs.coerceAtLeast(0L)
+    val rawOffset = timelinePosMs - timelineStartMs
+    val offset = when {
+      rawOffset < 0L -> 0L
+      rawOffset > dur -> dur
+      else -> rawOffset
+    }
     val ramp = speedRamp()
     val scaledOffset = if (ramp == null) {
       (offset * speed).toLong()
     } else {
-      ramp.sourceMs(offset, durationMs, durationMs * speed.toDouble()).toLong()
+      ramp.sourceMs(offset, durationMs.coerceAtLeast(1L), durationMs.coerceAtLeast(1L) * speed.toDouble()).toLong()
     }
-    return if (isReversed) {
-      (sourceEndMs - scaledOffset).coerceIn(sourceStartMs, sourceEndMs)
-    } else {
-      (sourceStartMs + scaledOffset).coerceIn(sourceStartMs, sourceEndMs)
-    }
+    val lo = minOf(sourceStartMs, sourceEndMs)
+    val hi = maxOf(sourceStartMs, sourceEndMs)
+    val raw = if (isReversed) sourceEndMs - scaledOffset else sourceStartMs + scaledOffset
+    return if (raw < lo) lo else if (raw > hi) hi else raw
   }
 
   fun sourceToTimelineMs(sourcePosMs: Long): Long {
@@ -395,7 +400,11 @@ data class VideoClip(
       val span = (durationMs * effectiveSpeed.toDouble()).coerceAtLeast(1.0)
       (ramp.outputFraction((offset / span).coerceIn(0.0, 1.0)) * durationMs).toLong()
     }
-    return (timelineStartMs + timelineOffset).coerceIn(timelineStartMs, timelineStartMs + durationMs)
+    val end = timelineStartMs + durationMs.coerceAtLeast(0L)
+    val lo = minOf(timelineStartMs, end)
+    val hi = maxOf(timelineStartMs, end)
+    val raw = timelineStartMs + timelineOffset
+    return if (raw < lo) lo else if (raw > hi) hi else raw
   }
 }
 
@@ -445,8 +454,18 @@ data class AudioClip(
 }
 
 fun AudioClip.timelineToSourceMs(timelineMs: Long): Long {
-  val rel = (timelineMs - timelineStartMs).coerceIn(0L, durationMs)
-  return sourceStartMs + (rel * speed.coerceAtLeast(0.01f)).toLong()
+  val dur = durationMs.coerceAtLeast(0L)
+  val rawRel = timelineMs - timelineStartMs
+  val rel = when {
+    rawRel < 0L -> 0L
+    rawRel > dur -> dur
+    else -> rawRel
+  }
+  val offset = Math.round(rel * speed.coerceAtLeast(0.01f).toDouble())
+  val lo = minOf(sourceStartMs, sourceEndMs)
+  val hi = maxOf(sourceStartMs, sourceEndMs)
+  val raw = if (isReversed) sourceEndMs - offset else sourceStartMs + offset
+  return if (raw < lo) lo else if (raw > hi) hi else raw
 }
 
 fun VideoClip.overlapsWith(startMs: Long, durMs: Long): Boolean {

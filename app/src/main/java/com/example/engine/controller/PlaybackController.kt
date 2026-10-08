@@ -117,9 +117,15 @@ class PlaybackController(
   /** Updates the timeline configuration and synchronizes the active clip and player state. */
   fun updateTimeline(timeline: Timeline) {
     if (disposed) return
+    val previous = _timelineState.value.activeClip
     val totalDur = timeline.totalDurationMs
     val boundedPos = _timelineState.value.positionMs.coerceIn(0L, maxOf(totalDur, 0L))
     val clip = findClipAt(timeline, boundedPos)
+    val sourceWindowChanged = previous != null && clip != null && previous.id == clip.id &&
+      (previous.sourceStartMs != clip.sourceStartMs ||
+        previous.sourceEndMs != clip.sourceEndMs ||
+        previous.durationMs != clip.durationMs ||
+        previous.timelineStartMs != clip.timelineStartMs)
 
     _timelineState.value = _timelineState.value.copy(
       timeline = timeline,
@@ -132,7 +138,8 @@ class PlaybackController(
 
     // While playing, do not re-seek the current clip. A timeline snapshot refresh
     // (filters, undo, autosave) must not snap the decoder back to a keyframe.
-    val clipChanged = _timelineState.value.activeClip?.id != currentLoadedClipId
+    // Split of the loaded head keeps the same id but shrinks the source window — rebind.
+    val clipChanged = _timelineState.value.activeClip?.id != currentLoadedClipId || sourceWindowChanged
     if (!_timelineState.value.isPlaying || clipChanged) {
       syncExoPlayerToTimelineState(exact = true)
     }

@@ -6295,8 +6295,24 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   fun splitClipAtTime(clipId: String, splitTimeMs: Long): Pair<String, String>? = withStateLock {
     val current = _timeline.value
     val split = TimelineSplitEngine.splitClipInTimeline(current, clipId, splitTimeMs, lockPredicate(current)) ?: return null
+    var working = split.timeline
+    val originalVideo = current.videoClips.find { it.id == clipId }
+      ?: current.overlayClips.find { it.id == clipId }
+    if (originalVideo != null) {
+      val linkedAudioIds = current.audioClips
+        .filter { audio ->
+          audio.id != clipId &&
+            audio.timelineStartMs == originalVideo.timelineStartMs &&
+            audio.durationMs == originalVideo.durationMs
+        }
+        .map { it.id }
+      for (audioId in linkedAudioIds) {
+        val audioSplit = TimelineSplitEngine.splitClipInTimeline(working, audioId, splitTimeMs, lockPredicate(working))
+        if (audioSplit != null) working = audioSplit.timeline
+      }
+    }
     recordHistory(TimelineActionType.SPLIT_CLIP, "Split Clip", setOf(clipId))
-    _timeline.value = split.timeline
+    _timeline.value = working
     if (split.tailElement != SelectedTrackElement.None) selectElement(split.tailElement)
     Pair(split.headId, split.tailId)
   }

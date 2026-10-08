@@ -118,12 +118,13 @@ fun TimelineClipView(
   val clipHeight = heightDp - 6.dp
 
   // Waveform analysis & dynamic slicing for trimmed clips
-  val effectiveWaveform = remember(clipId, waveformData, durationMs, sourceStartMs, sourceEndMs, hasAudio) {
+  val sourceSpanMs = maxOf(sourceEndMs, sourceStartMs + durationMs, durationMs, 1L)
+  val effectiveWaveform = remember(clipId, waveformData, durationMs, sourceStartMs, sourceEndMs, sourceSpanMs, hasAudio) {
     if (waveformData.isNotEmpty()) {
-      AudioWaveformManager.sliceForTrim(waveformData, sourceStartMs, sourceEndMs, durationMs)
+      AudioWaveformManager.sliceForTrim(waveformData, sourceStartMs, sourceEndMs, sourceSpanMs)
     } else if (hasAudio) {
-      val full = AudioWaveformManager.getOrGenerateWaveform(clipId, uri.ifBlank { clipId }, title, durationMs)
-      AudioWaveformManager.sliceForTrim(full, sourceStartMs, sourceEndMs, durationMs)
+      // Generated envelopes are already sized to this clip's timeline duration.
+      AudioWaveformManager.getOrGenerateWaveform(clipId, uri.ifBlank { clipId }, title, durationMs)
     } else {
       emptyList()
     }

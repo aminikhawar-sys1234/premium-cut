@@ -79,28 +79,86 @@ object TimelineSplitEngine {
     return head to tail
   }
 
-  private fun newId() = UUID.randomUUID().toString()
+  private fun newId(existing: Set<String> = emptySet()): String {
+    var id: String
+    do {
+      id = UUID.randomUUID().toString()
+    } while (id in existing)
+    return id
+  }
+
+  private fun allClipIds(timeline: Timeline): Set<String> = buildSet {
+    timeline.videoClips.forEach { add(it.id) }
+    timeline.overlayClips.forEach { add(it.id) }
+    timeline.audioClips.forEach { add(it.id) }
+    timeline.textClips.forEach { add(it.id) }
+    timeline.stickerClips.forEach { add(it.id) }
+    timeline.effectClips.forEach { add(it.id) }
+    timeline.shapeClips.forEach { add(it.id) }
+  }
+
+  /**
+   * Source frame that plays at [atMs]. Always inside `[min(sourceStart,sourceEnd), max(...)]`
+   * so a later split cannot invert the window and crash `coerceIn` / Media3 clipping.
+   */
+  internal fun sourceCutMs(clip: VideoClip, atMs: Long): Long {
+    val lo = minOf(clip.sourceStartMs, clip.sourceEndMs)
+    val hi = maxOf(clip.sourceStartMs, clip.sourceEndMs)
+    if (lo >= hi) return lo
+    val headDur = (atMs - clip.timelineStartMs).coerceAtLeast(0L)
+    val span = hi - lo
+    val dur = clip.durationMs.coerceAtLeast(1L)
+    val proportional = if (clip.isReversed) {
+      hi - (span.toDouble() * headDur.toDouble() / dur.toDouble()).toLong()
+    } else {
+      lo + (span.toDouble() * headDur.toDouble() / dur.toDouble()).toLong()
+    }
+    val mapped = clip.timelineToSourceMs(atMs)
+    val cut = if (clip.speedCurve.preset == com.example.domain.model.SpeedCurvePreset.STANDARD) mapped else proportional
+    return if (cut < lo) lo else if (cut > hi) hi else cut
+  }
+
+  private fun orderedWindow(start: Long, end: Long): Pair<Long, Long> {
+    val lo = minOf(start, end)
+    val hi = maxOf(start, end)
+    return lo to hi
+  }
 
   /**
    * Source position that plays at [timelineMs] for a constant-speed audio clip (reverse aware).
    * This is the point both halves are cut at, so it never changes what is heard.
    */
   fun audioSourcePositionAt(clip: AudioClip, timelineMs: Long): Long {
-    val rel = (timelineMs - clip.timelineStartMs).coerceIn(0L, clip.durationMs)
+    val dur = clip.durationMs.coerceAtLeast(0L)
+    val rawRel = timelineMs - clip.timelineStartMs
+    val rel = when {
+      rawRel < 0L -> 0L
+      rawRel > dur -> dur
+      else -> rawRel
+    }
     val offset = Math.round(rel * clip.speed.coerceAtLeast(0.01f).toDouble())
-    return if (clip.isReversed) (clip.sourceEndMs - offset).coerceIn(clip.sourceStartMs, clip.sourceEndMs)
-    else (clip.sourceStartMs + offset).coerceIn(clip.sourceStartMs, clip.sourceEndMs)
+    val lo = minOf(clip.sourceStartMs, clip.sourceEndMs)
+    val hi = maxOf(clip.sourceStartMs, clip.sourceEndMs)
+    val raw = if (clip.isReversed) clip.sourceEndMs - offset else clip.sourceStartMs + offset
+    return if (raw < lo) lo else if (raw > hi) hi else raw
   }
 
   // ---- Pure per-type splits (no margin check; callers validate the range) ----
 
-  internal fun splitVideoUnchecked(clip: VideoClip, atMs: Long): Pair<VideoClip, VideoClip> {
+  internal fun splitVideoUnchecked(
+    clip: VideoClip,
+    atMs: Long,
+    existingIds: Set<String> = emptySet()
+  ): Pair<VideoClip, VideoClip> {
     val headDur = atMs - clip.timelineStartMs
     val tailDur = clip.durationMs - headDur
-    val cut = clip.timelineToSourceMs(atMs)
+    val cut = sourceCutMs(clip, atMs)
     val (headKf, tailKf) = splitKeyframes(clip.keyframes, headDur)
-    val headSrc = if (clip.isReversed) cut to clip.sourceEndMs else clip.sourceStartMs to cut
-    val tailSrc = if (clip.isReversed) clip.sourceStartMs to cut else cut to clip.sourceEndMs
+    val srcStart = minOf(clip.sourceStartMs, clip.sourceEndMs)
+    val srcEnd = maxOf(clip.sourceStartMs, clip.sourceEndMs)
+    val headSrc = if (clip.isReversed) orderedWindow(cut, srcEnd) else orderedWindow(srcStart, cut)
+    val tailSrc = if (clip.isReversed) orderedWindow(srcStart, cut) else orderedWindow(cut, srcEnd)
+    val used = existingIds + clip.id
     val head = clip.copy(
       durationMs = headDur,
       sourceStartMs = headSrc.first,
@@ -109,7 +167,7 @@ object TimelineSplitEngine {
       animation = clip.animation.copy(outType = OutAnimationType.NONE)
     )
     val tail = clip.copy(
-      id = newId(),
+      id = newId(used),
       timelineStartMs = atMs,
       durationMs = tailDur,
       sourceStartMs = tailSrc.first,
@@ -120,13 +178,20 @@ object TimelineSplitEngine {
     return head to tail
   }
 
-  private fun splitAudioUnchecked(clip: AudioClip, atMs: Long): Pair<AudioClip, AudioClip> {
+  private fun splitAudioUnchecked(
+    clip: AudioClip,
+    atMs: Long,
+    existingIds: Set<String> = emptySet()
+  ): Pair<AudioClip, AudioClip> {
     val headDur = atMs - clip.timelineStartMs
     val tailDur = clip.durationMs - headDur
     val cut = audioSourcePositionAt(clip, atMs)
     val (headKf, tailKf) = splitKeyframes(clip.keyframes, headDur)
-    val headSrc = if (clip.isReversed) cut to clip.sourceEndMs else clip.sourceStartMs to cut
-    val tailSrc = if (clip.isReversed) clip.sourceStartMs to cut else cut to clip.sourceEndMs
+    val srcStart = minOf(clip.sourceStartMs, clip.sourceEndMs)
+    val srcEnd = maxOf(clip.sourceStartMs, clip.sourceEndMs)
+    val headSrc = if (clip.isReversed) orderedWindow(cut, srcEnd) else orderedWindow(srcStart, cut)
+    val tailSrc = if (clip.isReversed) orderedWindow(srcStart, cut) else orderedWindow(cut, srcEnd)
+    val used = existingIds + clip.id
     val head = clip.copy(
       durationMs = headDur,
       sourceStartMs = headSrc.first,
@@ -136,7 +201,7 @@ object TimelineSplitEngine {
       keyframes = headKf
     )
     val tail = clip.copy(
-      id = newId(),
+      id = newId(used),
       timelineStartMs = atMs,
       durationMs = tailDur,
       sourceStartMs = tailSrc.first,
@@ -148,37 +213,53 @@ object TimelineSplitEngine {
     return head to tail
   }
 
-  private fun splitTextUnchecked(clip: TextClip, atMs: Long): Pair<TextClip, TextClip> {
+  private fun splitTextUnchecked(
+    clip: TextClip,
+    atMs: Long,
+    existingIds: Set<String> = emptySet()
+  ): Pair<TextClip, TextClip> {
     val headDur = atMs - clip.timelineStartMs
     val tailDur = clip.durationMs - headDur
     val (headKf, tailKf) = splitKeyframes(clip.keyframes, headDur)
     val (headWords, tailWords) = splitWords(clip.words, headDur)
     return clip.copy(durationMs = headDur, keyframes = headKf, words = headWords) to
-      clip.copy(id = newId(), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf, words = tailWords)
+      clip.copy(id = newId(existingIds + clip.id), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf, words = tailWords)
   }
 
-  private fun splitStickerUnchecked(clip: StickerClip, atMs: Long): Pair<StickerClip, StickerClip> {
+  private fun splitStickerUnchecked(
+    clip: StickerClip,
+    atMs: Long,
+    existingIds: Set<String> = emptySet()
+  ): Pair<StickerClip, StickerClip> {
     val headDur = atMs - clip.timelineStartMs
     val tailDur = clip.durationMs - headDur
     val (headKf, tailKf) = splitKeyframes(clip.keyframes, headDur)
     return clip.copy(durationMs = headDur, keyframes = headKf) to
-      clip.copy(id = newId(), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf)
+      clip.copy(id = newId(existingIds + clip.id), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf)
   }
 
-  private fun splitEffectUnchecked(clip: EffectClip, atMs: Long): Pair<EffectClip, EffectClip> {
+  private fun splitEffectUnchecked(
+    clip: EffectClip,
+    atMs: Long,
+    existingIds: Set<String> = emptySet()
+  ): Pair<EffectClip, EffectClip> {
     val headDur = atMs - clip.timelineStartMs
     val tailDur = clip.durationMs - headDur
     val (headKf, tailKf) = splitKeyframes(clip.keyframes, headDur)
     return clip.copy(durationMs = headDur, keyframes = headKf) to
-      clip.copy(id = newId(), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf)
+      clip.copy(id = newId(existingIds + clip.id), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf)
   }
 
-  private fun splitShapeUnchecked(clip: ShapeClip, atMs: Long): Pair<ShapeClip, ShapeClip> {
+  private fun splitShapeUnchecked(
+    clip: ShapeClip,
+    atMs: Long,
+    existingIds: Set<String> = emptySet()
+  ): Pair<ShapeClip, ShapeClip> {
     val headDur = atMs - clip.timelineStartMs
     val tailDur = clip.durationMs - headDur
     val (headKf, tailKf) = splitKeyframes(clip.keyframes, headDur)
     return clip.copy(durationMs = headDur, keyframes = headKf) to
-      clip.copy(id = newId(), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf)
+      clip.copy(id = newId(existingIds + clip.id), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf)
   }
 
   fun splitVideoClip(clip: VideoClip, splitTimestampMs: Long): SplitResult<VideoClip> =
@@ -226,11 +307,12 @@ object TimelineSplitEngine {
     atMs: Long,
     isTrackLocked: (TrackType, Int) -> Boolean
   ): TimelineSplit? {
+    val existingIds = allClipIds(timeline)
     timeline.videoClips.indexOfFirst { it.id == clipId }.takeIf { it >= 0 }?.let { index ->
       val clip = timeline.videoClips[index]
       if (clip.isLocked || isTrackLocked(Kind.VIDEO.trackType, clip.trackIndex)) return null
       if (!isInsideSplitRange(atMs, clip.timelineStartMs, clip.durationMs)) return null
-      val (head, tail) = splitVideoUnchecked(clip, atMs)
+      val (head, tail) = splitVideoUnchecked(clip, atMs, existingIds)
       val list = timeline.videoClips.toMutableList().apply { this[index] = head; add(index + 1, tail) }
       // The transition that followed the original clip now follows the tail clip.
       val transitions = timeline.transitions.map { tr ->
@@ -242,7 +324,7 @@ object TimelineSplitEngine {
       val clip = timeline.overlayClips[index]
       if (clip.isLocked || isTrackLocked(Kind.OVERLAY.trackType, clip.trackIndex)) return null
       if (!isInsideSplitRange(atMs, clip.timelineStartMs, clip.durationMs)) return null
-      val (head, tail) = splitVideoUnchecked(clip, atMs)
+      val (head, tail) = splitVideoUnchecked(clip, atMs, existingIds)
       val list = timeline.overlayClips.toMutableList().apply { this[index] = head; add(index + 1, tail) }
       return TimelineSplit(timeline.copy(overlayClips = list), head.id, tail.id, SelectedTrackElement.Overlay(tail.id))
     }
@@ -250,7 +332,7 @@ object TimelineSplitEngine {
       val clip = timeline.audioClips[index]
       if (clip.isLocked || isTrackLocked(Kind.AUDIO.trackType, clip.trackIndex)) return null
       if (!isInsideSplitRange(atMs, clip.timelineStartMs, clip.durationMs)) return null
-      val (head, tail) = splitAudioUnchecked(clip, atMs)
+      val (head, tail) = splitAudioUnchecked(clip, atMs, existingIds)
       val list = timeline.audioClips.toMutableList().apply { this[index] = head; add(index + 1, tail) }
       return TimelineSplit(timeline.copy(audioClips = list), head.id, tail.id, SelectedTrackElement.Audio(tail.id))
     }
@@ -258,7 +340,7 @@ object TimelineSplitEngine {
       val clip = timeline.textClips[index]
       if (clip.isLocked || isTrackLocked(Kind.TEXT.trackType, clip.trackIndex)) return null
       if (!isInsideSplitRange(atMs, clip.timelineStartMs, clip.durationMs)) return null
-      val (head, tail) = splitTextUnchecked(clip, atMs)
+      val (head, tail) = splitTextUnchecked(clip, atMs, existingIds)
       val list = timeline.textClips.toMutableList().apply { this[index] = head; add(index + 1, tail) }
       return TimelineSplit(timeline.copy(textClips = list), head.id, tail.id, SelectedTrackElement.Text(tail.id))
     }
@@ -266,7 +348,7 @@ object TimelineSplitEngine {
       val clip = timeline.stickerClips[index]
       if (clip.isLocked || isTrackLocked(Kind.STICKER.trackType, clip.trackIndex)) return null
       if (!isInsideSplitRange(atMs, clip.timelineStartMs, clip.durationMs)) return null
-      val (head, tail) = splitStickerUnchecked(clip, atMs)
+      val (head, tail) = splitStickerUnchecked(clip, atMs, existingIds)
       val list = timeline.stickerClips.toMutableList().apply { this[index] = head; add(index + 1, tail) }
       return TimelineSplit(timeline.copy(stickerClips = list), head.id, tail.id, SelectedTrackElement.Sticker(tail.id))
     }
@@ -274,7 +356,7 @@ object TimelineSplitEngine {
       val clip = timeline.effectClips[index]
       if (clip.isLocked || isTrackLocked(Kind.EFFECT.trackType, clip.trackIndex)) return null
       if (!isInsideSplitRange(atMs, clip.timelineStartMs, clip.durationMs)) return null
-      val (head, tail) = splitEffectUnchecked(clip, atMs)
+      val (head, tail) = splitEffectUnchecked(clip, atMs, existingIds)
       val list = timeline.effectClips.toMutableList().apply { this[index] = head; add(index + 1, tail) }
       return TimelineSplit(timeline.copy(effectClips = list), head.id, tail.id, SelectedTrackElement.Effect(tail.id))
     }
@@ -282,7 +364,7 @@ object TimelineSplitEngine {
       val clip = timeline.shapeClips[index]
       if (clip.isLocked || isTrackLocked(Kind.SHAPE.trackType, clip.trackIndex)) return null
       if (!isInsideSplitRange(atMs, clip.timelineStartMs, clip.durationMs)) return null
-      val (head, tail) = splitShapeUnchecked(clip, atMs)
+      val (head, tail) = splitShapeUnchecked(clip, atMs, existingIds)
       val list = timeline.shapeClips.toMutableList().apply { this[index] = head; add(index + 1, tail) }
       return TimelineSplit(timeline.copy(shapeClips = list), head.id, tail.id, SelectedTrackElement.None)
     }

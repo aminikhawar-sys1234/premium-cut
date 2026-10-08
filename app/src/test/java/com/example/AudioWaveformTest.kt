@@ -38,6 +38,16 @@ class AudioWaveformTest {
     assertEquals(40, sliced.size); assertEquals(0.20f, sliced.first(), 0.02f); assertEquals(0.59f, sliced.last(), 0.02f)
   }
 
+  @Test fun testSliceForTrim_secondSplitSourceWindowDoesNotThrow() {
+    val samples = (0..99).map { it / 100f }
+    val sliced = AudioWaveformManager.sliceForTrim(samples, 4000L, 7000L, 3000L)
+    assertTrue(sliced.isNotEmpty())
+    val emptyRange = AudioWaveformManager.sliceForTrim(samples, 8000L, 8000L, 1000L)
+    assertTrue(emptyRange.isNotEmpty())
+    val inverted = AudioWaveformManager.sliceForTrim(samples, 7000L, 4000L, 3000L)
+    assertTrue(inverted.isNotEmpty())
+  }
+
   @Test fun testPeakSnappingAndNavigation() {
     val peaks = listOf(AudioPeak(5,500L,0.9f,true), AudioPeak(10,1000L,0.85f,true), AudioPeak(15,1500L,0.92f,true))
     assertEquals(1000L, AudioWaveformManager.findNearestPeak(1030L, peaks, 80L)?.timeMs)
