@@ -44,10 +44,15 @@ class PlaybackManager(
       )
       .setPrioritizeTimeOverSizeThresholds(true)
       .build()
-  ).setSeekParameters(SeekParameters.EXACT).build().apply {
-    playWhenReady = false
-    repeatMode = Player.REPEAT_MODE_OFF
-  }
+  ).setSeekParameters(SeekParameters.EXACT)
+    // Take audio focus while previewing: without this the editor kept playing over other
+    // apps (and over phone calls), and a headphone unplug kept blasting the preview.
+    .setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)
+    .setHandleAudioBecomingNoisy(true)
+    .build().apply {
+      playWhenReady = false
+      repeatMode = Player.REPEAT_MODE_OFF
+    }
 
   private var currentLoadedUri: String? = null
 
@@ -113,21 +118,35 @@ class PlaybackManager(
 
   fun loadMedia(uri: Uri, startPosMs: Long = 0L, autoPlay: Boolean = false) {
     try {
-      val uriString = uri.toString()
+      val uriString = normalizeUri(uri).toString()
       if (uriString == currentLoadedUri && playbackState != Player.STATE_IDLE) {
         seekTo(startPosMs)
         if (autoPlay) play()
         return
       }
       currentLoadedUri = uriString
-      val normalizedUri = normalizeUri(uri)
-      player.setMediaItem(MediaItem.fromUri(normalizedUri), startPosMs.coerceAtLeast(0L))
+      player.setMediaItem(MediaItem.fromUri(Uri.parse(uriString)), startPosMs.coerceAtLeast(0L))
       player.prepare()
       player.playWhenReady = autoPlay
       Log.d(TAG, "prepared media=$uriString start=${startPosMs}ms autoPlay=$autoPlay")
     } catch (e: Exception) {
       Log.e(TAG, "loadMedia failed", e)
     }
+  }
+
+  /**
+   * Drops the current media item (used after the Trimming tool, which loads a clipped
+   * MediaItem into this shared player). Resets the loaded-uri bookkeeping so the next
+   * loadMedia() really reloads the full clip instead of keeping the clipped window.
+   */
+  fun clearMediaItems() {
+    try {
+      player.stop()
+      player.clearMediaItems()
+    } catch (e: Exception) {
+      Log.w(TAG, "clearMediaItems failed", e)
+    }
+    currentLoadedUri = null
   }
 
   fun play() {

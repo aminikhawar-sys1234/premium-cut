@@ -138,7 +138,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   private var isSyncingFromPlayback = false
   private var wasPlayingBeforeScrub = false
 
-  val playbackEngine: com.example.engine.playback.VideoPlaybackEngine by lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
+  // Kept as its own delegate so lifecycle callbacks can pause without forcing the heavy
+  // engine (ExoPlayer + GPU compositor) to be created on screens that never need it.
+  private val playbackEngineDelegate = lazy(LazyThreadSafetyMode.SYNCHRONIZED) {
     com.example.engine.playback.VideoPlaybackEngine(
     context = application,
     onTimelinePositionChanged = { posMs ->
@@ -151,9 +153,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     onPlaybackEnded = {
       timelineEngine.pause()
     },
-    proxyEngine = proxyMediaEngine
+    proxyEngine = proxyMediaEngine,
+    // System pause (audio focus lost / headphones unplugged): stop the editor transport as
+    // well, so the playhead and the player stay together.
+    onPlaybackInterrupted = {
+      timelineEngine.pause()
+    }
     )
   }
+
+  val playbackEngine: com.example.engine.playback.VideoPlaybackEngine by playbackEngineDelegate
 
   val engineController: com.example.engine.controller.CustomVideoEngineController by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { playbackEngine.engineController }
   val engineState: StateFlow<com.example.engine.controller.VideoEngineState> by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { engineController.engineState }
@@ -391,6 +400,22 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     // Periodic auto-save
     startAutoSave()
+  }
+
+  /**
+   * Called when the activity leaves the foreground (ON_STOP).
+   *
+   * The preview clock is VSYNC driven, so backgrounded playback would keep decoding audio while
+   * the playhead stands still — the two came back desynced. Pausing on background (instead of
+   * letting ExoPlayer play audio focus games on its own) keeps clock and player together.
+   */
+  fun onAppBackgrounded() {
+    try {
+      if (timelineEngine.isPlaying.value) timelineEngine.pause()
+      if (playbackEngineDelegate.isInitialized()) playbackEngine.pause()
+    } catch (t: Throwable) {
+      android.util.Log.w("StudioViewModel", "Background pause failed", t)
+    }
   }
 
   fun navigateTo(screen: AppScreen) {
@@ -1402,6 +1427,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   val trimPlaybackPosition = playbackEngine.trimPlaybackPositionMs
 
   fun previewClipTrim(clip: VideoClip, startMs: Long, endMs: Long, loop: Boolean = true) {
+    // The trim tool plays its own clipped item in the shared player: stop the timeline
+    // transport first, otherwise the master clock keeps commanding the same player.
+    if (timelineEngine.isPlaying.value) timelineEngine.pause()
     playbackEngine.previewTrimRange(clip, startMs, endMs, loop)
   }
 

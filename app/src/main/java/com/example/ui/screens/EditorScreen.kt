@@ -58,7 +58,6 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.ui.PlayerView
 import androidx.compose.ui.graphics.asImageBitmap
 import com.example.engine.media.VideoThumbnailManager
 import com.example.ui.components.text.*
@@ -79,6 +78,7 @@ import com.example.engine.export.ExportState
 import com.example.engine.media.MediaRelinkManager
 import com.example.engine.text.TextLayerRenderer
 import com.example.ui.components.InteractiveTransformOverlay
+import com.example.ui.components.player.PreviewVideoSurfaceRegistry
 import com.example.ui.AppScreen
 import com.example.ui.EditorToolbarTab
 import android.content.res.Configuration
@@ -113,6 +113,9 @@ fun EditorScreen(
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
   val currentPosMs by viewModel.timelineEngine.currentPositionMs.collectAsState()
   val isPlaying by viewModel.timelineEngine.isPlaying.collectAsState()
+  // Overlay clips whose video player exists, so PIP layers switch from placeholder to video
+  // as soon as the player is created.
+  val overlayPlayerIds by viewModel.playbackEngine.overlayPlayerIds.collectAsState()
   val canUndo by viewModel.timelineEngine.canUndo.collectAsState()
   val canRedo by viewModel.timelineEngine.canRedo.collectAsState()
   val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
@@ -656,6 +659,8 @@ fun EditorScreen(
           },
           player = viewModel.playbackEngine.player,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
+          overlayPlayerIds = overlayPlayerIds,
+          isPrimarySurface = true,
           onToggleFullscreen = { isFullscreenPreview = true },
           onAddMedia = safeLaunchMediaPicker,
           modifier = Modifier
@@ -1472,6 +1477,8 @@ fun EditorScreen(
           },
           player = viewModel.playbackEngine.player,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
+          overlayPlayerIds = overlayPlayerIds,
+          isPrimarySurface = false,
           onToggleFullscreen = { isFullscreenPreview = false },
           onAddMedia = safeLaunchMediaPicker,
           modifier = Modifier.fillMaxSize()
@@ -1685,6 +1692,10 @@ fun VideoPreviewSurface(
   onEditText: ((TextClip) -> Unit)? = null,
   player: ExoPlayer? = null,
   onGetOverlayPlayer: ((String) -> ExoPlayer?)? = null,
+  /** Overlay clips whose ExoPlayer exists (observable so the video layer appears with the player). */
+  overlayPlayerIds: Set<String> = emptySet(),
+  /** The inline preview owns the player surface; a fullscreen dialog surface is secondary. */
+  isPrimarySurface: Boolean = true,
   onToggleFullscreen: (() -> Unit)? = null,
   onAddMedia: (() -> Unit)? = null,
   modifier: Modifier = Modifier
@@ -1698,11 +1709,20 @@ fun VideoPreviewSurface(
     } ?: timeline.videoClips.lastOrNull()
   }
 
-  val activeOverlays = remember(timeline.overlayClips, currentPosMs) {
-    timeline.overlayClips.filter {
-      com.example.engine.timeline.TimelineClipVisibility.isActiveAt(
-        currentPosMs, it.timelineStartMs, it.durationMs
-      )
+  // Hiding a track only switches its picture off — the mix (mute / solo) is handled by the
+  // player, exactly like the export pipeline does it.
+  val isMainVideoTrackHidden = timeline.trackSettings[TrackType.MAIN_VIDEO]?.isHidden == true
+  val isOverlayTrackHidden = timeline.trackSettings[TrackType.OVERLAY]?.isHidden == true
+
+  val activeOverlays = remember(timeline.overlayClips, currentPosMs, isOverlayTrackHidden) {
+    if (isOverlayTrackHidden) {
+      emptyList()
+    } else {
+      timeline.overlayClips.filter {
+        com.example.engine.timeline.TimelineClipVisibility.isActiveAt(
+          currentPosMs, it.timelineStartMs, it.durationMs
+        )
+      }
     }
   }
 
@@ -1870,7 +1890,7 @@ fun VideoPreviewSurface(
             val isRealPlayable = remember(activeClip.uri) {
               MediaRelinkManager.isRealPlayableMedia(context, activeClip.uri)
             }
-            if (activeClip.isVideo && isRealPlayable && player != null) {
+            if (activeClip.isVideo && isRealPlayable && player != null && !isMainVideoTrackHidden) {
               val clipRot = if (activeClip.naturalRotation != 0) activeClip.naturalRotation else activeClip.rotationDegrees
               val (clipW, clipH) = AspectRatio.resolveEffectiveDimensions(activeClip.width, activeClip.height, clipRot)
               AndroidView(
@@ -1882,31 +1902,18 @@ fun VideoPreviewSurface(
                     )
                     surfaceTextureListener = object : android.view.TextureView.SurfaceTextureListener {
                       override fun onSurfaceTextureAvailable(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
-                        try {
-                          player.setVideoTextureView(this@apply)
-                        } catch (e: Exception) {
-                          android.util.Log.w("VideoPreviewSurface", "Failed to attach TextureView on available", e)
-                        }
+                        PreviewVideoSurfaceRegistry.attach(player, this@apply, isPrimarySurface)
                       }
                       override fun onSurfaceTextureSizeChanged(st: android.graphics.SurfaceTexture, w: Int, h: Int) {
                         applyTextureViewAspectFit(this@apply, clipW, clipH)
                       }
                       override fun onSurfaceTextureDestroyed(st: android.graphics.SurfaceTexture): Boolean {
-                        try {
-                          player.clearVideoTextureView(this@apply)
-                        } catch (_: Exception) {}
+                        PreviewVideoSurfaceRegistry.detach(player, this@apply)
                         return true
                       }
                       override fun onSurfaceTextureUpdated(st: android.graphics.SurfaceTexture) {}
                     }
-                    if (isAvailable) {
-                      try {
-                        player.setVideoTextureView(this)
-                      } catch (e: Exception) {
-                        android.util.Log.w("VideoPreviewSurface", "Failed to attach TextureView to ExoPlayer", e)
-                      }
-                    }
-                    tag = player
+                    if (isAvailable) PreviewVideoSurfaceRegistry.attach(player, this, isPrimarySurface)
                     addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ ->
                       applyTextureViewAspectFit(this, clipW, clipH)
                     }
@@ -1914,24 +1921,21 @@ fun VideoPreviewSurface(
                   }
                 },
                 update = { tv ->
-                  if (tv.tag != player) {
-                    try {
-                      player.setVideoTextureView(tv)
-                      tv.tag = player
-                    } catch (e: Exception) {
-                      android.util.Log.w("VideoPreviewSurface", "Failed to rebind TextureView", e)
-                    }
-                  }
+                  // Always route through the registry: it knows whether this view still owns the
+                  // player output (closing the fullscreen dialog used to leave the inline preview
+                  // without any surface, frozen on its last frame).
+                  PreviewVideoSurfaceRegistry.attach(player, tv, isPrimarySurface)
                   applyTextureViewAspectFit(tv, clipW, clipH)
                 },
                 onReset = { /* Preserve texture view across recompositions */ },
                 onRelease = { tv ->
-                  try {
-                    player.clearVideoTextureView(tv)
-                  } catch (_: Exception) {}
+                  PreviewVideoSurfaceRegistry.detach(player, tv)
                 },
                 modifier = Modifier.fillMaxSize()
               )
+            } else if (isMainVideoTrackHidden) {
+              // Video track hidden: no picture, but the player keeps running so its audio
+              // stays in the mix exactly like the export pipeline does it.
             } else if (!activeClip.isVideo && activeClip.uri.isNotBlank() && !activeClip.uri.startsWith("stock://") && !activeClip.uri.startsWith("sample://")) {
               AsyncImage(
                 model = activeClip.uri,
@@ -2035,6 +2039,7 @@ fun VideoPreviewSurface(
           onDuplicateClip = onDuplicateClip,
           onEditText = onEditText,
           getOverlayPlayer = onGetOverlayPlayer,
+          overlayPlayerIds = overlayPlayerIds,
           modifier = Modifier.fillMaxSize()
         )
 
