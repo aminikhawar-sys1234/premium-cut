@@ -2,6 +2,7 @@ package com.example.engine.integration
 
 import com.example.domain.model.ClipKeyframe
 import com.example.domain.model.KeyframeInterpolation
+import com.example.domain.model.VideoClip
 import kotlin.math.abs
 
 /**
@@ -129,11 +130,18 @@ object KeyframeAnimationEngine {
     followScale: Boolean = true,
     followRotation: Boolean = true,
     offsetX: Float = 0f,
-    offsetY: Float = 0f
+    offsetY: Float = 0f,
+    hostClip: VideoClip? = null,
+    layerTimelineStartMs: Long? = null
   ): List<ClipKeyframe> {
+    val layerStart = layerTimelineStartMs ?: clipStartTimelineMs
     return trackingResult.keyframes.map { kf ->
-      val timeMs = (kf.timestampUs / 1000L).coerceAtLeast(0L)
-      val relTimeMs = (timeMs - clipStartTimelineMs).coerceAtLeast(0L)
+      val timelineMs = if (hostClip != null) {
+        hostClip.sourceToTimelineMs(kf.timestampUs / 1000L)
+      } else {
+        (kf.timestampUs / 1000L).coerceAtLeast(0L)
+      }
+      val relTimeMs = (timelineMs - layerStart).coerceAtLeast(0L)
       val normPosX = if (followPosition) ((kf.centerX - 0.5f) * 2f + offsetX).coerceIn(-2f, 2f) else offsetX
       val normPosY = if (followPosition) ((kf.centerY - 0.5f) * 2f + offsetY).coerceIn(-2f, 2f) else offsetY
       val sX = if (followScale) kf.scaleX else 1.0f
@@ -146,7 +154,12 @@ object KeyframeAnimationEngine {
         posY = normPosY,
         scaleX = sX,
         scaleY = sY,
-        rotation = rot
+        rotation = rot,
+        maskPosX = normPosX,
+        maskPosY = normPosY,
+        maskWidth = (0.35f * sX).coerceIn(0.05f, 2f),
+        maskHeight = (0.35f * sY).coerceIn(0.05f, 2f),
+        maskRotation = rot
       )
     }
   }

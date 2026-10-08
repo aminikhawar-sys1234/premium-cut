@@ -147,6 +147,15 @@ object VideoEffectRenderer {
         }
         else -> {}
       }
+
+      if (effect.keyframes.isNotEmpty()) {
+        val tracked = com.example.engine.integration.KeyframeAnimationEngine.evaluate(effect.keyframes, relTime)
+        tX += tracked.positionX
+        tY += tracked.positionY
+        sX *= tracked.scaleX
+        sY *= tracked.scaleY
+        rot += tracked.rotation
+      }
     }
 
     return EffectMotionTransform(

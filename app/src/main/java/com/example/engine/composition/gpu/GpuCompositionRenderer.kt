@@ -1019,7 +1019,13 @@ class GpuCompositionRenderer(private val context: Context) {
       blur = keyframeBlur,
       effectParam = keyframeEffectParam,
       effectColorMatrix = effectColorMatrix,
-      mask = clip?.mask
+      mask = clip?.let {
+        com.example.engine.ai.MotionTrackCodec.applyToMask(
+          it.mask,
+          it.motionTrackJson,
+          frame.clipSourcePosMs * 1000L
+        )
+      }
     )
 
     if (useRowWarp) {
@@ -1214,7 +1220,11 @@ class GpuCompositionRenderer(private val context: Context) {
       blur = overlay.blur,
       effectParam = overlay.effectParam,
       effectColorMatrix = effectColorMatrix,
-      mask = overlay.clip.mask
+      mask = com.example.engine.ai.MotionTrackCodec.applyToMask(
+        overlay.clip.mask,
+        overlay.clip.motionTrackJson,
+        overlay.sourcePosMs * 1000L
+      )
     )
 
     drawQuad(program)

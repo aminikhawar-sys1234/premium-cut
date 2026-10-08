@@ -47,7 +47,9 @@ data class MaskSettings(
   val rotation: Float = 0f,      // 0 to 360 degrees
   val feather: Float = 0.1f,     // 0f to 1f edge softness
   val opacity: Float = 1.0f,     // 0f to 1f
-  val isInverted: Boolean = false
+  val isInverted: Boolean = false,
+  /** When true, preview/export sample [VideoClip.motionTrackJson] to drive mask pose. */
+  val followTracking: Boolean = false
 )
 
 enum class SpeedCurvePreset(val displayName: String) {
@@ -316,6 +318,8 @@ data class VideoClip(
   val motionBlurEnabled: Boolean = false,
   /** Warp-stabilizer data encoded by StabilizeCodec (per-frame corrections + auto zoom); null = off. Saves/undoes with the timeline. */
   val stabilize: String? = null,
+  /** Object/Face/Body/Motion track encoded by MotionTrackCodec; null = none. Saves/undoes with the timeline. */
+  val motionTrackJson: String? = null,
   /** Independent NLE lane index. Main video defaults to lane 0; overlays use additional lanes. */
   val trackIndex: Int = 0,
   /** Serialized ColorState for this clip's grade; null = ungraded. Lives in the project so it saves, undoes and exports with the timeline. */

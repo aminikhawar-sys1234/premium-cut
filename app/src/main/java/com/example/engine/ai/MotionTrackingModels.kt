@@ -115,7 +115,9 @@ enum class AttachmentTarget(val title: String, val description: String) {
     OVERLAY("Overlay / PIP", "Attach video/photo overlay to tracked target"),
     EFFECT_BLUR("Blur Effect", "Attach dynamic blur box to tracked area"),
     EFFECT_MOSAIC("Mosaic Effect", "Attach pixelated mosaic to tracked area"),
-    MASK("Clip Mask", "Anchor clip shape mask to tracked motion")
+    MASK("Clip Mask", "Anchor clip shape mask to tracked motion"),
+    EFFECT("Effect", "Attach the selected effect, or a blur, to the tracked target"),
+    TRANSFORM("Transform", "Drive the selected clip's position, scale and rotation")
 }
 
 enum class TrackingEngineState {

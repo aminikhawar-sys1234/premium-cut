@@ -288,6 +288,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         hydrateFaceReshape(timeline.videoClips)
         hydrateArOverlays(timeline.videoClips)
         hydrateBgRemoval(timeline)
+        hydrateMotionTracking()
         if (_currentScreen.value == AppScreen.EDITOR || _currentScreen.value == AppScreen.EXPORT) {
           try {
             playbackEngine.updateTimeline(timeline)
@@ -483,10 +484,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun resetMotionTracking() {
     trackingJob?.cancel()
     trackingJob = null
+    val clip = getSelectedVideoClip()
+    if (clip != null) {
+      MotionTrackingCache.invalidateClip(clip.id)
+      timelineEngine.setClipMotionTrack(clip.id, null)
+    }
     _motionTrackingState.value = MotionTrackingUiState(
       activeCategory = _motionTrackingState.value.activeCategory,
       targetRegion = NormalizedRect.DEFAULT_CENTER,
-      settings = MotionTrackingSettings()
+      settings = MotionTrackingSettings(),
+      engineState = TrackingEngineState.IDLE
     )
   }
 
@@ -504,6 +511,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _motionTrackingState.update {
       it.copy(
         isTracking = false,
+        engineState = TrackingEngineState.CANCELLED,
         statusMessage = "Tracking cancelled by user",
         progress = 0f
       )
@@ -527,26 +535,25 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _motionTrackingState.update {
         it.copy(
           isTracking = true,
+          engineState = TrackingEngineState.DETECTING,
           progress = 0.05f,
-          statusMessage = "Extracting video frames for ${category.title} tracking...",
+          statusMessage = "Detecting ${category.title.lowercase()}...",
           errorMessage = null
         )
       }
 
       try {
         val currentPlayheadMs = timelineEngine.currentPositionMs.value
-        val clipStartTimelineMs = activeClip.timelineStartMs
-        val clipDurationMs = activeClip.durationMs.coerceAtLeast(500L)
-        val relativePlayheadMs = (currentPlayheadMs - clipStartTimelineMs).coerceIn(0L, clipDurationMs)
-
+        val clipEndTimelineMs = activeClip.timelineStartMs + activeClip.durationMs
         val startUs: Long
         val durationUs: Long
         if (isForward) {
-          startUs = relativePlayheadMs * 1000L
-          durationUs = (clipDurationMs - relativePlayheadMs).coerceAtLeast(100L) * 1000L
+          startUs = activeClip.timelineToSourceMs(currentPlayheadMs) * 1000L
+          val endUs = activeClip.timelineToSourceMs(clipEndTimelineMs) * 1000L
+          durationUs = (endUs - startUs).coerceAtLeast(100_000L)
         } else {
-          startUs = 0L
-          durationUs = clipDurationMs * 1000L
+          startUs = activeClip.sourceStartMs * 1000L
+          durationUs = (activeClip.sourceEndMs - activeClip.sourceStartMs).coerceAtLeast(100L) * 1000L
         }
 
         val settings = _motionTrackingState.value.settings.copy(
@@ -563,16 +570,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           durationUs = durationUs,
           category = category,
           settings = settings,
-          onProgress = { p, msg, _ ->
+          onProgress = { p, msg, state ->
             _motionTrackingState.update {
-              it.copy(progress = p, statusMessage = msg)
+              it.copy(progress = p, statusMessage = msg, engineState = state)
             }
           }
         )
 
+        if (result.keyframes.isNotEmpty()) {
+          timelineEngine.setClipMotionTrack(activeClip.id, MotionTrackCodec.encode(result))
+        }
+
         _motionTrackingState.update {
           it.copy(
             isTracking = false,
+            engineState = if (result.keyframes.isNotEmpty()) TrackingEngineState.COMPLETED else TrackingEngineState.FAILED,
             activeResult = result,
             progress = 1.0f,
             statusMessage = if (result.keyframes.isNotEmpty()) {
@@ -589,13 +601,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       } catch (e: Exception) {
         if (e is kotlinx.coroutines.CancellationException) {
           _motionTrackingState.update {
-            it.copy(isTracking = false, statusMessage = "Tracking stopped")
+            it.copy(
+              isTracking = false,
+              engineState = TrackingEngineState.CANCELLED,
+              statusMessage = "Tracking cancelled by user"
+            )
           }
         } else {
           android.util.Log.e("StudioViewModel", "Tracking failure", e)
           _motionTrackingState.update {
             it.copy(
               isTracking = false,
+              engineState = TrackingEngineState.FAILED,
               errorMessage = "Tracking failed: ${e.localizedMessage ?: "Unknown error"}",
               statusMessage = "Tracking failed"
             )
@@ -613,19 +630,32 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun attachFaceEffect(effectType: EffectType) {
-    val activeClip = getSelectedVideoClip() ?: return
-    val result = _motionTrackingState.value.activeResult
-    val newEffect = timelineEngine.addEffectClip(effectType)
-    if (result != null && result.keyframes.isNotEmpty()) {
-      val bakedKeyframes = KeyframeAnimationEngine.convertTrackingResultToClipKeyframes(
-        trackingResult = result,
-        clipStartTimelineMs = result.startTimestampUs / 1000L
-      )
-      timelineEngine.updateEffectClip(newEffect.copy(keyframes = bakedKeyframes))
-    }
-    _motionTrackingState.update {
-      it.copy(statusMessage = "Attached ${effectType.displayName} to tracked region")
-    }
+    attachTrackingToLayer(
+      when (effectType) {
+        EffectType.MOSAIC -> AttachmentTarget.EFFECT_MOSAIC
+        else -> AttachmentTarget.EFFECT_BLUR
+      }
+    )
+  }
+
+  private fun bakeTrackingKeyframes(
+    result: TrackingResult,
+    hostClip: VideoClip,
+    layerStartMs: Long,
+    followPos: Boolean,
+    followScale: Boolean,
+    followRot: Boolean
+  ): List<ClipKeyframe> {
+    return KeyframeAnimationEngine.convertTrackingResultToClipKeyframes(
+      trackingResult = result,
+      followPosition = followPos,
+      followScale = followScale,
+      followRotation = followRot,
+      offsetX = _motionTrackingState.value.settings.offsetX,
+      offsetY = _motionTrackingState.value.settings.offsetY,
+      hostClip = hostClip,
+      layerTimelineStartMs = layerStartMs
+    )
   }
 
   fun attachTrackingToLayer(
@@ -643,18 +673,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       return
     }
 
-    val bakedKeyframes = KeyframeAnimationEngine.convertTrackingResultToClipKeyframes(
-      trackingResult = result,
-      clipStartTimelineMs = result.startTimestampUs / 1000L,
-      followPosition = followPos,
-      followScale = followScale,
-      followRotation = followRot,
-      offsetX = _motionTrackingState.value.settings.offsetX,
-      offsetY = _motionTrackingState.value.settings.offsetY
-    )
-
-    val clipStartMs = activeClip.timelineStartMs + (result.startTimestampUs / 1000L)
-    val clipDurationMs = ((result.endTimestampUs - result.startTimestampUs) / 1000L).coerceAtLeast(1000L)
+    val layerStartMs = activeClip.sourceToTimelineMs(result.startTimestampUs / 1000L)
+    val layerEndMs = activeClip.sourceToTimelineMs(result.endTimestampUs / 1000L)
+    val clipDurationMs = (layerEndMs - layerStartMs).coerceAtLeast(1000L)
+    val bakedKeyframes = bakeTrackingKeyframes(result, activeClip, layerStartMs, followPos, followScale, followRot)
 
     when (target) {
       AttachmentTarget.TEXT -> {
@@ -662,8 +684,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         if (selectedText != null) {
           val existing = timelineEngine.timeline.value.textClips.find { it.id == selectedText.clipId }
           if (existing != null) {
-            val updated = existing.copy(keyframes = bakedKeyframes)
-            timelineEngine.updateTextClip(updated)
+            val keys = bakeTrackingKeyframes(result, activeClip, existing.timelineStartMs, followPos, followScale, followRot)
+            timelineEngine.updateTextClip(existing.copy(keyframes = keys))
             _motionTrackingState.update { it.copy(statusMessage = "Updated selected text keyframes with tracking") }
             return
           }
@@ -671,7 +693,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val newTextClip = TextClip(
           id = UUID.randomUUID().toString(),
           text = "Tracked Text",
-          timelineStartMs = clipStartMs,
+          timelineStartMs = layerStartMs,
           durationMs = clipDurationMs,
           keyframes = bakedKeyframes,
           posX = bakedKeyframes.firstOrNull()?.posX ?: 0f,
@@ -684,6 +706,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val newSticker = timelineEngine.addStickerClip(emojiOrAsset = "✨")
         timelineEngine.updateStickerClip(
           newSticker.copy(
+            timelineStartMs = layerStartMs,
+            durationMs = clipDurationMs,
             keyframes = bakedKeyframes,
             posX = bakedKeyframes.firstOrNull()?.posX ?: 0f,
             posY = bakedKeyframes.firstOrNull()?.posY ?: 0f
@@ -692,31 +716,72 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         _motionTrackingState.update { it.copy(statusMessage = "Attached sticker to tracking path") }
       }
       AttachmentTarget.OVERLAY -> {
-        val selectedVideo = timelineEngine.selectedElement.value as? SelectedTrackElement.Video
-        if (selectedVideo != null) {
-          val existingOverlay = timelineEngine.timeline.value.overlayClips.find { it.id == selectedVideo.clipId }
-          if (existingOverlay != null) {
-            val updated = existingOverlay.copy(keyframes = bakedKeyframes)
-            timelineEngine.updateOverlayClip(updated)
-            _motionTrackingState.update { it.copy(statusMessage = "Attached overlay layer to tracking path") }
-            return
-          }
+        val selected = timelineEngine.selectedElement.value
+        val overlay = when (selected) {
+          is SelectedTrackElement.Overlay ->
+            timelineEngine.timeline.value.overlayClips.find { it.id == selected.clipId }
+          is SelectedTrackElement.Video ->
+            timelineEngine.timeline.value.overlayClips.find { it.id == selected.clipId }
+          else -> null
+        } ?: timelineEngine.timeline.value.overlayClips.lastOrNull()
+        if (overlay != null) {
+          val keys = bakeTrackingKeyframes(result, activeClip, overlay.timelineStartMs, followPos, followScale, followRot)
+          timelineEngine.updateOverlayClip(overlay.copy(keyframes = keys))
+          _motionTrackingState.update { it.copy(statusMessage = "Attached overlay layer to tracking path") }
+        } else {
+          _motionTrackingState.update { it.copy(statusMessage = "Add an overlay clip on the timeline, then attach") }
         }
-        _motionTrackingState.update { it.copy(statusMessage = "Select an overlay clip on timeline to attach motion") }
       }
       AttachmentTarget.EFFECT_BLUR -> {
         val newBlur = timelineEngine.addEffectClip(EffectType.BLUR)
-        timelineEngine.updateEffectClip(newBlur.copy(keyframes = bakedKeyframes))
+        timelineEngine.updateEffectClip(
+          newBlur.copy(timelineStartMs = layerStartMs, durationMs = clipDurationMs, keyframes = bakedKeyframes)
+        )
         _motionTrackingState.update { it.copy(statusMessage = "Attached blur effect to tracked target") }
       }
       AttachmentTarget.EFFECT_MOSAIC -> {
         val newMosaic = timelineEngine.addEffectClip(EffectType.MOSAIC)
-        timelineEngine.updateEffectClip(newMosaic.copy(keyframes = bakedKeyframes))
+        timelineEngine.updateEffectClip(
+          newMosaic.copy(timelineStartMs = layerStartMs, durationMs = clipDurationMs, keyframes = bakedKeyframes)
+        )
         _motionTrackingState.update { it.copy(statusMessage = "Attached mosaic pixelate to tracked target") }
       }
+      AttachmentTarget.EFFECT -> {
+        val selectedEffect = timelineEngine.selectedElement.value as? SelectedTrackElement.Effect
+        val existing = selectedEffect?.let { sel ->
+          timelineEngine.timeline.value.effectClips.find { it.id == sel.clipId }
+        }
+        if (existing != null) {
+          val keys = bakeTrackingKeyframes(result, activeClip, existing.timelineStartMs, followPos, followScale, followRot)
+          timelineEngine.updateEffectClip(existing.copy(keyframes = keys))
+          _motionTrackingState.update { it.copy(statusMessage = "Attached selected effect to tracking path") }
+        } else {
+          val newBlur = timelineEngine.addEffectClip(EffectType.BLUR)
+          timelineEngine.updateEffectClip(
+            newBlur.copy(timelineStartMs = layerStartMs, durationMs = clipDurationMs, keyframes = bakedKeyframes)
+          )
+          _motionTrackingState.update { it.copy(statusMessage = "Attached blur effect to tracked target") }
+        }
+      }
       AttachmentTarget.MASK -> {
-        timelineEngine.updateClipKeyframes(activeClip.id, bakedKeyframes)
-        _motionTrackingState.update { it.copy(statusMessage = "Attached motion keyframes to clip mask") }
+        val first = result.keyframes.first()
+        val mask = activeClip.mask.copy(
+          enabled = true,
+          shape = if (activeClip.mask.shape == MaskShape.NONE) MaskShape.RECTANGLE else activeClip.mask.shape,
+          posX = ((first.centerX - 0.5f) * 2f).coerceIn(-2f, 2f),
+          posY = ((first.centerY - 0.5f) * 2f).coerceIn(-2f, 2f),
+          width = (first.scaleX * 0.35f).coerceIn(0.08f, 1.5f),
+          height = (first.scaleY * 0.35f).coerceIn(0.08f, 1.5f),
+          rotation = if (followRot) first.rotationDeg else activeClip.mask.rotation,
+          followTracking = true
+        )
+        timelineEngine.setClipMask(activeClip.id, mask)
+        _motionTrackingState.update { it.copy(statusMessage = "Attached clip mask to tracked target") }
+      }
+      AttachmentTarget.TRANSFORM -> {
+        val keys = bakeTrackingKeyframes(result, activeClip, activeClip.timelineStartMs, followPos, followScale, followRot)
+        timelineEngine.updateClipKeyframes(activeClip.id, keys)
+        _motionTrackingState.update { it.copy(statusMessage = "Attached transform keyframes to clip") }
       }
     }
   }
@@ -735,6 +800,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     } else {
       curResult
     }
+    if (newResult != null && newResult.keyframes.isNotEmpty()) {
+      timelineEngine.setClipMotionTrack(newResult.clipId, MotionTrackCodec.encode(newResult))
+    }
     _motionTrackingState.update {
       it.copy(
         settings = it.settings.copy(smoothingFactor = clamped),
@@ -752,7 +820,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun manualCorrectionAtCurrentTime(currentPosMs: Long) {
     val curResult = _motionTrackingState.value.activeResult ?: return
-    val currentUs = currentPosMs * 1000L
+    val clip = getSelectedVideoClip()
+    val currentUs = if (clip != null) clip.timelineToSourceMs(currentPosMs) * 1000L else currentPosMs * 1000L
     val curRegion = _motionTrackingState.value.targetRegion
 
     val correctedKf = MotionKeyframe(
@@ -768,6 +837,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       .sortedBy { it.timestampUs }
 
     val updatedResult = curResult.copy(keyframes = updatedKeys)
+    timelineEngine.setClipMotionTrack(updatedResult.clipId, MotionTrackCodec.encode(updatedResult))
     _motionTrackingState.update {
       it.copy(
         activeResult = updatedResult,
@@ -780,10 +850,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val activeClip = getSelectedVideoClip()
     if (activeClip != null) {
       MotionTrackingCache.invalidateClip(activeClip.id)
+      timelineEngine.setClipMotionTrack(activeClip.id, null)
     }
     _motionTrackingState.update {
       it.copy(
         activeResult = null,
+        engineState = TrackingEngineState.IDLE,
         statusMessage = "Tracking data cleared",
         progress = 0f
       )
@@ -1651,6 +1723,39 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun retryBackgroundRemoval() {
     SubjectCutoutRegistry.retry()
     bgRemovalHydrated.keys.forEach { id -> runCatching { engineController.invalidateClip(id) } }
+  }
+
+  private var lastHydratedTrackClipId: String? = null
+  private var lastHydratedTrackJson: String? = null
+
+  /** Restores Object/Face/Body tracking from the selected clip so closing the panel does not drop it. */
+  private fun hydrateMotionTracking() {
+    if (_motionTrackingState.value.isTracking) return
+    val clip = getSelectedVideoClip()
+    val json = clip?.motionTrackJson
+    if (clip?.id == lastHydratedTrackClipId && json == lastHydratedTrackJson) return
+    lastHydratedTrackClipId = clip?.id
+    lastHydratedTrackJson = json
+    val decoded = MotionTrackCodec.decode(json)
+    _motionTrackingState.update { state ->
+      when {
+        decoded != null && state.activeResult?.targetId == decoded.targetId &&
+          state.activeResult?.keyframes?.size == decoded.keyframes.size -> state
+        decoded != null -> state.copy(
+          activeResult = decoded,
+          engineState = TrackingEngineState.COMPLETED
+        )
+        state.activeResult != null && state.activeResult?.clipId != clip?.id -> state.copy(
+          activeResult = null,
+          engineState = TrackingEngineState.IDLE
+        )
+        decoded == null && json == null && state.activeResult?.clipId == clip?.id -> state.copy(
+          activeResult = null,
+          engineState = TrackingEngineState.IDLE
+        )
+        else -> state
+      }
+    }
   }
 
   /** Rebuilds the compositor's cutout registry from the timeline after edit / load / undo / redo. */

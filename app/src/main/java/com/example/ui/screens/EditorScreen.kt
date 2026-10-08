@@ -669,7 +669,7 @@ fun EditorScreen(
           val activeTrackClip = viewModel.getSelectedVideoClip()
           com.example.ui.components.tracking.MotionTrackingPreviewOverlay(
             uiState = trackingUiState,
-            currentPosMs = currentPosMs,
+            currentPosMs = activeTrackClip?.timelineToSourceMs(currentPosMs) ?: currentPosMs,
             clipStartMs = activeTrackClip?.timelineStartMs ?: 0L,
             clipDurationMs = activeTrackClip?.durationMs ?: timeline.totalDurationMs,
             onUpdateRegion = { viewModel.updateTrackingRegion(it) },
