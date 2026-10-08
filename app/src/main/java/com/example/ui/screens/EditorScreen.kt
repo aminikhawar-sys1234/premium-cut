@@ -489,14 +489,12 @@ fun EditorScreen(
       tool.actionKey.equals("TOOL_OVERLAYS", ignoreCase = true) ||
         tool.id.equals("tool_overlays", ignoreCase = true) ||
         tool.name.equals("Overlay", ignoreCase = true) ||
-        tool.name.equals("Overlays", ignoreCase = true) ||
-        tool.name.contains("Overlay", ignoreCase = true) -> {
-        // Direct mobile gallery open for Overlays
+        tool.name.equals("Overlays", ignoreCase = true) -> {
         isEffectsToolsOpen = false
         isTextToolsOpen = false
         isEditToolsOpen = false
-        viewModel.setActiveToolbarTab(null)
-        safeLaunchOverlayPicker()
+        val tab = EditorToolbarTab.OVERLAY
+        viewModel.setActiveToolbarTab(if (activeTab == tab) null else tab)
       }
       tool.actionKey.equals("TOOL_EFFECTS", ignoreCase = true) ||
         tool.id.equals("tool_effects", ignoreCase = true) ||
@@ -642,6 +640,7 @@ fun EditorScreen(
         VideoPreviewSurface(
           timeline = timeline,
           currentPosMs = currentPosMs,
+          isPlaying = isPlaying,
           aspectRatio = aspectRatio,
           selectedElement = selectedElement,
           onSelectElement = { viewModel.timelineEngine.selectElement(it) },
@@ -1451,6 +1450,7 @@ fun EditorScreen(
         VideoPreviewSurface(
           timeline = timeline,
           currentPosMs = currentPosMs,
+          isPlaying = isPlaying,
           aspectRatio = aspectRatio,
           selectedElement = selectedElement,
           onSelectElement = { viewModel.timelineEngine.selectElement(it) },
@@ -1668,6 +1668,7 @@ private fun EditorTopBar(
 fun VideoPreviewSurface(
   timeline: Timeline,
   currentPosMs: Long,
+  isPlaying: Boolean = false,
   aspectRatio: AspectRatio,
   selectedElement: SelectedTrackElement = SelectedTrackElement.None,
   onSelectElement: (SelectedTrackElement) -> Unit = {},
@@ -1693,21 +1694,29 @@ fun VideoPreviewSurface(
 
   val activeOverlays = remember(timeline.overlayClips, currentPosMs) {
     timeline.overlayClips.filter {
-      currentPosMs >= it.timelineStartMs && currentPosMs <= it.timelineStartMs + it.durationMs
+      com.example.engine.timeline.TimelineClipVisibility.isActiveAt(
+        currentPosMs, it.timelineStartMs, it.durationMs
+      )
     }
   }
 
-  val activeTexts = remember(timeline.textClips, currentPosMs, selectedElement) {
+  val activeTexts = remember(timeline.textClips, currentPosMs, selectedElement, isPlaying) {
     val selectedId = (selectedElement as? SelectedTrackElement.Text)?.clipId
     timeline.textClips.filter {
-      (it.id == selectedId) ||
-      (currentPosMs >= it.timelineStartMs && currentPosMs <= it.timelineStartMs + it.durationMs)
+      val inRange = com.example.engine.timeline.TimelineClipVisibility.isActiveAt(
+        currentPosMs, it.timelineStartMs, it.durationMs
+      )
+      // Keep the selected layer visible while paused so it can be transformed outside its range;
+      // during playback and export only the time range is shown.
+      inRange || (!isPlaying && it.id == selectedId)
     }.sortedWith(compareBy({ it.trackIndex }, { it.timelineStartMs }))
   }
 
   val activeStickers = remember(timeline.stickerClips, currentPosMs) {
     timeline.stickerClips.filter {
-      currentPosMs >= it.timelineStartMs && currentPosMs <= it.timelineStartMs + it.durationMs
+      com.example.engine.timeline.TimelineClipVisibility.isActiveAt(
+        currentPosMs, it.timelineStartMs, it.durationMs
+      )
     }
   }
 
@@ -2716,7 +2725,7 @@ private fun EditorBottomToolbar(
       }
     }
 
-    val editToolItems = remember(selectedElement, currentPosMs, activeTab) {
+    val editToolItems = remember(selectedElement, activeTab) {
       listOf(
         FuturisticNavItemData(
           id = "split",

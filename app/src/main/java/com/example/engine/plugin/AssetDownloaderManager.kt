@@ -284,20 +284,8 @@ object AssetDownloaderManager {
         }
       }
 
-      // Step 3: Self-contained packaged plugin container creation if offline demo asset
-      if (!downloadedSuccessfully) {
-        FileOutputStream(tempFile).use { output ->
-          val header = "AEC_PLUGIN_V1\nID=${asset.id}\nVER=${asset.version}\nNAME=${asset.name}\nCAT=${asset.category.name}\n\n".toByteArray(Charsets.UTF_8)
-          output.write(header)
-          val dummyPayload = ByteArray(1024) { (it % 128).toByte() }
-          output.write(dummyPayload)
-          output.flush()
-        }
-        downloadedSuccessfully = tempFile.exists() && tempFile.length() > 0L
-      }
-
       if (!downloadedSuccessfully || tempFile.length() == 0L) {
-        throw IllegalStateException("Downloaded asset file is empty or corrupted.")
+        throw IllegalStateException("Asset '${asset.name}' is not available offline and the download failed.")
       }
 
       // Atomically move temp file to target

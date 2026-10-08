@@ -39,10 +39,18 @@ class EditorToolsReachabilityTest {
   @Test
   fun everyEditorTabWithAPanelHasAToolMapping() {
     val actionKeys = listOf(
-      "TOOL_COLOR_GRADE", "TOOL_VFX_STACK", "TOOL_AR_EFFECTS", "TOOL_ADVANCED_ANIMATION", "TOOL_FACE_EFFECTS", "TOOL_BACKGROUND", "TOOL_AI_EFFECTS"
+      "TOOL_COLOR_GRADE", "TOOL_VFX_STACK", "TOOL_AR_EFFECTS", "TOOL_ADVANCED_ANIMATION", "TOOL_FACE_EFFECTS",
+      "TOOL_BACKGROUND", "TOOL_AI_EFFECTS", "TOOL_OVERLAYS", "TOOL_KEYFRAME", "TOOL_CHROMA", "TOOL_CAPTIONS",
+      "TOOL_AUDIO_MUSIC", "TOOL_STICKERS", "TOOL_SHAPES", "TOOL_TRANSITIONS", "TOOL_MASKS"
     )
     for (key in actionKeys) {
       assertTrue(key, EditorToolItem("x", "x", key, "general", 0).mappedTab != null)
     }
+  }
+
+  @Test
+  fun defaultToolbarIncludesOverlayPanel() {
+    val overlay = repo.getDefaultEditorTools().first { it.actionKey == "TOOL_OVERLAYS" }
+    assertEquals(EditorToolbarTab.OVERLAY, overlay.mappedTab)
   }
 }

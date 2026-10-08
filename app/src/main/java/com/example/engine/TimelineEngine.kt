@@ -2657,7 +2657,13 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   }
 
   fun enhanceSelectedAudio(clipId: String? = null): Boolean {
-    val targetId = clipId ?: _selectedClipIds.value.firstOrNull() ?: findClipUnderPlayhead() ?: return false
+    val targetId = clipId ?: when (val sel = _selectedElement.value) {
+      is SelectedTrackElement.Audio -> sel.clipId
+      is SelectedTrackElement.Video -> sel.clipId
+      is SelectedTrackElement.Overlay -> sel.clipId
+      is SelectedTrackElement.None -> _selectedClipIds.value.firstOrNull() ?: findClipUnderPlayhead()
+      else -> return false
+    } ?: return false
     recordHistory()
     var updated = false
     val newAudios = _timeline.value.audioClips.map { clip ->
@@ -5400,24 +5406,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
    * If none exists, creates a default background audio track matching the timeline duration.
    */
   fun ensureAudioTrackExists(): String {
-    val existing = _timeline.value.audioClips.firstOrNull()
-    if (existing != null) return existing.id
-
-    val totalDur = _timeline.value.totalDurationMs.coerceAtLeast(4000L)
-    val newAudioClip = com.example.domain.model.AudioClip(
-      id = "audio_${System.currentTimeMillis()}",
-      uri = "internal://lofi_chill_beat",
-      title = "Audio Track 1 (Master)",
-      timelineStartMs = 0L,
-      durationMs = totalDur,
-      volume = 1.0f,
-      fadeInMs = 600L,
-      fadeOutMs = 800L,
-      waveformData = listOf(0.3f, 0.45f, 0.7f, 0.85f, 0.6f, 0.4f, 0.75f, 0.9f, 0.65f, 0.5f, 0.7f, 0.8f, 0.4f, 0.2f)
-    )
-    recordHistory()
-    _timeline.value = _timeline.value.copy(audioClips = listOf(newAudioClip))
-    return newAudioClip.id
+    return _timeline.value.audioClips.firstOrNull()?.id.orEmpty()
   }
 
   /**

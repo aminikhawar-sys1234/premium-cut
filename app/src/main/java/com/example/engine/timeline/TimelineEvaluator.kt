@@ -29,7 +29,7 @@ class TimelineEvaluator {
     // 1. Main Video Clip
     val activeClip = if (!isVideoHidden) {
       timeline.videoClips.find {
-        !it.isHidden && posMs >= it.timelineStartMs && posMs < it.timelineStartMs + it.durationMs
+        !it.isHidden && TimelineClipVisibility.isActiveAt(posMs, it.timelineStartMs, it.durationMs)
       }
     } else null
 
@@ -62,7 +62,7 @@ class TimelineEvaluator {
     // 3. Active Overlays (Multi-Track, sorted by trackIndex & timelineStartMs)
     val overlays = if (!isOverlayHidden) {
       timeline.overlayClips.filter {
-        !it.isHidden && posMs >= it.timelineStartMs && posMs < it.timelineStartMs + it.durationMs
+        !it.isHidden && TimelineClipVisibility.isActiveAt(posMs, it.timelineStartMs, it.durationMs)
       }.sortedWith(compareBy({ it.trackIndex }, { it.timelineStartMs })).map { clip ->
         val rel = posMs - clip.timelineStartMs
         val kf = KeyframeInterpolator.interpolate(clip, rel)
@@ -88,7 +88,7 @@ class TimelineEvaluator {
     // 4. Active Text Layers
     val texts = if (!isTextHidden) {
       timeline.textClips.filter {
-        !it.isHidden && posMs >= it.timelineStartMs && posMs < it.timelineStartMs + it.durationMs
+        !it.isHidden && TimelineClipVisibility.isActiveAt(posMs, it.timelineStartMs, it.durationMs)
       }.sortedWith(compareBy({ it.trackIndex }, { it.timelineStartMs })).map { clip ->
         val relMs = posMs - clip.timelineStartMs
         val kf = KeyframeInterpolator.interpolate(clip, relMs)
@@ -117,7 +117,7 @@ class TimelineEvaluator {
     // 5. Active Stickers
     val stickers = if (!isStickerHidden) {
       timeline.stickerClips.filter {
-        !it.isHidden && posMs >= it.timelineStartMs && posMs < it.timelineStartMs + it.durationMs
+        !it.isHidden && TimelineClipVisibility.isActiveAt(posMs, it.timelineStartMs, it.durationMs)
       }.map { clip ->
         val state = StickerLayerRenderer.evaluateAnimation(clip, posMs)
         ComposedSticker(

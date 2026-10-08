@@ -17,7 +17,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.io.File
-import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.nio.ByteBuffer
 import java.util.Locale
@@ -251,29 +250,8 @@ class AudioEngine(private val context: Context) {
    * Extracts accurate waveform amplitudes from an audio file.
    */
   fun extractWaveformFromFile(audioFile: File, sampleCount: Int = 32): List<Float> {
-    if (!audioFile.exists() || audioFile.length() == 0L) {
-      return List(sampleCount) { 0.2f }
-    }
-    return try {
-      val length = audioFile.length().toInt()
-      val bytes = ByteArray(minOf(length, 128 * 1024))
-      FileInputStream(audioFile).use { it.read(bytes) }
-
-      val step = maxOf(1, bytes.size / sampleCount)
-      val result = mutableListOf<Float>()
-      for (i in 0 until sampleCount) {
-        val start = i * step
-        var peak = 0
-        for (j in start until minOf(start + step, bytes.size)) {
-          val v = kotlin.math.abs(bytes[j].toInt())
-          if (v > peak) peak = v
-        }
-        result.add((peak / 128f).coerceIn(0.1f, 1.0f))
-      }
-      result
-    } catch (e: Exception) {
-      List(sampleCount) { 0.3f }
-    }
+    val extracted = AudioWaveformManager.extractWaveformFromFile(audioFile, sampleCount)
+    return if (extracted.size >= 8) extracted else emptyList()
   }
 
   fun getOrCreateSoundWavFile(sfxId: String, durationMs: Long = 2000L, category: String = ""): File {
@@ -364,6 +342,17 @@ class AudioEngine(private val context: Context) {
 
     writeWavFile(sfxFile, pcm, sampleRate)
     return sfxFile
+  }
+
+  fun playUriPreview(uriString: String) {
+    try {
+      val mediaItem = MediaItem.fromUri(Uri.parse(uriString))
+      sfxPlayer.setMediaItem(mediaItem)
+      sfxPlayer.prepare()
+      sfxPlayer.play()
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to preview audio $uriString", e)
+    }
   }
 
   fun playPreviewSfx(sfxId: String, durationMs: Long = 2000L, category: String = "") {

@@ -413,12 +413,9 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       try {
         st.updateTexImage()
         st.getTransformMatrix(transformMatrix)
-        if (deliveredFrames <= 3L) Log.d(TAG, "latched frame #$deliveredFrames ts=${st.timestamp} m=${transformMatrix.take(16)}")
       } catch (e: Exception) {
         Log.w(TAG, "updateTexImage failed: ${e.message}")
       }
-    } else if (deliveredFrames <= 3L) {
-      Log.w(TAG, "updateTexImage: no new frame available (delivered=$deliveredFrames)")
     }
     return transformMatrix
   }

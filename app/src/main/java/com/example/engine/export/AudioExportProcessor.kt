@@ -405,10 +405,13 @@ class AudioExportProcessor(
         val cacheKey = "${track.uri}_${track.speed}_${track.isReversed}_${fx.voiceEffect}_${fx.pitchShiftSemitones}_${fx.noiseReductionDb}_${fx.lowGainDb}_${fx.midGainDb}_${fx.highGainDb}_${fx.normalizeVolume}"
         pcmCache[cacheKey]?.let { return it }
 
-        var decoded = if (track.uri.startsWith("built_in_sfx_") || track.uri.isBlank() || context == null) {
-            synthesizePcmForTrack(track)
-        } else {
-            decodePcmFromMedia(track.uri) ?: synthesizePcmForTrack(track)
+        var decoded = when {
+            isSynthesizedCatalogUri(track.uri) ->
+                synthesizePcmForTrack(track)
+            track.uri.isBlank() || context == null ->
+                silentPcmForTrack(track)
+            else ->
+                decodePcmFromMedia(track.uri) ?: silentPcmForTrack(track)
         }
 
         // Apply audio reversal if enabled
@@ -656,6 +659,19 @@ class AudioExportProcessor(
                 outIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
             }
         }
+    }
+
+    private fun isSynthesizedCatalogUri(uri: String): Boolean {
+        if (uri.startsWith("internal://") || uri.startsWith("built_in_sfx_") || uri.startsWith("demo://")) return true
+        if (uri.isBlank() || uri.contains("://") || uri.startsWith("/") || uri.startsWith("file:") || uri.startsWith("content:")) return false
+        // Legacy catalog ids such as sfx_pop / mus_lofi (no scheme, not a filesystem path).
+        return true
+    }
+
+    private fun silentPcmForTrack(track: AudioTrackDescriptor): DecodedPcm {
+        val durationSec = (track.durationMs / 1000.0).coerceIn(0.0, 120.0)
+        val numFrames = (sampleRate * durationSec).toInt().coerceAtLeast(0)
+        return DecodedPcm(ShortArray(numFrames * 2), sampleRate, 2)
     }
 
     private fun synthesizePcmForTrack(track: AudioTrackDescriptor): DecodedPcm {

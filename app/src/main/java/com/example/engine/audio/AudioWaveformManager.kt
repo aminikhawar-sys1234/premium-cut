@@ -106,6 +106,37 @@ object AudioWaveformManager {
     val cacheKey = "$clipId-$uri-$totalDurationMs"
     waveformCache[cacheKey]?.let { return it }
 
+    val filePath = try {
+      val parsed = Uri.parse(uri)
+      when {
+        parsed.scheme == "file" -> parsed.path
+        parsed.scheme.isNullOrBlank() -> uri
+        else -> null
+      }
+    } catch (_: Exception) {
+      null
+    }
+    if (!filePath.isNullOrBlank()) {
+      val file = File(filePath)
+      if (file.exists() && file.length() > 0L) {
+        val extracted = extractWaveformFromFile(file)
+        if (extracted.size >= 20) {
+          waveformCache[cacheKey] = extracted
+          return extracted
+        }
+      }
+    }
+
+    val isSyntheticUri = uri.isBlank() ||
+      uri.startsWith("internal://") ||
+      uri.startsWith("built_in_sfx_") ||
+      uri.startsWith("demo://") ||
+      (!uri.contains("://") && !uri.startsWith("/") && !uri.startsWith("file:") && !uri.startsWith("content:"))
+    if (!isSyntheticUri) {
+      waveformCache[cacheKey] = existingWaveform
+      return existingWaveform
+    }
+
     val generated = generateRichWaveform(
       seed = "$clipId-$title-$uri",
       durationMs = totalDurationMs.coerceAtLeast(1000L)
@@ -129,9 +160,8 @@ object AudioWaveformManager {
     waveformCache[cacheKey]?.let { return@withContext it }
 
     if (uriString.isBlank()) {
-      val fallback = generateRichWaveform(seed = "empty_${durationMs}", durationMs = durationMs)
-      waveformCache[cacheKey] = fallback
-      return@withContext fallback
+      waveformCache[cacheKey] = emptyList()
+      return@withContext emptyList()
     }
 
     // Attempt direct file extraction if local file exists
@@ -161,10 +191,17 @@ object AudioWaveformManager {
       Log.w(TAG, "Realtime audio extraction fallback for $uriString: ${e.message}")
     }
 
-    // High fidelity fallback envelope
-    val generated = generateRichWaveform(seed = uriString, durationMs = durationMs)
-    waveformCache[cacheKey] = generated
-    return@withContext generated
+    val isSyntheticUri = uriString.startsWith("internal://") ||
+      uriString.startsWith("built_in_sfx_") ||
+      uriString.startsWith("demo://") ||
+      (!uriString.contains("://") && !uriString.startsWith("/") && !uriString.startsWith("file:") && !uriString.startsWith("content:"))
+    if (isSyntheticUri) {
+      val generated = generateRichWaveform(seed = uriString, durationMs = durationMs)
+      waveformCache[cacheKey] = generated
+      return@withContext generated
+    }
+    waveformCache[cacheKey] = emptyList()
+    return@withContext emptyList()
   }
 
   /**

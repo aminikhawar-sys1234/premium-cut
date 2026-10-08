@@ -201,16 +201,8 @@ data class RoyaltyFreeMusicTrack(
 )
 
 object MusicCatalog {
-  val TRACKS = listOf(
-    RoyaltyFreeMusicTrack("mus_chill_hop", "Midnight Coffee & Study", "Lofi Beats Lab", "Lo-Fi", 34000L, "☕"),
-    RoyaltyFreeMusicTrack("mus_vlog_upbeat", "Sunny Day Beach Walk", "Creators Studio", "Vlog", 28000L, "☀️"),
-    RoyaltyFreeMusicTrack("mus_epic_trailer", "Rise of the Valkyrie", "Cinematic Soundscapes", "Cinematic", 42000L, "⚔️"),
-    RoyaltyFreeMusicTrack("mus_cyber_future", "Neon Highway 2099", "Synthwave Syndicate", "Electronic", 31000L, "🏎️"),
-    RoyaltyFreeMusicTrack("mus_acoustic_sunset", "Golden Hour Breeze", "Indie Folk Project", "Acoustic", 29000L, "🎸"),
-    RoyaltyFreeMusicTrack("mus_tech_promo", "Modern Minimal Tech", "Future Corporate", "Tech", 25000L, "💻"),
-    RoyaltyFreeMusicTrack("mus_ambient_peace", "Morning Light Piano", "Serenity Strings", "Ambient", 38000L, "🎹"),
-    RoyaltyFreeMusicTrack("mus_gaming_pulse", "Hyper Pixel Run", "8-Bit Hero", "Gaming", 27000L, "👾")
-  )
+  /** Device library is queried at runtime; this list is no longer seeded with demo tracks. */
+  val TRACKS: List<RoyaltyFreeMusicTrack> = emptyList()
 }
 
 data class TTSVoice(

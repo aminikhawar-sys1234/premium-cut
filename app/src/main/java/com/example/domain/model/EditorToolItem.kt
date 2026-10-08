@@ -29,7 +29,7 @@ data class EditorToolItem(
       "TOOL_TEXT" -> EditorToolbarTab.TEXT
       "TOOL_AUDIO_MUSIC", "TOOL_SFX", "TOOL_VOICE_TTS" -> EditorToolbarTab.AUDIO
       "TOOL_STICKERS", "TOOL_EMOJIS" -> EditorToolbarTab.STICKERS
-      "TOOL_OVERLAYS" -> null
+      "TOOL_OVERLAYS" -> EditorToolbarTab.OVERLAY
       "TOOL_MASKS", "TOOL_BLEND_PRESETS" -> EditorToolbarTab.MASK
       "TOOL_FRAMES" -> EditorToolbarTab.CANVAS
       "TOOL_CANVAS" -> EditorToolbarTab.CANVAS
@@ -57,7 +57,7 @@ data class EditorToolItem(
         "text" -> EditorToolbarTab.TEXT
         "audio" -> EditorToolbarTab.AUDIO
         "stickers" -> EditorToolbarTab.STICKERS
-        "layers" -> null
+        "layers" -> EditorToolbarTab.OVERLAY
         "canvas" -> EditorToolbarTab.CANVAS
         "cutout" -> EditorToolbarTab.CHROMA
         "graphics" -> EditorToolbarTab.ELEMENTS

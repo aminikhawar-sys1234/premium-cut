@@ -726,6 +726,7 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uClarityResetHandle >= 0) GLES20.glUniform1f(uClarityResetHandle, 0f)
     if (uTexelSizeHandle >= 0) GLES20.glUniform2f(uTexelSizeHandle, 1.0f / max(1, viewportWidth), 1.0f / max(1, viewportHeight))
     if (uChromaEnabledHandle >= 0) GLES20.glUniform1i(uChromaEnabledHandle, 0)
+    bindMaskUniforms(program2D, null)
     if (uBlurHandle >= 0) GLES20.glUniform1f(uBlurHandle, 0f)
     GLES20.glGetUniformLocation(program2D, "uMotionVec").let { if (it >= 0) GLES20.glUniform2f(it, 0f, 0f) }
     if (uEffectParamHandle >= 0) GLES20.glUniform1f(uEffectParamHandle, 0f)
@@ -1017,7 +1018,8 @@ class GpuCompositionRenderer(private val context: Context) {
       viewportHeight = viewportHeight,
       blur = keyframeBlur,
       effectParam = keyframeEffectParam,
-      effectColorMatrix = effectColorMatrix
+      effectColorMatrix = effectColorMatrix,
+      mask = clip?.mask
     )
 
     if (useRowWarp) {
@@ -1211,7 +1213,8 @@ class GpuCompositionRenderer(private val context: Context) {
       viewportHeight = viewportHeight,
       blur = overlay.blur,
       effectParam = overlay.effectParam,
-      effectColorMatrix = effectColorMatrix
+      effectColorMatrix = effectColorMatrix,
+      mask = overlay.clip.mask
     )
 
     drawQuad(program)
@@ -1468,7 +1471,8 @@ class GpuCompositionRenderer(private val context: Context) {
     viewportHeight: Int,
     blur: Float = 0f,
     effectParam: Float = 0f,
-    effectColorMatrix: android.graphics.ColorMatrix? = null
+    effectColorMatrix: android.graphics.ColorMatrix? = null,
+    mask: MaskSettings? = null
   ) {
     val uMVPMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
     val uTexMatrixHandle = GLES20.glGetUniformLocation(program, "uTexMatrix")
@@ -1551,6 +1555,8 @@ class GpuCompositionRenderer(private val context: Context) {
       }
     }
 
+    bindMaskUniforms(program, mask)
+
     val uColorMatrixHandle = GLES20.glGetUniformLocation(program, "uColorMatrix")
     val uColorOffsetHandle = GLES20.glGetUniformLocation(program, "uColorOffset")
     val uUseColorMatrixHandle = GLES20.glGetUniformLocation(program, "uUseColorMatrix")
@@ -1587,6 +1593,28 @@ class GpuCompositionRenderer(private val context: Context) {
     } else if (uUseColorMatrixHandle >= 0) {
       GLES20.glUniform1i(uUseColorMatrixHandle, 0)
     }
+  }
+
+  private fun bindMaskUniforms(program: Int, mask: MaskSettings?) {
+    val enabledLoc = GLES20.glGetUniformLocation(program, "uMaskEnabled")
+    if (enabledLoc < 0) return
+    val enabled = GpuMaskUniforms.isEnabled(mask)
+    GLES20.glUniform1i(enabledLoc, if (enabled) 1 else 0)
+    if (!enabled || mask == null) return
+    val shapeLoc = GLES20.glGetUniformLocation(program, "uMaskShape")
+    if (shapeLoc >= 0) GLES20.glUniform1i(shapeLoc, GpuMaskUniforms.shapeId(mask))
+    val posLoc = GLES20.glGetUniformLocation(program, "uMaskPos")
+    if (posLoc >= 0) GLES20.glUniform2f(posLoc, mask.posX, mask.posY)
+    val sizeLoc = GLES20.glGetUniformLocation(program, "uMaskSize")
+    if (sizeLoc >= 0) GLES20.glUniform2f(sizeLoc, mask.width, mask.height)
+    val rotLoc = GLES20.glGetUniformLocation(program, "uMaskRotation")
+    if (rotLoc >= 0) GLES20.glUniform1f(rotLoc, mask.rotation)
+    val featherLoc = GLES20.glGetUniformLocation(program, "uMaskFeather")
+    if (featherLoc >= 0) GLES20.glUniform1f(featherLoc, mask.feather)
+    val opacityLoc = GLES20.glGetUniformLocation(program, "uMaskOpacity")
+    if (opacityLoc >= 0) GLES20.glUniform1f(opacityLoc, mask.opacity)
+    val invLoc = GLES20.glGetUniformLocation(program, "uMaskInverted")
+    if (invLoc >= 0) GLES20.glUniform1i(invLoc, if (mask.isInverted) 1 else 0)
   }
 
   private fun drawQuad(program: Int) = drawGeometry(program, vertexBuffer, GLES20.GL_TRIANGLE_STRIP, 4)

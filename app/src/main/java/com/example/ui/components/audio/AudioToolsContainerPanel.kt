@@ -31,11 +31,21 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.engine.SelectedTrackElement
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StudioDark
 import kotlinx.coroutines.launch
 import java.io.File
+
+private fun selectedAudioCapableClipId(viewModel: StudioViewModel): String? {
+  return when (val sel = viewModel.timelineEngine.selectedElement.value) {
+    is SelectedTrackElement.Audio -> sel.clipId
+    is SelectedTrackElement.Video -> sel.clipId
+    is SelectedTrackElement.Overlay -> sel.clipId
+    else -> viewModel.timelineEngine.selectedClipIds.value.firstOrNull()
+  }
+}
 
 data class AudioMainToolItem(
   val id: String,
@@ -283,7 +293,7 @@ fun AudioToolsContainerPanel(
             onConfirm = { enabled, level ->
               voiceEnhanceEnabled = enabled
               voiceEnhanceLevel = level
-              val targetClipId = viewModel.timelineEngine.selectedClipIds.value.firstOrNull()
+              val targetClipId = selectedAudioCapableClipId(viewModel)
               if (targetClipId != null) {
                 val currentFx = viewModel.timelineEngine.getClipAudioEffects(targetClipId) ?: com.example.domain.model.AudioEffectsSettings()
                 val updatedFx = currentFx.copy(
@@ -305,7 +315,7 @@ fun AudioToolsContainerPanel(
             currentSelectedEffect = activeVoiceEffect,
             onConfirm = { selected ->
               activeVoiceEffect = selected
-              val targetClipId = viewModel.timelineEngine.selectedClipIds.value.firstOrNull()
+              val targetClipId = selectedAudioCapableClipId(viewModel)
               if (targetClipId != null) {
                 val currentFx = viewModel.timelineEngine.getClipAudioEffects(targetClipId) ?: com.example.domain.model.AudioEffectsSettings()
                 val updatedFx = currentFx.copy(
