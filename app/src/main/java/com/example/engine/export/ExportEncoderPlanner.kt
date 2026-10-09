@@ -226,3 +226,24 @@ object ExportEncoderPlanner {
     return bps
   }
 }
+
+/**
+ * Tells the encoder this is an offline export, not a live camera stream, so it can run
+ * faster than realtime instead of throttling to the timeline frame rate.
+ */
+object ExportEncoderSpeedHints {
+  fun applyForFastExport(format: MediaFormat, fps: Int) {
+    if (Build.VERSION.SDK_INT < 23) return
+    val operatingRate = max(120, fps * 4)
+    try {
+      format.setInteger(MediaFormat.KEY_OPERATING_RATE, operatingRate)
+    } catch (_: Exception) {
+    }
+    try {
+      // 0 = realtime / as-fast-as-possible. Combined with OPERATING_RATE this avoids
+      // the encoder pacing itself to 1x playback speed during a long export.
+      format.setInteger(MediaFormat.KEY_PRIORITY, 0)
+    } catch (_: Exception) {
+    }
+  }
+}

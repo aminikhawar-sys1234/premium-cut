@@ -291,6 +291,14 @@ object ExportValidator {
 enum class ProfessionalExportStage { PREPARING, DECODING, RENDERING, ENCODING_VIDEO, MIXING_AUDIO, MUXING, VERIFYING, COMPLETED, FAILED, CANCELLED }
 data class ProfessionalExportProgress(val stage: ProfessionalExportStage = ProfessionalExportStage.PREPARING, val fraction: Float = 0f, val renderedDurationMs: Long = 0L, val estimatedRemainingMs: Long? = null, val message: String = "Preparing export")
 
+internal object ExportProgressMapping {
+  fun encodingFraction(doneFrames: Long, totalFrames: Long): Float {
+    if (totalFrames <= 0L) return 0.05f
+    val frameFrac = (doneFrames.toFloat() / totalFrames).coerceIn(0f, 1f).coerceAtMost(0.95f)
+    return 0.05f + frameFrac * 0.90f
+  }
+}
+
 /**
  * Orchestrates one export through the single authoritative pipeline ([AsyncFramePipelineEngine]), then
  * validates the produced file. There is no secondary renderer: if the pipeline (including its encoder
@@ -346,7 +354,11 @@ class ProfessionalExportEngine(private val context: Context) {
             if (shouldCancel()) this@ProfessionalExportEngine.cancel()
             val total = pipeline.plannedTotalFrames.takeIf { it > 0L } ?: plan.totalFrames
             val encoded = pipeline.metrics.encodedFrames.get()
-            val fraction = (encoded.toFloat() / total).coerceIn(0f, 1f).coerceAtMost(0.95f)
+            val submitted = pipeline.metrics.gpuFrames.get()
+            // Encoder output can lag submitted frames by seconds; count submitted work so the
+            // ring is not stuck at 5% while the GPU pipeline is already rendering.
+            val done = max(encoded, submitted)
+            val mapped = ExportProgressMapping.encodingFraction(done, total)
             val fps = pipeline.activePlan?.fps ?: plan.frameRate
             val renderedMs = ((encoded.toDouble() / max(1, fps)) * 1000L).toLong()
             // Video seconds produced per wall second. < 1x means the device renders slower than
@@ -355,10 +367,9 @@ class ProfessionalExportEngine(private val context: Context) {
             val speed = renderedMs.toDouble() / wallMs
             _progress.value = ProfessionalExportProgress(
               ProfessionalExportStage.ENCODING_VIDEO,
-              0.05f + fraction * 0.90f,
-              renderedDurationMs = renderedMs,
-              message = "Hardware GPU pipeline: encoded $encoded / $total frames " +
-                "(${(fraction * 100).toInt()}% · ${"%.1f".format(speed)}x realtime)"
+              mapped,
+              renderedDurationMs = ((done.toDouble() / max(1, fps)) * 1000L).toLong(),
+              message = "Hardware GPU pipeline: encoded $encoded / $total frames (${((done.toFloat() / max(1L, total)).coerceIn(0f, 1f) * 100).toInt()}%)"
             )
             delay(100L)
           }
