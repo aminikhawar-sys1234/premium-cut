@@ -8,6 +8,7 @@ import android.view.TextureView
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import com.example.domain.model.Timeline
+import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
 import com.example.engine.composition.VideoCompositionEngine
 import com.example.engine.media.MediaRelinkManager
@@ -119,17 +120,24 @@ class CustomVideoEngineController(
     _engineState.value = _engineState.value.copy(duration = timeline.totalDurationMs)
     playbackController.updateTimeline(timeline)
 
+    // A timeline snapshot refresh (autosave, undo, filter tweak) must not reload / re-seek the
+    // player while the Trimming tool owns it with its own clipped preview item.
+    if (playbackController.isTrimPreviewActive) {
+      _engineState.value = _engineState.value.copy(isReady = true)
+      return
+    }
+
     val clip = activeClip
     if (clip != null && clip.isVideo && isPlayableInPlayer(clip.uri)) {
       ensureClipLoaded(clip)
       playbackController.setPlaybackSpeed(clip.speed)
-      playbackController.setVolume(if (clip.isMuted) 0f else clip.volume)
+      playbackController.setVolume(PreviewMixPolicy.clipGain(clip, timeline, TrackType.MAIN_VIDEO))
       if (!isPlaying) {
         playbackController.seekTo(clip.timelineToSourceMs(currentPosMs), resumeAfter = false, exact = true)
       }
       _engineState.value = _engineState.value.copy(isReady = true)
     } else {
-      if (clip == null && !isPlaying) playbackController.pause()
+      if (clip == null && !isPlaying) playbackController.pauseTimeline(resyncFrame = false)
       _engineState.value = _engineState.value.copy(playbackState = EnginePlaybackState.READY, isReady = true)
     }
   }
@@ -140,8 +148,9 @@ class CustomVideoEngineController(
     val timelinePosUs = currentPosMs * 1000L
     Log.d("CustomVideoEngineCtrl", "TIMELINE_SEEK: requestedPositionUs=$requestedPosUs, playerPositionUs=$playerPosUs, timelinePositionUs=$timelinePosUs, previewPositionUs=$requestedPosUs")
     // A user seek is an explicit pause + authoritative master-position update.
+    // resyncFrame = false: the exact seek below supersedes it (no flush to the old frame first).
     timelineSyncManager.stopSyncLoop()
-    playbackController.pause()
+    playbackController.pauseTimeline(resyncFrame = false)
     val maxBound = maxOf(currentTimeline.totalDurationMs + 10000L, 10000L)
     val bounded = timelinePosMs.coerceIn(0L, maxBound)
     currentPosMs = bounded
@@ -224,12 +233,15 @@ class CustomVideoEngineController(
   fun invalidateAll() { renderCacheManager.clear(); gpuRenderManager.invalidateAll() }
 
   private fun handleClipTransition(nextClip: VideoClip?, nextTimelinePos: Long, resumeAfter: Boolean = true) {
+    // The clip boundary of the master clock must not re-bind the shared player while the
+    // Trimming tool has its own clipped item loaded.
+    if (playbackController.isTrimPreviewActive) return
     activeClip = nextClip
     currentPosMs = nextTimelinePos
     if (nextClip != null && nextClip.isVideo && isPlayableInPlayer(nextClip.uri)) {
       ensureClipLoaded(nextClip)
       playbackController.setPlaybackSpeed(nextClip.speed)
-      playbackController.setVolume(if (nextClip.isMuted) 0f else nextClip.volume)
+      playbackController.setVolume(PreviewMixPolicy.clipGain(nextClip, currentTimeline, TrackType.MAIN_VIDEO))
       playbackController.seekTo(
         nextClip.timelineToSourceMs(nextTimelinePos),
         resumeAfter = resumeAfter && timelineSyncManager.isPlaying,

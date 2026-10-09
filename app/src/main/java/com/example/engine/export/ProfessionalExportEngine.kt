@@ -339,6 +339,7 @@ class ProfessionalExportEngine(private val context: Context) {
       val pipeline = AsyncFramePipelineEngine(context)
       activePipeline = pipeline
 
+      val renderStartMs = System.currentTimeMillis()
       val rendered: File = coroutineScope {
         val progressJob = launch(Dispatchers.Default) {
           while (isActive) {
@@ -347,11 +348,17 @@ class ProfessionalExportEngine(private val context: Context) {
             val encoded = pipeline.metrics.encodedFrames.get()
             val fraction = (encoded.toFloat() / total).coerceIn(0f, 1f).coerceAtMost(0.95f)
             val fps = pipeline.activePlan?.fps ?: plan.frameRate
+            val renderedMs = ((encoded.toDouble() / max(1, fps)) * 1000L).toLong()
+            // Video seconds produced per wall second. < 1x means the device renders slower than
+            // realtime; the pipeline log carries the per-stage breakdown for that case.
+            val wallMs = (System.currentTimeMillis() - renderStartMs).coerceAtLeast(1L)
+            val speed = renderedMs.toDouble() / wallMs
             _progress.value = ProfessionalExportProgress(
               ProfessionalExportStage.ENCODING_VIDEO,
               0.05f + fraction * 0.90f,
-              renderedDurationMs = ((encoded.toDouble() / max(1, fps)) * 1000L).toLong(),
-              message = "Hardware GPU pipeline: encoded $encoded / $total frames (${(fraction * 100).toInt()}%)"
+              renderedDurationMs = renderedMs,
+              message = "Hardware GPU pipeline: encoded $encoded / $total frames " +
+                "(${(fraction * 100).toInt()}% · ${"%.1f".format(speed)}x realtime)"
             )
             delay(100L)
           }
@@ -364,12 +371,14 @@ class ProfessionalExportEngine(private val context: Context) {
       }
       checkCancelled()
 
+      val validateStartMs = System.currentTimeMillis()
       _progress.value = ProfessionalExportProgress(ProfessionalExportStage.VERIFYING, 0.96f, plan.durationMs, message = "Verifying exported video integrity...")
       val encoded = pipeline.activePlan?.let { it.width to it.height } ?: dimensions
       // 1080p and below must match the requested canvas exactly; 2K/4K may use a capability fallback size.
       val expectedDims = if (max(dimensions.first, dimensions.second) <= 1920) dimensions else encoded
       val validation = ExportValidator.validate(rendered, config, plan.durationMs, requireAudio && hasAudio, expectedDims)
       Log.i(tag, "[VALIDATION_RESULT] valid=${validation.valid} message=${validation.message} duration=${validation.durationMs}ms videoCodec=${validation.videoCodec} audioCodec=${validation.audioCodec} res=${validation.width}x${validation.height}")
+      Log.i(tag, "[EXPORT_TIMING] render=${System.currentTimeMillis() - renderStartMs}ms validation=${System.currentTimeMillis() - validateStartMs}ms")
       if (!validation.valid) {
         // Never hand a broken file to the user as a successful export. The project is untouched, so the user can retry.
         Log.e(tag, "Export validation FAILED: ${validation.message} (${rendered.length()} bytes). Rejecting output.")

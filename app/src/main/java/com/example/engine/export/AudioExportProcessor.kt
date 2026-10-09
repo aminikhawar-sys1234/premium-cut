@@ -59,6 +59,10 @@ class AudioExportProcessor(
     companion object {
         private const val TAG = "AudioExportProcessor"
         private const val TIMEOUT_US = 10_000L
+        /** PCM grows by doubling from here (samples, not frames). */
+        private const val INITIAL_PCM_SAMPLES = 1 shl 16
+        /** Upper bound for the pre-sized window buffer (8M samples = 16 MB); growth handles more. */
+        private const val MAX_PREALLOC_SAMPLES = 8 shl 20
     }
 
     private var context: Context? = null
@@ -400,9 +404,21 @@ class AudioExportProcessor(
         return list
     }
 
+    /**
+     * Source window this descriptor actually uses, in milliseconds.
+     *
+     * The mixer only ever reads [AudioTrackDescriptor.timelineStartMs] +
+     * [AudioTrackDescriptor.durationMs] of timeline time, which at [AudioTrackDescriptor.speed]
+     * maps to this much source material. Decoding the whole file used to mean a 10 minute song
+     * trimmed to 10 seconds was fully decoded (and kept in memory) for nothing.
+     */
+    private fun sourceWindowFor(track: AudioTrackDescriptor): Pair<Long, Long> = audioSourceWindow(track)
+
     private fun decodeOrSynthesizeTrack(track: AudioTrackDescriptor): DecodedPcm {
         val fx = track.audioEffects
-        val cacheKey = "${track.uri}_${track.speed}_${track.isReversed}_${fx.voiceEffect}_${fx.pitchShiftSemitones}_${fx.noiseReductionDb}_${fx.lowGainDb}_${fx.midGainDb}_${fx.highGainDb}_${fx.normalizeVolume}"
+        val (windowStartMs, windowEndMs) = sourceWindowFor(track)
+        val cacheKey = "${track.uri}_${track.speed}_${track.isReversed}_$windowStartMs-$windowEndMs" +
+            "_${fx.voiceEffect}_${fx.pitchShiftSemitones}_${fx.noiseReductionDb}_${fx.lowGainDb}_${fx.midGainDb}_${fx.highGainDb}_${fx.normalizeVolume}"
         pcmCache[cacheKey]?.let { return it }
 
         var decoded = when {
@@ -411,7 +427,7 @@ class AudioExportProcessor(
             track.uri.isBlank() || context == null ->
                 silentPcmForTrack(track)
             else ->
-                decodePcmFromMedia(track.uri) ?: silentPcmForTrack(track)
+                decodePcmFromMedia(track.uri, windowStartMs, windowEndMs) ?: silentPcmForTrack(track)
         }
 
         // Apply audio reversal if enabled
@@ -450,7 +466,17 @@ class AudioExportProcessor(
         return decoded
     }
 
-    private fun decodePcmFromMedia(uriString: String): DecodedPcm? {
+    /**
+     * Decodes the audio of [uriString] to 16 bit PCM, covering only the source window
+     * [windowStartMs]..[windowEndMs].
+     *
+     * The returned buffer's index 0 is the first sample of the window, which is what makes the
+     * clip in-point (trim) audible-correct in the mix and keeps a 10 minute song trimmed to 10
+     * seconds from being decoded in full. The old implementation also accumulated the PCM in a
+     * `MutableList<Byte>` (one boxed element per byte) — the single biggest CPU/GC cost of the
+     * whole export for projects with audio.
+     */
+    private fun decodePcmFromMedia(uriString: String, windowStartMs: Long = 0L, windowEndMs: Long = Long.MAX_VALUE): DecodedPcm? {
         val ctx = context ?: return null
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
@@ -470,17 +496,51 @@ class AudioExportProcessor(
             val format = extractor.getTrackFormat(audioTrack)
             val mime = format.getString(MediaFormat.KEY_MIME) ?: return null
             val srcSampleRate = format.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            val srcChannels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
+            val srcChannels = format.getInteger(MediaFormat.KEY_CHANNEL_COUNT).coerceAtLeast(1)
 
             decoder = MediaCodec.createDecoderByType(mime)
             decoder.configure(format, null, null, 0)
             decoder.start()
 
-            val pcmBytes = mutableListOf<Byte>()
+            val windowStartUs = (windowStartMs.coerceAtLeast(0L)) * 1000L
+            val windowEndUs = if (windowEndMs == Long.MAX_VALUE) Long.MAX_VALUE else windowEndMs.coerceAtLeast(windowStartMs) * 1000L
+            if (windowStartUs > 0L) {
+                // Skip straight to the window. A failed seek only costs speed, never audio: the
+                // per-buffer skip below drops everything that lands before the window start.
+                try {
+                    extractor.seekTo(windowStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                    decoder.flush()
+                } catch (seekError: Exception) {
+                    Log.w(TAG, "Audio seek to ${windowStartMs}ms failed, decoding from the start: ${seekError.message}")
+                }
+            }
+
+            var shorts = ShortArray(
+                if (windowEndUs == Long.MAX_VALUE) INITIAL_PCM_SAMPLES
+                else (((windowEndUs - windowStartUs) * srcSampleRate / 1_000_000L) * srcChannels)
+                    .coerceIn(INITIAL_PCM_SAMPLES.toLong(), MAX_PREALLOC_SAMPLES.toLong()).toInt()
+            )
+            var sampleCount = 0
+            var reachedWindowEnd = false
             val bufferInfo = MediaCodec.BufferInfo()
             var isEos = false
 
-            while (!isEos) {
+            fun append(buffer: ByteBuffer, framesInBuffer: Int, skipFrames: Int) {
+                val usableFrames = framesInBuffer - skipFrames
+                if (usableFrames <= 0) return
+                val needed = sampleCount + usableFrames * srcChannels
+                if (needed > shorts.size) {
+                    var newSize = shorts.size
+                    while (newSize < needed) newSize = newSize shl 1
+                    shorts = shorts.copyOf(newSize)
+                }
+                buffer.position(bufferInfo.offset + skipFrames * srcChannels * 2)
+                buffer.limit(bufferInfo.offset + bufferInfo.size)
+                buffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts, sampleCount, usableFrames * srcChannels)
+                sampleCount += usableFrames * srcChannels
+            }
+
+            while (!isEos && !reachedWindowEnd) {
                 val inIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
                 if (inIndex >= 0) {
                     val inputBuf = decoder.getInputBuffer(inIndex) ?: continue
@@ -497,25 +557,32 @@ class AudioExportProcessor(
                 var outIndex = decoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
                 while (outIndex >= 0) {
                     val outBuf = decoder.getOutputBuffer(outIndex)
-                    if (outBuf != null && bufferInfo.size > 0) {
-                        outBuf.position(bufferInfo.offset)
-                        outBuf.limit(bufferInfo.offset + bufferInfo.size)
-                        val chunk = ByteArray(bufferInfo.size)
-                        outBuf.get(chunk)
-                        pcmBytes.addAll(chunk.toList())
+                    if (outBuf != null && bufferInfo.size >= srcChannels * 2) {
+                        val ptsUs = bufferInfo.presentationTimeUs
+                        val framesInBuffer = bufferInfo.size / (srcChannels * 2)
+                        val bufferEndUs = ptsUs + framesInBuffer * 1_000_000L / srcSampleRate
+                        if (bufferEndUs > windowStartUs) {
+                            // Drop the samples a seek landed before the window start.
+                            val skipFrames = if (ptsUs >= windowStartUs) 0 else
+                                (((windowStartUs - ptsUs) * srcSampleRate) / 1_000_000L).toInt().coerceIn(0, framesInBuffer)
+                            append(outBuf, framesInBuffer, skipFrames)
+                        }
+                        if (windowEndUs != Long.MAX_VALUE && bufferEndUs >= windowEndUs) {
+                            reachedWindowEnd = true
+                        }
                     }
                     decoder.releaseOutputBuffer(outIndex, false)
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        isEos = true
+                        break
+                    }
+                    if (reachedWindowEnd) break
                     outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
                 }
             }
 
-            val byteArr = pcmBytes.toByteArray()
-            val shortBuf = ByteBuffer.wrap(byteArr).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-            val shorts = ShortArray(shortBuf.remaining())
-            shortBuf.get(shorts)
-
-            return DecodedPcm(shorts, srcSampleRate, srcChannels)
+            if (sampleCount == 0) return null
+            return DecodedPcm(if (sampleCount == shorts.size) shorts else shorts.copyOf(sampleCount), srcSampleRate, srcChannels)
         } catch (e: Exception) {
             Log.e(TAG, "Failed decoding PCM from $uriString: ${e.message}")
             return null
@@ -564,10 +631,14 @@ class AudioExportProcessor(
             val gain = linearGain * fadeVol
 
             for (ch in 0 until targetChannels) {
+                // Source index 0 is the clip in-point (decodePcmFromMedia returns exactly the used
+                // window), so a trimmed clip's audio starts where its picture does.
                 val sampleVal: Short = if (srcChannels == 1) {
                     if (srcIndex < srcSamples.size) srcSamples[srcIndex] else 0
                 } else {
-                    val sIdx = srcIndex * 2 + (ch % 2)
+                    // Multi channel sources are indexed by their real channel count; stereo
+                    // (2 ch) maps 1:1 to the output channels exactly as before.
+                    val sIdx = srcIndex * srcChannels + (if (ch < srcChannels) ch else ch % srcChannels)
                     if (sIdx < srcSamples.size) srcSamples[sIdx] else 0
                 }
                 val outIdx = frame * targetChannels + ch
@@ -751,3 +822,34 @@ class AudioExportProcessor(
         return (clipped * 32767f).toInt().toShort()
     }
 }
+
+/**
+ * Source window a track actually uses, in milliseconds: `[start, end)` of the source file that the
+ * mix needs. Pure and unit tested ([AudioExportWindowTest]); the mixer uses it to bound both the
+ * decode and the memory of every track.
+ *
+ * `sourceMs = timelineRelMs * speed` (see `AudioClip.timelineToSourceMs`), so a 2x clip consumes
+ * twice its timeline length of source, a 0.5x clip half of it.
+ */
+fun audioSourceWindow(track: AudioTrackDescriptor): Pair<Long, Long> {
+    val speed = track.speed.coerceIn(0.25f, 4.0f)
+    val neededMs = (track.durationMs.coerceAtLeast(1L) * speed).toLong()
+    val hasSourceRange = track.sourceEndMs > track.sourceStartMs
+    if (track.isReversed && hasSourceRange) {
+        // Reversed playback starts at the source end and walks backwards (sourceMs =
+        // sourceEndMs - rel * speed), so the window is anchored to the end. The margin sits
+        // *before* the window because the decoded buffer is reversed afterwards.
+        val endMs = track.sourceEndMs
+        return maxOf(0L, endMs - neededMs - AUDIO_WINDOW_MARGIN_MS) to endMs
+    }
+    val startMs = track.sourceStartMs.coerceAtLeast(0L)
+    // A small margin keeps codec priming / frame rounding inside the window.
+    val endMs = minOf(
+        if (hasSourceRange) track.sourceEndMs else Long.MAX_VALUE,
+        startMs + neededMs + AUDIO_WINDOW_MARGIN_MS
+    )
+    return startMs to maxOf(endMs, startMs + 1L)
+}
+
+/** Extra source material decoded past the used window (codec priming / rounding). */
+private const val AUDIO_WINDOW_MARGIN_MS = 250L

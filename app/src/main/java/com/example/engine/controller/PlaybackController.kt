@@ -10,6 +10,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import com.example.domain.model.Timeline
+import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
 import com.example.engine.media.MediaRelinkManager
 import com.example.engine.playback.ProxyMediaEngine
@@ -69,6 +70,10 @@ class PlaybackController(
   private var pendingCommand: Job? = null
   private var internalPlayerSeeking = false
   private var lastDriftCorrectionElapsedMs = 0L
+  /** True while the Trimming tool owns the player with its own clipped MediaItem. */
+  private var trimPreviewActive = false
+  /** Last applied track hide/mute/solo state, so a mix change re-applies while playing. */
+  private var lastMixSignature: String? = null
 
   init {
     _playbackManager = PlaybackManager(
@@ -136,13 +141,33 @@ class PlaybackController(
     )
     _timelinePositionMs.value = boundedPos
 
+    // Track mute/solo/hide changes the audible mix without changing the active clip: apply
+    // them to the player even while it is running, otherwise the timeline toolbar's mute
+    // buttons only took effect after a manual pause/seek.
+    val mixSignature = PreviewMixPolicy.mixSignature(timeline)
+    val mixChanged = mixSignature != lastMixSignature
+    lastMixSignature = mixSignature
+
     // While playing, do not re-seek the current clip. A timeline snapshot refresh
     // (filters, undo, autosave) must not snap the decoder back to a keyframe.
     // Split of the loaded head keeps the same id but shrinks the source window — rebind.
     val clipChanged = _timelineState.value.activeClip?.id != currentLoadedClipId || sourceWindowChanged
-    if (!_timelineState.value.isPlaying || clipChanged) {
+    val playing = _timelineState.value.isPlaying
+    if (!playing || clipChanged) {
       syncExoPlayerToTimelineState(exact = true)
+    } else if (mixChanged) {
+      // Pure mix change mid-playback: re-apply the gain only. Any seek here would snap the
+      // preview back to a sync frame while the clock keeps running.
+      applyMainLaneGain()
     }
+  }
+
+  /** Re-applies the main lane gain to the loaded clip without touching the position. */
+  private fun applyMainLaneGain() {
+    val state = _timelineState.value
+    val clip = state.activeClip ?: findClipAt(state.timeline, state.positionMs) ?: return
+    if (!clip.isVideo || !isPlayableInPlayer(clip.uri)) return
+    playbackManager.setVolume(mainVideoGain(clip))
   }
 
   fun setTimeline(timeline: Timeline) = updateTimeline(timeline)
@@ -239,7 +264,7 @@ class PlaybackController(
   }
 
   /** Pauses timeline playback and guarantees exact frame lock between playhead and preview. */
-  fun pauseTimeline() {
+  fun pauseTimeline(resyncFrame: Boolean = true) {
     if (disposed) return
     _timelineState.value = _timelineState.value.copy(
       isPlaying = false,
@@ -248,8 +273,10 @@ class PlaybackController(
     playbackManager.pause()
     _state.value = EnginePlaybackState.PAUSED
 
-    // Exact seek on pause eliminates any audio-video stop latency or frame drift
-    syncExoPlayerToTimelineState(exact = true)
+    // Exact seek on pause eliminates any audio-video stop latency or frame drift.
+    // Callers that are about to seek anyway (user seek / scrub end) pass resyncFrame = false:
+    // re-seeking to the old position first only wasted a decoder flush and flashed a stale frame.
+    if (resyncFrame) syncExoPlayerToTimelineState(exact = true)
   }
 
   fun togglePlayPause() {
@@ -259,6 +286,13 @@ class PlaybackController(
   /** Periodic clock tick during playback to advance the playhead and synchronize ExoPlayer. */
   fun updateTimelinePosition(positionMs: Long) {
     if (disposed) return
+    // The trim preview plays its own clipped item: the master clock may keep ticking, but it
+    // must never re-bind the shared player to a timeline clip while the tool is open.
+    if (trimPreviewActive) {
+      _timelinePositionMs.value = positionMs.coerceAtLeast(0L)
+      onTimelinePositionChanged(_timelinePositionMs.value)
+      return
+    }
     val bounded = positionMs.coerceIn(0L, maxOf(_timelineState.value.totalDurationMs, 0L))
     val currentClip = _timelineState.value.activeClip
     val nextClip = findClipAt(_timelineState.value.timeline, bounded)
@@ -302,6 +336,7 @@ class PlaybackController(
   /** Handles seamless transition between clips or entering/exiting gaps. */
   fun handleClipTransition(nextClip: VideoClip?, timelinePosMs: Long, resumeAfter: Boolean = true) {
     if (disposed) return
+    if (trimPreviewActive) return
     _timelineState.value = _timelineState.value.copy(
       activeClip = nextClip,
       positionMs = timelinePosMs,
@@ -312,7 +347,7 @@ class PlaybackController(
       val sourcePos = nextClip.timelineToSourceMs(timelinePosMs)
       ensureClipLoaded(nextClip, sourcePos)
       playbackManager.setPlaybackSpeed(nextClip.speed)
-      playbackManager.setVolume(if (nextClip.isMuted || _timelineState.value.isMuted) 0f else (nextClip.volume * _timelineState.value.volume))
+      playbackManager.setVolume(mainVideoGain(nextClip))
       playbackManager.seekTo(sourcePos)
       if (resumeAfter && _timelineState.value.isPlaying) {
         playbackManager.play()
@@ -330,6 +365,8 @@ class PlaybackController(
 
   private fun syncExoPlayerToTimelineState(exact: Boolean) {
     if (disposed) return
+    // The Trimming tool owns the player while it is open (it loaded its own clipped item).
+    if (trimPreviewActive) return
     val state = _timelineState.value
     val clip = state.activeClip ?: findClipAt(state.timeline, state.positionMs)
 
@@ -337,7 +374,7 @@ class PlaybackController(
       val sourcePos = clip.timelineToSourceMs(state.positionMs)
       ensureClipLoaded(clip, sourcePos)
       playbackManager.setPlaybackSpeed(clip.speed)
-      playbackManager.setVolume(if (clip.isMuted || state.isMuted) 0f else (clip.volume * state.volume))
+      playbackManager.setVolume(mainVideoGain(clip))
 
       internalPlayerSeeking = true
       try {
@@ -387,6 +424,17 @@ class PlaybackController(
 
   private fun isPlayableInPlayer(uriString: String?): Boolean {
     return MediaRelinkManager.isRealPlayableMedia(appContext, uriString)
+  }
+
+  /**
+   * Preview gain of the main video lane: clip mute/volume combined with the track level
+   * mute / solo state (the same gate the export mix uses).
+   */
+  private fun mainVideoGain(clip: VideoClip): Float {
+    val state = _timelineState.value
+    if (state.isMuted) return 0f
+    if (!PreviewMixPolicy.isTrackAudible(state.timeline, TrackType.MAIN_VIDEO)) return 0f
+    return PreviewMixPolicy.clipGain(clip, state.timeline, TrackType.MAIN_VIDEO) * state.volume
   }
 
   private fun findClipAt(timeline: Timeline, posMs: Long): VideoClip? {
@@ -446,8 +494,50 @@ class PlaybackController(
     playbackManager.loadMedia(normalized, startPosMs, autoPlay)
   }
 
+  /** True while the Trimming tool has its clipped preview item loaded in the player. */
+  val isTrimPreviewActive: Boolean get() = trimPreviewActive
+
+  /**
+   * Player level transport for media that is not on the timeline (trim preview).
+   * Using [playTimeline]/[pauseTimeline] here was wrong: those re-seek the player to the
+   * timeline CTI, which for a clipped trim item lands outside its window (the decoder clamps
+   * to the window edge), so pressing play/pause in the trim dialog jumped out of the trim range.
+   */
+  fun playMediaPreview() {
+    if (!disposed) playbackManager.play()
+  }
+
+  fun pauseMediaPreview() {
+    if (!disposed) playbackManager.pause()
+  }
+
+  /** Leaves trim preview mode and drops the clipped item so the full clip is loaded again. */
+  fun endTrimPreview() {
+    trimPreviewActive = false
+    if (disposed) return
+    try {
+      playbackManager.player.repeatMode = Player.REPEAT_MODE_OFF
+      playbackManager.player.playbackParameters = PlaybackParameters(1f)
+    } catch (_: Throwable) {
+    }
+    playbackManager.clearMediaItems()
+    currentLoadedUri = null
+    currentLoadedClipId = null
+    _state.value = EnginePlaybackState.IDLE
+  }
+
   fun loadTrimPreview(uri: Uri, startMs: Long, endMs: Long, speed: Float, volume: Float, loop: Boolean) = enqueue("trimLoad") {
     if (disposed) return@enqueue
+    // The clipped item replaces whatever the timeline had loaded, so freeze the timeline
+    // transport (the master clock may still be running) and mark the player as trim owned.
+    trimPreviewActive = true
+    _timelineState.value = _timelineState.value.copy(
+      isPlaying = false,
+      isScrubbing = false,
+      isSeeking = false,
+      playbackState = EnginePlaybackState.PAUSED
+    )
+    _state.value = EnginePlaybackState.PAUSED
     val item = MediaItem.Builder()
       .setUri(normalizeUri(uri))
       .setClippingConfiguration(
