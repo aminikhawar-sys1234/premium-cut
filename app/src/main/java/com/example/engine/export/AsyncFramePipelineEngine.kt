@@ -27,6 +27,7 @@ import com.example.engine.composition.gpu.WindowSurface
 import com.example.engine.controller.DecoderManager
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
@@ -217,21 +218,40 @@ class AsyncFramePipelineEngine(private val context: Context) {
       throw ExportPipelineException("Timeline has no duration to export.", retryable = false)
     }
 
+    // Mix audio on its own thread so encoder/EGL setup is not blocked behind PCM decode
+    // (that stall is what left the progress ring at 5% for minutes).
+    var hasAudio = audioProcessor.hasActiveAudio(timeline)
+    val mixResult = AtomicReference<ShortArray>(ShortArray(0))
+    val mixError = AtomicReference<Throwable?>(null)
+    val mixLatch = CountDownLatch(1)
+    if (hasAudio) {
+      Thread({
+        try {
+          mixResult.set(
+            runBlocking {
+              audioProcessor.mixTimelineAudio(timeline, durationMs) { userCancelled.get() }
+            }
+          )
+        } catch (t: Throwable) {
+          mixError.set(t)
+        } finally {
+          mixLatch.countDown()
+        }
+      }, "AH-AudioMix").apply {
+        isDaemon = true
+        start()
+      }
+    } else {
+      mixLatch.countDown()
+    }
+
     // Pick codec/size/fps/bitrate the device encoder really supports (4K degrades gracefully).
     val firstPlan = ExportEncoderPlanner.plan(config, requestedWidth, requestedHeight, requestedFps)
     val attempts = buildAttempts(firstPlan)
 
-    // Mix audio once; every retry reuses it.
-    var hasAudio = audioProcessor.hasActiveAudio(timeline)
-    val masterPcm = if (hasAudio) {
-      audioProcessor.mixTimelineAudio(timeline, durationMs) { userCancelled.get() }
-    } else {
-      ShortArray(0)
-    }
     checkUserCancelled()
-    if (masterPcm.isEmpty()) hasAudio = false
-    val audioSampleRate = audioProcessor.sampleRate
-    val audioChannels = audioProcessor.channelCount
+    val audioSampleRate = 48000
+    val audioChannels = 2
 
     var lastError: Throwable? = null
     for ((index, plan) in attempts.withIndex()) {
@@ -245,7 +265,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
           plan = plan,
           durationMs = durationMs,
           hasAudio = hasAudio,
-          masterPcm = masterPcm,
+          mixLatch = mixLatch,
+          mixResult = mixResult,
+          mixError = mixError,
           audioSampleRate = audioSampleRate,
           audioChannels = audioChannels,
           isPaused = isPaused
@@ -306,6 +328,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
         if (Build.VERSION.SDK_INT >= 29) {
           try { setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0) } catch (_: Exception) {}
         }
+        ExportEncoderSpeedHints.applyForFastExport(this, plan.fps)
       }
     }
 
@@ -371,7 +394,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
     plan: EncoderPlan,
     durationMs: Long,
     hasAudio: Boolean,
-    masterPcm: ShortArray,
+    mixLatch: CountDownLatch,
+    mixResult: AtomicReference<ShortArray>,
+    mixError: AtomicReference<Throwable?>,
     audioSampleRate: Int,
     audioChannels: Int,
     isPaused: () -> Boolean
@@ -478,9 +503,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
       failure.get()?.let { throw wrap("GPU initialization failed", it) }
 
+      // Audio mix runs in parallel with encoder/EGL setup. Wait here so the 5% screen is not
+      // blocked on PCM decode before the GPU pipeline is even opened.
+      if (!mixLatch.await(3, TimeUnit.MINUTES)) {
+        throw ExportPipelineException("Timed out mixing timeline audio.", retryable = false)
+      }
+      mixError.get()?.let { throw wrap("Audio mix failed", it) }
+      val masterPcm = mixResult.get() ?: ShortArray(0)
+      val encodeAudio = hasAudio && masterPcm.isNotEmpty()
+
       // 4. Audio encoder. If the timeline has audio, failing to encode it is an error, not a silent drop.
       var audioEncoder: MediaCodec? = null
-      if (hasAudio) {
+      if (encodeAudio) {
         try {
           val aacFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, audioSampleRate, audioChannels).apply {
             setInteger(MediaFormat.KEY_BIT_RATE, 192_000)
@@ -526,7 +560,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
             if (!videoEos.get()) {
               while (!videoEos.get() && !stop.get()) {
-                val vIndex = videoEncoder.dequeueOutputBuffer(vInfo, 5_000L)
+                val vIndex = videoEncoder.dequeueOutputBuffer(vInfo, if (drainedSomething) 0L else 2_000L)
                 if (vIndex >= 0) {
                   drainedSomething = true
                   lastOutputNs.set(System.nanoTime())
@@ -557,7 +591,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
             if (aenc != null && !audioEos.get()) {
               while (!audioEos.get() && !stop.get()) {
-                val aIndex = aenc.dequeueOutputBuffer(aInfo, 5_000L)
+                val aIndex = aenc.dequeueOutputBuffer(aInfo, if (drainedSomething) 0L else 2_000L)
                 if (aIndex >= 0) {
                   drainedSomething = true
                   lastOutputNs.set(System.nanoTime())
@@ -584,7 +618,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
               }
             }
 
-            if (!drainedSomething) Thread.sleep(2)
+            if (!drainedSomething) Thread.sleep(1)
           }
         } catch (t: Throwable) {
           Log.e(tag, "Error in drain thread", t)
@@ -600,10 +634,11 @@ class AsyncFramePipelineEngine(private val context: Context) {
       var fedAudioFrames = 0
 
       /** Feeds PCM up to [upToFrames]; [waitUs] is how long to wait for a free input buffer. */
-      fun feedAudio(upToFrames: Int, waitUs: Long): Boolean {
+      fun feedAudio(upToFrames: Int, waitUs: Long, maxBuffers: Int = Int.MAX_VALUE): Boolean {
         val enc = aenc ?: return true
         val target = min(upToFrames, totalAudioFrames)
-        while (fedAudioFrames < target && !stop.get()) {
+        var buffers = 0
+        while (fedAudioFrames < target && !stop.get() && buffers < maxBuffers) {
           val framesToFeed = min(1024, target - fedAudioFrames)
           val inputIndex = enc.dequeueInputBuffer(waitUs)
           if (inputIndex < 0) return false
@@ -612,13 +647,17 @@ class AsyncFramePipelineEngine(private val context: Context) {
           inputBuffer.order(ByteOrder.nativeOrder())
           val samplesToFeed = framesToFeed * audioChannels
           val startIdx = fedAudioFrames * audioChannels
-          for (k in 0 until samplesToFeed) {
-            val idx = startIdx + k
-            inputBuffer.putShort(if (idx < masterPcm.size) masterPcm[idx] else 0.toShort())
+          val shortView = inputBuffer.asShortBuffer()
+          val available = (masterPcm.size - startIdx).coerceAtLeast(0)
+          val copy = min(samplesToFeed, available)
+          if (copy > 0) shortView.put(masterPcm, startIdx, copy)
+          if (copy < samplesToFeed) {
+            repeat(samplesToFeed - copy) { shortView.put(0) }
           }
           val audioPtsUs = (fedAudioFrames.toLong() * 1_000_000L) / audioSampleRate
           enc.queueInputBuffer(inputIndex, 0, samplesToFeed * 2, audioPtsUs, 0)
           fedAudioFrames += framesToFeed
+          buffers++
         }
         return true
       }
@@ -648,6 +687,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
 
       val undecodableClipIds = HashSet<String>()
+
+      val firstVideoClip = timeline.videoClips.firstOrNull { clip ->
+        clip.isVideo && clip.uri.isNotBlank() &&
+          clip.timelineStartMs < durationMs && (clip.timelineStartMs + clip.durationMs) > 0L
+      }
+      if (firstVideoClip != null) {
+        getOrCreateDecoder(firstVideoClip, setOf(firstVideoClip.id))
+      }
 
       /**
        * Decodes the source frame for [srcPosMs] into the clip's OES texture and latches it (GL thread).
@@ -846,8 +893,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
               transitionAfter = transitionAfter,
               deterministicMasks = true
             )
-            // Complete all rendering before handing the buffer to MediaCodec
-            GLES20.glFinish()
+            // Submit GPU work without a full GPU/CPU stall. eglSwapBuffers already publishes
+            // the frame to the encoder; glFinish serialized every frame and made long exports
+            // crawl after the encoder queue filled (typically around the midpoint).
+            GLES20.glFlush()
 
             // Black-frame guard: sample the real back buffer on a few frames (cheap, diagnostic + hard fail
             // only if EVERY sampled frame of a video project is black).
@@ -867,9 +916,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
             metrics.gpuRenderTimeNs.addAndGet(System.nanoTime() - renderStart)
             metrics.gpuFrames.incrementAndGet()
 
-            // 4. Audio, pro-rata with the video position (never blocks the GL thread for long)
+            // 4. Audio, pro-rata with the video position. Cap buffers per frame so a catch-up
+            // burst cannot stall the GL/encoder pipeline around the midpoint of a long export.
             if (aenc != null) {
-              feedAudio((((frameIndex + 1).toDouble() * audioSampleRate) / fps).toInt(), 2_000L)
+              feedAudio((((frameIndex + 1).toDouble() * audioSampleRate) / fps).toInt(), 0L, maxBuffers = 3)
             }
           }
 
@@ -1013,21 +1063,22 @@ class AsyncFramePipelineEngine(private val context: Context) {
     if (t is ExportPipelineException || t is CancellationException) t
     else ExportPipelineException("$prefix: ${t.message ?: t.javaClass.simpleName}", t)
 
-  /** Samples an 8x8 grid of the current (back) framebuffer; true when every sample is essentially black. */
+  /** Samples an 8x8 block at the centre of the current (back) framebuffer; true when every sample is essentially black. */
   private fun isBackBufferBlack(width: Int, height: Int): Boolean {
     return try {
-      val px = ByteBuffer.allocateDirect(4)
-      for (gy in 0 until 8) {
-        for (gx in 0 until 8) {
-          val x = ((gx + 0.5f) / 8f * width).toInt().coerceIn(0, width - 1)
-          val y = ((gy + 0.5f) / 8f * height).toInt().coerceIn(0, height - 1)
-          px.clear()
-          GLES20.glReadPixels(x, y, 1, 1, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px)
-          val r = px.get(0).toInt() and 0xFF
-          val g = px.get(1).toInt() and 0xFF
-          val b = px.get(2).toInt() and 0xFF
-          if (r > 6 || g > 6 || b > 6) return false
-        }
+      val size = 8
+      val px = ByteBuffer.allocateDirect(size * size * 4)
+      val x = ((width - size) / 2).coerceAtLeast(0)
+      val y = ((height - size) / 2).coerceAtLeast(0)
+      GLES20.glReadPixels(x, y, size, size, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px)
+      var i = 0
+      while (i < size * size) {
+        val base = i * 4
+        val r = px.get(base).toInt() and 0xFF
+        val g = px.get(base + 1).toInt() and 0xFF
+        val b = px.get(base + 2).toInt() and 0xFF
+        if (r > 6 || g > 6 || b > 6) return false
+        i++
       }
       true
     } catch (e: Exception) {

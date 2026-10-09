@@ -15,6 +15,7 @@ import com.example.domain.model.VideoClip
 import com.example.engine.media.MediaRelinkManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
@@ -476,46 +477,54 @@ class AudioExportProcessor(
             decoder.configure(format, null, null, 0)
             decoder.start()
 
-            val pcmBytes = mutableListOf<Byte>()
+            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
+                format.getLong(MediaFormat.KEY_DURATION)
+            } else {
+                0L
+            }
+            val pcmOut = PcmByteSink.create(PcmByteSink.estimatedPcmBytes(durationUs, srcSampleRate, srcChannels))
+            val scratch = ByteArray(8192)
             val bufferInfo = MediaCodec.BufferInfo()
-            var isEos = false
+            var sawInputEos = false
+            var sawOutputEos = false
+            val deadlineNs = System.nanoTime() + 180_000_000_000L
 
-            while (!isEos) {
-                val inIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
-                if (inIndex >= 0) {
-                    val inputBuf = decoder.getInputBuffer(inIndex) ?: continue
-                    val sampleSize = extractor.readSampleData(inputBuf, 0)
-                    if (sampleSize < 0) {
-                        decoder.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        isEos = true
-                    } else {
-                        decoder.queueInputBuffer(inIndex, 0, sampleSize, extractor.sampleTime, 0)
-                        extractor.advance()
+            while (!sawOutputEos && System.nanoTime() < deadlineNs) {
+                if (!sawInputEos) {
+                    val inIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
+                    if (inIndex >= 0) {
+                        val inputBuf = decoder.getInputBuffer(inIndex)
+                        if (inputBuf != null) {
+                            val sampleSize = extractor.readSampleData(inputBuf, 0)
+                            if (sampleSize < 0) {
+                                decoder.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                                sawInputEos = true
+                            } else {
+                                decoder.queueInputBuffer(inIndex, 0, sampleSize, extractor.sampleTime, 0)
+                                extractor.advance()
+                            }
+                        }
                     }
                 }
 
-                var outIndex = decoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
-                while (outIndex >= 0) {
+                val outIndex = decoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
+                if (outIndex >= 0) {
                     val outBuf = decoder.getOutputBuffer(outIndex)
-                    if (outBuf != null && bufferInfo.size > 0) {
+                    if (outBuf != null && bufferInfo.size > 0 &&
+                        (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
+                    ) {
                         outBuf.position(bufferInfo.offset)
                         outBuf.limit(bufferInfo.offset + bufferInfo.size)
-                        val chunk = ByteArray(bufferInfo.size)
-                        outBuf.get(chunk)
-                        pcmBytes.addAll(chunk.toList())
+                        PcmByteSink.append(pcmOut, outBuf, scratch)
                     }
                     decoder.releaseOutputBuffer(outIndex, false)
-                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) break
-                    outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
+                    if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                        sawOutputEos = true
+                    }
                 }
             }
 
-            val byteArr = pcmBytes.toByteArray()
-            val shortBuf = ByteBuffer.wrap(byteArr).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-            val shorts = ShortArray(shortBuf.remaining())
-            shortBuf.get(shorts)
-
-            return DecodedPcm(shorts, srcSampleRate, srcChannels)
+            return DecodedPcm(PcmByteSink.toLittleEndianShorts(pcmOut), srcSampleRate, srcChannels)
         } catch (e: Exception) {
             Log.e(TAG, "Failed decoding PCM from $uriString: ${e.message}")
             return null
@@ -750,4 +759,39 @@ class AudioExportProcessor(
         }
         return (clipped * 32767f).toInt().toShort()
     }
+}
+
+/**
+ * Grows a PCM byte stream without boxing every sample. The previous
+ * `MutableList<Byte>.addAll(chunk.toList())` path allocated tens of millions of
+ * boxed Bytes for a few minutes of audio and stalled export at 5% for minutes.
+ */
+internal object PcmByteSink {
+  fun create(estimatedBytes: Int): ByteArrayOutputStream {
+    val cap = estimatedBytes.coerceIn(8 * 1024, 256 * 1024 * 1024)
+    return ByteArrayOutputStream(cap)
+  }
+
+  fun estimatedPcmBytes(durationUs: Long, sampleRate: Int, channels: Int): Int {
+    if (durationUs <= 0L || sampleRate <= 0 || channels <= 0) return 1024 * 1024
+    val bytes = (durationUs / 1_000_000.0) * sampleRate * channels * 2.0
+    return bytes.toInt().coerceIn(64 * 1024, 256 * 1024 * 1024)
+  }
+
+  fun append(out: ByteArrayOutputStream, src: ByteBuffer, scratch: ByteArray) {
+    while (src.hasRemaining()) {
+      val n = minOf(scratch.size, src.remaining())
+      src.get(scratch, 0, n)
+      out.write(scratch, 0, n)
+    }
+  }
+
+  fun toLittleEndianShorts(out: ByteArrayOutputStream): ShortArray {
+    val byteArr = out.toByteArray()
+    if (byteArr.isEmpty()) return ShortArray(0)
+    val shortBuf = ByteBuffer.wrap(byteArr).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
+    val shorts = ShortArray(shortBuf.remaining())
+    shortBuf.get(shorts)
+    return shorts
+  }
 }
