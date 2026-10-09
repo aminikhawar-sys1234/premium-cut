@@ -503,54 +503,87 @@ class AudioExportProcessor(
             decoder.configure(format, null, null, 0)
             decoder.start()
 
-            val durationUs = if (format.containsKey(MediaFormat.KEY_DURATION)) {
-                format.getLong(MediaFormat.KEY_DURATION)
-            } else {
-                0L
+            val windowStartUs = (windowStartMs.coerceAtLeast(0L)) * 1000L
+            val windowEndUs = if (windowEndMs == Long.MAX_VALUE) Long.MAX_VALUE else windowEndMs.coerceAtLeast(windowStartMs) * 1000L
+            if (windowStartUs > 0L) {
+                // Skip straight to the window. A failed seek only costs speed, never audio: the
+                // per-buffer skip below drops everything that lands before the window start.
+                try {
+                    extractor.seekTo(windowStartUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
+                    decoder.flush()
+                } catch (seekError: Exception) {
+                    Log.w(TAG, "Audio seek to ${windowStartMs}ms failed, decoding from the start: ${seekError.message}")
+                }
             }
-            val pcmOut = PcmByteSink.create(PcmByteSink.estimatedPcmBytes(durationUs, srcSampleRate, srcChannels))
-            val scratch = ByteArray(8192)
-            val bufferInfo = MediaCodec.BufferInfo()
-            var sawInputEos = false
-            var sawOutputEos = false
-            val deadlineNs = System.nanoTime() + 180_000_000_000L
 
-            while (!sawOutputEos && System.nanoTime() < deadlineNs) {
-                if (!sawInputEos) {
-                    val inIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
-                    if (inIndex >= 0) {
-                        val inputBuf = decoder.getInputBuffer(inIndex)
-                        if (inputBuf != null) {
-                            val sampleSize = extractor.readSampleData(inputBuf, 0)
-                            if (sampleSize < 0) {
-                                decoder.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                                sawInputEos = true
-                            } else {
-                                decoder.queueInputBuffer(inIndex, 0, sampleSize, extractor.sampleTime, 0)
-                                extractor.advance()
-                            }
-                        }
+            var shorts = ShortArray(
+                if (windowEndUs == Long.MAX_VALUE) INITIAL_PCM_SAMPLES
+                else (((windowEndUs - windowStartUs) * srcSampleRate / 1_000_000L) * srcChannels)
+                    .coerceIn(INITIAL_PCM_SAMPLES.toLong(), MAX_PREALLOC_SAMPLES.toLong()).toInt()
+            )
+            var sampleCount = 0
+            var reachedWindowEnd = false
+            val bufferInfo = MediaCodec.BufferInfo()
+            var isEos = false
+
+            fun append(buffer: ByteBuffer, framesInBuffer: Int, skipFrames: Int) {
+                val usableFrames = framesInBuffer - skipFrames
+                if (usableFrames <= 0) return
+                val needed = sampleCount + usableFrames * srcChannels
+                if (needed > shorts.size) {
+                    var newSize = shorts.size
+                    while (newSize < needed) newSize = newSize shl 1
+                    shorts = shorts.copyOf(newSize)
+                }
+                buffer.position(bufferInfo.offset + skipFrames * srcChannels * 2)
+                buffer.limit(bufferInfo.offset + bufferInfo.size)
+                buffer.order(ByteOrder.LITTLE_ENDIAN).asShortBuffer().get(shorts, sampleCount, usableFrames * srcChannels)
+                sampleCount += usableFrames * srcChannels
+            }
+
+            while (!isEos && !reachedWindowEnd) {
+                val inIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
+                if (inIndex >= 0) {
+                    val inputBuf = decoder.getInputBuffer(inIndex) ?: continue
+                    val sampleSize = extractor.readSampleData(inputBuf, 0)
+                    if (sampleSize < 0) {
+                        decoder.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        isEos = true
+                    } else {
+                        decoder.queueInputBuffer(inIndex, 0, sampleSize, extractor.sampleTime, 0)
+                        extractor.advance()
                     }
                 }
 
-                val outIndex = decoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
-                if (outIndex >= 0) {
+                var outIndex = decoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
+                while (outIndex >= 0) {
                     val outBuf = decoder.getOutputBuffer(outIndex)
-                    if (outBuf != null && bufferInfo.size > 0 &&
-                        (bufferInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0
-                    ) {
-                        outBuf.position(bufferInfo.offset)
-                        outBuf.limit(bufferInfo.offset + bufferInfo.size)
-                        PcmByteSink.append(pcmOut, outBuf, scratch)
+                    if (outBuf != null && bufferInfo.size >= srcChannels * 2) {
+                        val ptsUs = bufferInfo.presentationTimeUs
+                        val framesInBuffer = bufferInfo.size / (srcChannels * 2)
+                        val bufferEndUs = ptsUs + framesInBuffer * 1_000_000L / srcSampleRate
+                        if (bufferEndUs > windowStartUs) {
+                            // Drop the samples a seek landed before the window start.
+                            val skipFrames = if (ptsUs >= windowStartUs) 0 else
+                                (((windowStartUs - ptsUs) * srcSampleRate) / 1_000_000L).toInt().coerceIn(0, framesInBuffer)
+                            append(outBuf, framesInBuffer, skipFrames)
+                        }
+                        if (windowEndUs != Long.MAX_VALUE && bufferEndUs >= windowEndUs) {
+                            reachedWindowEnd = true
+                        }
                     }
                     decoder.releaseOutputBuffer(outIndex, false)
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        sawOutputEos = true
+                        isEos = true
+                        break
                     }
+                    if (reachedWindowEnd) break
+                    outIndex = decoder.dequeueOutputBuffer(bufferInfo, 0)
                 }
             }
 
-            return DecodedPcm(PcmByteSink.toLittleEndianShorts(pcmOut), srcSampleRate, srcChannels)
+            if (sampleCount == 0) return null
+            return DecodedPcm(if (sampleCount == shorts.size) shorts else shorts.copyOf(sampleCount), srcSampleRate, srcChannels)
         } catch (e: Exception) {
             Log.e(TAG, "Failed decoding PCM from $uriString: ${e.message}")
             return null
@@ -790,6 +823,37 @@ class AudioExportProcessor(
         return (clipped * 32767f).toInt().toShort()
     }
 }
+
+/**
+ * Source window a track actually uses, in milliseconds: `[start, end)` of the source file that the
+ * mix needs. Pure and unit tested ([AudioExportWindowTest]); the mixer uses it to bound both the
+ * decode and the memory of every track.
+ *
+ * `sourceMs = timelineRelMs * speed` (see `AudioClip.timelineToSourceMs`), so a 2x clip consumes
+ * twice its timeline length of source, a 0.5x clip half of it.
+ */
+fun audioSourceWindow(track: AudioTrackDescriptor): Pair<Long, Long> {
+    val speed = track.speed.coerceIn(0.25f, 4.0f)
+    val neededMs = (track.durationMs.coerceAtLeast(1L) * speed).toLong()
+    val hasSourceRange = track.sourceEndMs > track.sourceStartMs
+    if (track.isReversed && hasSourceRange) {
+        // Reversed playback starts at the source end and walks backwards (sourceMs =
+        // sourceEndMs - rel * speed), so the window is anchored to the end. The margin sits
+        // *before* the window because the decoded buffer is reversed afterwards.
+        val endMs = track.sourceEndMs
+        return maxOf(0L, endMs - neededMs - AUDIO_WINDOW_MARGIN_MS) to endMs
+    }
+    val startMs = track.sourceStartMs.coerceAtLeast(0L)
+    // A small margin keeps codec priming / frame rounding inside the window.
+    val endMs = minOf(
+        if (hasSourceRange) track.sourceEndMs else Long.MAX_VALUE,
+        startMs + neededMs + AUDIO_WINDOW_MARGIN_MS
+    )
+    return startMs to maxOf(endMs, startMs + 1L)
+}
+
+/** Extra source material decoded past the used window (codec priming / rounding). */
+private const val AUDIO_WINDOW_MARGIN_MS = 250L
 
 /**
  * Grows a PCM byte stream without boxing every sample. The previous
