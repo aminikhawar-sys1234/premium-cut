@@ -952,7 +952,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
             win.setPresentationTime(targetPtsNs)
             val swapStart = System.nanoTime()
             if (!win.swapBuffers()) {
-              throw ExportPipelineException("Submitting frame $frameIndex to the video encoder failed (eglSwapBuffers).")
+              // Capture the real EGL error instead of discarding it, so the cause (e.g. a dead encoder
+              // input surface vs. buffer allocation failure) is visible in logcat and in the export error.
+              val eglError = android.opengl.EGL14.eglGetError()
+              Log.e(
+                tag,
+                "eglSwapBuffers failed on frame $frameIndex (${exportWidth}x$exportHeight, " +
+                  "codec=${videoEncoder.name}, mime=${plan.mime}, eglError=0x${Integer.toHexString(eglError)})"
+              )
+              throw ExportPipelineException(
+                "Submitting frame $frameIndex to the video encoder failed (eglSwapBuffers). " +
+                  "EGL error 0x${Integer.toHexString(eglError)}."
+              )
             }
             metrics.encodeWaitTimeNs.addAndGet(System.nanoTime() - swapStart)
             metrics.gpuRenderTimeNs.addAndGet(System.nanoTime() - composeStart)
