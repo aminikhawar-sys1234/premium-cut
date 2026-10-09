@@ -23,7 +23,7 @@ object TrackingSampler {
     const val RECOVERY_WINDOW_FRAMES = 24
     /** While recovering, run the expensive detector every N lost frames instead of every frame. */
     const val LOST_REDETECT_INTERVAL = 3
-    const val DETECT_WIDTH = 256
+    const val DETECT_WIDTH = 640
     const val TRACK_WIDTH = 320
     const val FEATURE_WIDTH = 480
     const val PROGRESS_MIN_MS = 80L
