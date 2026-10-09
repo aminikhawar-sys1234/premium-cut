@@ -20,6 +20,7 @@ import com.example.domain.model.VideoClip
 import com.example.domain.model.timelineToSourceMs
 import com.example.engine.controller.CustomVideoEngineController
 import com.example.engine.controller.PlaybackSyncPolicy
+import com.example.engine.controller.PreviewMixPolicy
 import com.example.engine.effects.media3.Media3EffectPipeline
 import com.example.engine.effects.media3.PreviewFilterEffects
 import com.example.engine.media.MediaRelinkManager
@@ -47,7 +48,13 @@ class VideoPlaybackEngine(
   private val context: Context,
   onTimelinePositionChanged: (Long) -> Unit,
   onPlaybackEnded: () -> Unit,
-  private val proxyEngine: ProxyMediaEngine? = null
+  private val proxyEngine: ProxyMediaEngine? = null,
+  /**
+   * Called when the system paused playback (audio focus lost to another app, headphones
+   * unplugged). The editor playhead is clock driven, so the timeline transport has to stop
+   * with the player; otherwise the CTI keeps counting while the picture is frozen.
+   */
+  private val onPlaybackInterrupted: () -> Unit = {}
 ) {
   companion object {
     private const val TAG = "VideoPlaybackEngine"
@@ -69,6 +76,14 @@ class VideoPlaybackEngine(
   val playerError: StateFlow<String?> = _playerError.asStateFlow()
   private val _trimPlaybackPositionMs = MutableStateFlow(0L)
   val trimPlaybackPositionMs: StateFlow<Long> = _trimPlaybackPositionMs.asStateFlow()
+  /**
+   * Ids of the overlay clips whose ExoPlayer currently exists.
+   * The preview surface is a plain texture view inside an AndroidView, so the UI cannot
+   * observe `getOverlayPlayer()` (a map lookup). Publishing the id set makes the video
+   * layer appear as soon as its player is created instead of after an unrelated recomposition.
+   */
+  private val _overlayPlayerIds = MutableStateFlow<Set<String>>(emptySet())
+  val overlayPlayerIds: StateFlow<Set<String>> = _overlayPlayerIds.asStateFlow()
 
   private var currentTimeline = Timeline()
   private var currentPosMs = 0L
@@ -117,9 +132,27 @@ class VideoPlaybackEngine(
         _isPlaying.value = isPlaying
         if (isTrimPreviewMode && isPlaying) startTrimPolling() else trimPollJob?.cancel()
       }
+      override fun onPlaybackStateChanged(state: Int) {
+        // A clip that loads fine again must clear the previous error, otherwise the stale
+        // message stayed on the preview for the rest of the session.
+        if (state == Player.STATE_READY) _playerError.value = null
+      }
       override fun onPlayerError(error: PlaybackException) {
         _playerError.value = "${error.errorCodeName}: ${error.message}"
         Log.e(TAG, "Preview player error", error)
+      }
+
+      override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+        if (playWhenReady) return
+        val systemPausedUs = reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_FOCUS_LOSS ||
+          reason == Player.PLAY_WHEN_READY_CHANGE_REASON_AUDIO_BECOMING_NOISY
+        if (!systemPausedUs) return
+        Log.d(TAG, "Playback interrupted by the system (reason=$reason)")
+        engineController.pause()
+        overlayPlayers.values.forEach { try { it.pause() } catch (_: Exception) {} }
+        audioTrackPlayers.values.forEach { try { it.pause() } catch (_: Exception) {} }
+        _isPlaying.value = false
+        onPlaybackInterrupted()
       }
     })
   }
@@ -128,10 +161,12 @@ class VideoPlaybackEngine(
 
   /**
    * Applies the selected Filters-tools look to the live ExoPlayer preview.
-   * The ColorMatrix argument is the same combined look used by export; the
-   * Media3 ColorGrading shader is built from the active clip's filter + adjustments.
+   *
+   * The look is rebuilt from the active clip's filter + adjustments (the same ColorGrading
+   * shader the export uses), so the incoming export ColorMatrix is intentionally unused.
+   * It used to be silently dropped, which made the call look like it did nothing.
    */
-  fun applyVideoFilter(colorMatrix: ColorMatrix?) {
+  fun applyVideoFilter(@Suppress("UNUSED_PARAMETER") colorMatrix: ColorMatrix?) {
     applyActiveLookToPlayers()
   }
 
@@ -173,9 +208,21 @@ class VideoPlaybackEngine(
     if (state == Player.STATE_BUFFERING || state == Player.STATE_IDLE) return false
     val playing = try { p.isPlaying } catch (_: Exception) { return false }
     val playerPos = try { p.currentPosition } catch (_: Exception) { return false }
-    val since = SystemClock.elapsedRealtime() - (secondaryCorrectionAtMs[playerId] ?: Long.MIN_VALUE)
+    // No recorded correction yet: treat it as "long ago" so the cooldown check passes.
+    // (The old Long.MIN_VALUE sentinel overflowed into a negative "since", defeating the check.)
+    val lastCorrection = secondaryCorrectionAtMs[playerId]
+    val since = if (lastCorrection == null) Long.MAX_VALUE else SystemClock.elapsedRealtime() - lastCorrection
     return PlaybackSyncPolicy.shouldCorrectSourceDrift(playerPos, sourceMs, playing, since)
   }
+
+  /**
+   * True when a secondary player that already reached its source end has to be restarted.
+   * ExoPlayer keeps `playWhenReady = true` and `isPlaying = false` in STATE_ENDED, so the
+   * old code neither seeked nor resumed it: audio / PIP stayed silent for the rest of the
+   * session once a source had played through (second pass, or a seek back into the clip).
+   */
+  private fun needsRestartFromEnd(p: ExoPlayer): Boolean =
+    try { p.playbackState == Player.STATE_ENDED } catch (_: Exception) { false }
 
   /** Exact seek so overlay and audio players stay on the CTI instead of the previous keyframe. */
   private fun seekSecondaryExact(playerId: String, p: ExoPlayer, sourceMs: Long) {
@@ -228,12 +275,13 @@ class VideoPlaybackEngine(
         }
         try {
           p.playbackParameters = androidx.media3.common.PlaybackParameters(overlay.speed.coerceAtLeast(0.01f))
-          p.volume = if (overlay.isMuted) 0f else overlay.volume
+          // Track level mute / solo gate, same mix rule as the export.
+          p.volume = PreviewMixPolicy.clipGain(overlay, currentTimeline, TrackType.OVERLAY)
           val active = posMs >= overlay.timelineStartMs && posMs < overlay.timelineStartMs + overlay.durationMs
           val source = overlay.timelineToSourceMs(posMs)
           if (active && engineController.timelineSyncManager.isPlaying) {
             val isPlayWhenReady = try { p.playWhenReady } catch (_: Exception) { false }
-            if (!isPlayWhenReady) {
+            if (!isPlayWhenReady || needsRestartFromEnd(p)) {
               seekSecondaryExact(overlay.id, p, source)
               p.playWhenReady = true
             } else if (needsDriftReseek(overlay.id, p, source)) {
@@ -254,6 +302,7 @@ class VideoPlaybackEngine(
         }
       }
       applyOverlayLooks()
+      _overlayPlayerIds.value = overlayPlayers.keys.toSet()
     } catch (e: Exception) {
       Log.w(TAG, "syncOverlayPlayers error", e)
     }
@@ -264,15 +313,15 @@ class VideoPlaybackEngine(
     if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return
     try {
       val hasSolo = currentTimeline.audioClips.any { it.isSolo }
-      val isAudioTrackMuted = currentTimeline.trackSettings[TrackType.AUDIO]?.isMuted == true
-      val isAudioTrackHidden = currentTimeline.trackSettings[TrackType.AUDIO]?.isHidden == true
-      val activeAudios = if (!isAudioTrackHidden) {
-        currentTimeline.audioClips.filter {
-          !it.isHidden && !it.isMuted && !isAudioTrackMuted &&
-          (!hasSolo || it.isSolo) &&
-          isPlayableInPlayer(it.uri)
-        }
-      } else emptyList()
+      // Same gate as AudioExportProcessor.collectAudioTracks(): mute/solo only. Hiding a track
+      // switches the picture off, it must not silence the mix (a hidden audio track is still
+      // exported, so muting it in the preview would be a preview/export divergence).
+      val isAudioTrackMuted = !PreviewMixPolicy.isTrackAudible(currentTimeline, TrackType.AUDIO)
+      val activeAudios = currentTimeline.audioClips.filter {
+        !it.isHidden && !it.isMuted && !isAudioTrackMuted &&
+        (!hasSolo || it.isSolo) &&
+        isPlayableInPlayer(it.uri)
+      }
 
       val activeIds = activeAudios.map { it.id }.toSet()
       audioTrackPlayers.keys.toList().filter { it !in activeIds }.forEach { id ->
@@ -318,7 +367,9 @@ class VideoPlaybackEngine(
           val source = audio.timelineToSourceMs(posMs)
           if (active && engineController.timelineSyncManager.isPlaying) {
             val isPlayWhenReady = try { p.playWhenReady } catch (_: Exception) { false }
-            if (!isPlayWhenReady) {
+            // A source that already played to its end must be seeked back, otherwise the
+            // second playback pass of the project (or a jump back into the clip) stayed silent.
+            if (!isPlayWhenReady || needsRestartFromEnd(p)) {
               seekSecondaryExact(audio.id, p, source)
               p.playWhenReady = true
             } else if (needsDriftReseek(audio.id, p, source)) {
@@ -454,16 +505,29 @@ class VideoPlaybackEngine(
     seekTrimPreviewToSourceMs(if (forward) _trimPlaybackPositionMs.value + delta else _trimPlaybackPositionMs.value - delta)
   }
 
-  fun pauseTrimPreview() { if (isTrimPreviewMode) engineController.playbackController.pause() }
-  fun playTrimPreview() { if (isTrimPreviewMode) engineController.playbackController.play() }
-  fun toggleTrimPlayPause() { if (isTrimPreviewMode) engineController.playbackController.let { if (it.isPlaying) it.pause() else it.play() } }
+  // Trim preview transport is player level on purpose: the timeline transport (play/pause)
+  // re-seeks to the timeline CTI, which is outside the clipped trim window. See
+  // PlaybackController.playMediaPreview().
+  fun pauseTrimPreview() { if (isTrimPreviewMode) engineController.playbackController.pauseMediaPreview() }
+  fun playTrimPreview() { if (isTrimPreviewMode) engineController.playbackController.playMediaPreview() }
+
+  fun toggleTrimPlayPause() {
+    if (!isTrimPreviewMode) return
+    val controller = engineController.playbackController
+    val player = engineController.player
+    val playing = try { player.isPlaying } catch (_: Exception) { false }
+    if (playing) controller.pauseMediaPreview() else controller.playMediaPreview()
+  }
 
   fun exitTrimPreview() {
     if (!isTrimPreviewMode) return
     isTrimPreviewMode = false
     trimPreviewClip = null
     trimPollJob?.cancel()
-    engineController.playbackController.setRepeatMode(Player.REPEAT_MODE_OFF)
+    // The trim tool loaded a clipped MediaItem into the shared preview player. Dropping it is
+    // mandatory: the old exit kept the clipped item loaded (the uri cache still matched), so
+    // the preview stayed trapped inside the trim window until another clip was selected.
+    engineController.playbackController.endTrimPreview()
     engineController.seekTo(currentPosMs)
   }
 

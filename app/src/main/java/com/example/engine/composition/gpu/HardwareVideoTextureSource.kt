@@ -44,6 +44,8 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
     /** How long to wait for a frame released to the Surface to arrive at the SurfaceTexture. */
     private const val FRAME_ARRIVAL_TIMEOUT_MS = 1_500L
     private const val JUMP_SEEK_THRESHOLD_US = 1_200_000L
+    /** Max samples queued per decode step while keeping the codec fed (decoder queue depth). */
+    private const val MAX_INPUT_BURST = 16
   }
 
   var oesTextureId: Int = 0
@@ -94,6 +96,8 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
 
   private var ownedHandlerThread: HandlerThread? = null
   private val surfaceLock = Any()
+  /** Signalled by [onFrameAvailable]; the GL thread waits on it instead of polling. */
+  private val frameArrivalLock = Object()
 
   val transformMatrix = FloatArray(16).apply { Matrix.setIdentityM(this, 0) }
   private var loggedTransform = false
@@ -250,6 +254,9 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
 
   override fun onFrameAvailable(st: SurfaceTexture) {
     frameAvailable.set(true)
+    // Wake the GL thread that is waiting for this picture. Polling with Thread.sleep(1) instead
+    // woke up late (sleep granularity is coarser than 1 ms) and burned CPU on thousands of frames.
+    synchronized(frameArrivalLock) { frameArrivalLock.notifyAll() }
   }
 
   /**
@@ -324,8 +331,10 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
         eos = false
         heldIndex = -1
       } else {
-        feedInput(c, ex)
-        val out = c.dequeueOutputBuffer(info, DEFAULT_TIMEOUT_US)
+        // Queue everything the codec accepts first, then wait for output only if the input was
+        // already saturated (otherwise the output is normally ready by now).
+        val fed = feedCodec(c, ex)
+        val out = c.dequeueOutputBuffer(info, if (fed) 0L else DEFAULT_TIMEOUT_US)
         if (out >= 0) outputsDequeued++
         when {
           out == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
@@ -388,28 +397,55 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
     return hasPicture
   }
 
-  private fun feedInput(c: MediaCodec, ex: MediaExtractor) {
-    if (isInputEos) return
-    val inputIndex = c.dequeueInputBuffer(DEFAULT_TIMEOUT_US)
-    if (inputIndex < 0) return
-    val input = c.getInputBuffer(inputIndex) ?: return
+  /**
+   * Queues one compressed sample into the codec.
+   *
+   * @param timeoutUs how long to wait for a free input buffer; pass 0 for the "keep the codec
+   *   fed" loop that must never block the frame request.
+   * @return true when a sample was queued.
+   */
+  private fun feedInput(c: MediaCodec, ex: MediaExtractor, timeoutUs: Long = DEFAULT_TIMEOUT_US): Boolean {
+    if (isInputEos) return false
+    val inputIndex = c.dequeueInputBuffer(timeoutUs)
+    if (inputIndex < 0) return false
+    val input = c.getInputBuffer(inputIndex) ?: return false
     input.clear()
     val sampleSize = ex.readSampleData(input, 0)
     if (sampleSize < 0) {
       c.queueInputBuffer(inputIndex, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
       isInputEos = true
-    } else {
-      c.queueInputBuffer(inputIndex, 0, sampleSize, ex.sampleTime.coerceAtLeast(0L), 0)
-      inputsQueued++
-      ex.advance()
+      return false
     }
+    c.queueInputBuffer(inputIndex, 0, sampleSize, ex.sampleTime.coerceAtLeast(0L), 0)
+    inputsQueued++
+    ex.advance()
+    return true
+  }
+
+  /**
+   * Fills the codec's input queue without blocking. A hardware decoder only emits a picture once
+   * enough input is queued (pipeline depth plus reordering), so feeding one sample per output
+   * dequeue made every frame pay a 2 ms "no output yet" timeout several times over.
+   */
+  private fun feedCodec(c: MediaCodec, ex: MediaExtractor): Boolean {
+    var fed = false
+    var guard = 0
+    while (guard++ < MAX_INPUT_BURST && feedInput(c, ex, 0L)) fed = true
+    return fed
   }
 
   private fun awaitFrameArrival(cancelled: AtomicBoolean): Boolean {
     val deadline = SystemClock.elapsedRealtime() + FRAME_ARRIVAL_TIMEOUT_MS
-    while (!frameAvailable.get()) {
-      if (cancelled.get() || SystemClock.elapsedRealtime() > deadline) return false
-      try { Thread.sleep(1) } catch (_: InterruptedException) { return false }
+    synchronized(frameArrivalLock) {
+      while (!frameAvailable.get()) {
+        val remaining = deadline - SystemClock.elapsedRealtime()
+        if (cancelled.get() || remaining <= 0L) return false
+        try {
+          frameArrivalLock.wait(remaining)
+        } catch (_: InterruptedException) {
+          return false
+        }
+      }
     }
     return true
   }

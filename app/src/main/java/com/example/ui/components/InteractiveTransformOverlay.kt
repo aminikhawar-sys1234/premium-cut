@@ -206,6 +206,12 @@ fun InteractiveTransformOverlay(
   onDuplicateClip: (String) -> Unit,
   onEditText: ((TextClip) -> Unit)? = null,
   getOverlayPlayer: ((String) -> androidx.media3.exoplayer.ExoPlayer?)? = null,
+  /**
+   * Overlay clips whose player exists. Passing the id set (instead of only the lookup lambda)
+   * makes the video PIP layer recompose as soon as the player is created — before, a freshly
+   * added PIP video kept showing the image placeholder until something else recomposed.
+   */
+  overlayPlayerIds: Set<String> = emptySet(),
   modifier: Modifier = Modifier
 ) {
   val context = LocalContext.current
@@ -347,7 +353,9 @@ fun InteractiveTransformOverlay(
         }
 
         val isRealVideoOverlay = overlay.isVideo && MediaRelinkManager.isRealPlayableMedia(context, overlay.uri)
-        val overlayPlayer = if (isRealVideoOverlay) getOverlayPlayer?.invoke(overlay.id) else null
+        val overlayPlayer = if (isRealVideoOverlay && overlay.id in overlayPlayerIds) {
+          getOverlayPlayer?.invoke(overlay.id)
+        } else null
 
         if (isRealVideoOverlay && overlayPlayer != null) {
           AndroidView(
@@ -357,29 +365,15 @@ fun InteractiveTransformOverlay(
                   ViewGroup.LayoutParams.MATCH_PARENT,
                   ViewGroup.LayoutParams.MATCH_PARENT
                 )
-                try {
-                  overlayPlayer.setVideoTextureView(this)
-                } catch (e: Exception) {
-                  android.util.Log.w("InteractiveTransformOverlay", "Failed to attach TextureView to overlayPlayer", e)
-                }
-                tag = overlayPlayer
+                com.example.ui.components.player.PreviewVideoSurfaceRegistry.bind(overlayPlayer, this)
               }
             },
             update = { tv ->
-              if (tv.tag != overlayPlayer) {
-                try {
-                  overlayPlayer.setVideoTextureView(tv)
-                  tv.tag = overlayPlayer
-                } catch (e: Exception) {
-                  android.util.Log.w("InteractiveTransformOverlay", "Failed to rebind TextureView to overlayPlayer", e)
-                }
-              }
+              com.example.ui.components.player.PreviewVideoSurfaceRegistry.bind(overlayPlayer, tv)
             },
             onReset = { /* Keep texture view intact */ },
             onRelease = { tv ->
-              try {
-                overlayPlayer.clearVideoTextureView(tv)
-              } catch (_: Exception) {}
+              com.example.ui.components.player.PreviewVideoSurfaceRegistry.release(overlayPlayer, tv)
             },
             modifier = Modifier.fillMaxSize()
           )

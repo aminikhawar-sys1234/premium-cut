@@ -9,9 +9,13 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.example.ui.AppScreen
 import com.example.ui.StudioViewModel
@@ -27,6 +31,17 @@ class MainActivity : ComponentActivity() {
       MyApplicationTheme {
         val viewModel: StudioViewModel = viewModel()
         val currentScreen by viewModel.currentScreen.collectAsState()
+
+        // Preview playback must not survive the app going to the background: the master
+        // playhead is VSYNC driven and freezes while ExoPlayer would keep playing audio.
+        val lifecycleOwner = LocalLifecycleOwner.current
+        DisposableEffect(lifecycleOwner) {
+          val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) viewModel.onAppBackgrounded()
+          }
+          lifecycleOwner.lifecycle.addObserver(observer)
+          onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
 
         BackHandler(enabled = currentScreen != AppScreen.HOME) {
           when (currentScreen) {

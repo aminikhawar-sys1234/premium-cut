@@ -55,6 +55,17 @@ class AsyncFramePipelineMetrics {
   val gpuToCpuCopies = AtomicLong()
   val decodeTimeNs = AtomicLong()
   val gpuRenderTimeNs = AtomicLong()
+  /** Wall time spent blocked on eglSwapBuffers (i.e. waiting for the video encoder). */
+  val encodeWaitTimeNs = AtomicLong()
+  /** Wall time of the composited render call itself (GPU work + readbacks). */
+  val composeTimeNs = AtomicLong()
+  /**
+   * Frames that had to come from a MediaMetadataRetriever still-frame extraction because no codec
+   * could decode the clip. Those frames each cost a retriever seek + decode (~50-200 ms), so this
+   * counter is the first thing to look at when an export is far slower than realtime.
+   */
+  val fallbackFrames = AtomicLong()
+  val fallbackTimeNs = AtomicLong()
 
   fun reset() {
     decodedFrames.set(0)
@@ -64,6 +75,10 @@ class AsyncFramePipelineMetrics {
     gpuToCpuCopies.set(0)
     decodeTimeNs.set(0)
     gpuRenderTimeNs.set(0)
+    encodeWaitTimeNs.set(0)
+    composeTimeNs.set(0)
+    fallbackFrames.set(0)
+    fallbackTimeNs.set(0)
   }
 
   fun snapshot() = mapOf(
@@ -73,6 +88,18 @@ class AsyncFramePipelineMetrics {
     "zeroCopyFrames" to zeroCopyFrames.get(),
     "gpuToCpuCopies" to gpuToCpuCopies.get()
   )
+
+  /** Human readable per-stage breakdown of one attempt, for the export log. */
+  fun describe(): String {
+    val frames = gpuFrames.get().coerceAtLeast(1L)
+    fun perFrame(ns: Long) = "%.2fms".format(ns / 1_000_000.0 / frames)
+    val fallbacks = fallbackFrames.get()
+    return "frames=$frames decode=${perFrame(decodeTimeNs.get())}/frame " +
+      "compose=${perFrame(composeTimeNs.get())}/frame " +
+      "gpuRender=${perFrame(gpuRenderTimeNs.get())}/frame " +
+      "encodeWait=${perFrame(encodeWaitTimeNs.get())}/frame " +
+      "fallback=$fallbacks(${perFrame(fallbackTimeNs.get())}/frame)"
+  }
 }
 
 /**
@@ -410,6 +437,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
     plannedTotalFrames = totalFrames
 
     Log.i(tag, "Starting Hardware GPU Export: ${exportWidth}x${exportHeight} @ ${fps}fps ($durationMs ms, $totalFrames frames)")
+    val attemptStartNs = System.nanoTime()
 
     val stop = AtomicBoolean(userCancelled.get())
     currentStop = stop
@@ -418,9 +446,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
     val audioEos = AtomicBoolean(false)
     val lastOutputNs = AtomicLong(System.nanoTime())
 
-    val glThread = HandlerThread("AH-GPU-Pipeline-$attemptNo").apply { start() }
+    // The export is a frame pipeline on a loaded device (the editor UI keeps rendering progress
+    // while it runs), so the two pipeline threads must not fall behind the UI thread. DISPLAY
+    // priority for the GL submit thread keeps the encoder fed without stuttering the UI;
+    // FOREGROUND for the decode thread.
+    val glThread = HandlerThread("AH-GPU-Pipeline-$attemptNo", android.os.Process.THREAD_PRIORITY_DISPLAY).apply { start() }
     val glHandler = Handler(glThread.looper)
-    val decoderThread = HandlerThread("AH-Decoder-Pipeline-$attemptNo").apply { start() }
+    val decoderThread = HandlerThread("AH-Decoder-Pipeline-$attemptNo", android.os.Process.THREAD_PRIORITY_FOREGROUND).apply { start() }
     val decoderHandler = Handler(decoderThread.looper)
 
     var eglCore: EglCore? = null
@@ -545,7 +577,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       // 6. Drain thread: the ONLY consumer of encoder output (video + audio) -> muxer.
       val drainDone = CountDownLatch(1)
-      val drain = Executors.newSingleThreadExecutor { r -> Thread(r, "AH-GPU-MuxDrain") }
+      // The drain thread feeds the muxer; if it is starved, eglSwapBuffers blocks the render
+      // thread and the whole export slows down with it.
+      val drain = Executors.newSingleThreadExecutor { r ->
+        Thread({
+          android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_FOREGROUND)
+          r.run()
+        }, "AH-GPU-MuxDrain")
+      }
       drainExecutor = drain
       drain.execute {
         try {
@@ -873,7 +912,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             }
 
             // 3. Compose (video + AR + effects + text + stickers) into the encoder Surface's back buffer
-            val renderStart = System.nanoTime()
+            val composeStart = System.nanoTime()
             val rend = gpuRenderer ?: throw IllegalStateException("GPU renderer is not initialised")
             rend.render(
               frame = effectiveFrame,
@@ -899,7 +938,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
             GLES20.glFlush()
 
             // Black-frame guard: sample the real back buffer on a few frames (cheap, diagnostic + hard fail
-            // only if EVERY sampled frame of a video project is black).
+            // only if EVERY sampled frame of a video project is black). The readback in here synchronises
+            // the GPU on its own, so no glFinish() is needed for correctness.
             if (frameIndex in probeFrames && mainTexId > 0) {
               probes++
               if (isBackBufferBlack(exportWidth, exportHeight)) blackProbes++
@@ -910,10 +950,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
             lastEglPtsNs = targetPtsNs
             val win = windowSurface ?: throw IllegalStateException("Encoder window surface is not initialised")
             win.setPresentationTime(targetPtsNs)
+            val swapStart = System.nanoTime()
             if (!win.swapBuffers()) {
               throw ExportPipelineException("Submitting frame $frameIndex to the video encoder failed (eglSwapBuffers).")
             }
-            metrics.gpuRenderTimeNs.addAndGet(System.nanoTime() - renderStart)
+            metrics.encodeWaitTimeNs.addAndGet(System.nanoTime() - swapStart)
+            metrics.gpuRenderTimeNs.addAndGet(System.nanoTime() - composeStart)
             metrics.gpuFrames.incrementAndGet()
 
             // 4. Audio, pro-rata with the video position. Cap buffers per frame so a catch-up
@@ -1017,7 +1059,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
       if (coordinator.timestampCorrections > 0L) {
         Log.w(tag, "Muxer corrected ${coordinator.timestampCorrections} non-monotonic timestamp(s)")
       }
-      Log.i(tag, "Hardware Export Finished: ${outputFile.absolutePath} (${outputFile.length()} bytes, video samples=$written/$submitted, audio samples=${coordinator.audioSamplesWritten})")
+      val wallMs = (System.nanoTime() - attemptStartNs) / 1_000_000
+      val realtimeSpeed = if (wallMs > 0) (durationMs.toDouble() / wallMs) else 0.0
+      Log.i(
+        tag,
+        "Hardware Export Finished: ${outputFile.absolutePath} (${outputFile.length()} bytes, " +
+          "video samples=$written/$submitted, audio samples=${coordinator.audioSamplesWritten})"
+      )
+      Log.i(
+        tag,
+        "Export performance: ${wallMs}ms for ${durationMs}ms of video " +
+          "(${"%.2f".format(realtimeSpeed)}x realtime) | ${metrics.describe()}"
+      )
       ExportDiagnostics.finished(outputFile.absolutePath, exportWidth, exportHeight, durationMs, outputFile.length())
       return outputFile
     } finally {
@@ -1090,6 +1143,22 @@ class AsyncFramePipelineEngine(private val context: Context) {
   private val fallbackRetrievers = mutableMapOf<String, MediaMetadataRetriever>()
 
   private fun fetchFallbackBitmap(clip: VideoClip, sourcePosMs: Long, maxW: Int, maxH: Int): Bitmap? {
+    val startedNs = System.nanoTime()
+    if (metrics.fallbackFrames.incrementAndGet() == 1L) {
+      Log.w(
+        tag,
+        "Clip ${clip.name} has no working hardware/software decoder: falling back to " +
+          "MediaMetadataRetriever still-frame extraction for this clip (much slower per frame)."
+      )
+    }
+    try {
+      return extractFallbackBitmap(clip, sourcePosMs, maxW, maxH)
+    } finally {
+      metrics.fallbackTimeNs.addAndGet(System.nanoTime() - startedNs)
+    }
+  }
+
+  private fun extractFallbackBitmap(clip: VideoClip, sourcePosMs: Long, maxW: Int, maxH: Int): Bitmap? {
     return try {
       val retriever = fallbackRetrievers.getOrPut(clip.uri) {
         MediaMetadataRetriever().apply {

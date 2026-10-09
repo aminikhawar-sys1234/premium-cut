@@ -71,7 +71,16 @@ object GlShaderUtil {
     return createTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES)
   }
 
-  fun uploadBitmapToTexture(bitmap: Bitmap, targetTexId: Int): Int {
+  /**
+   * Uploads [bitmap] into [targetTexId] (allocating the texture when it is 0).
+   *
+   * [reuseStorage] is for callers that re-render the same size into the same texture every frame
+   * (animated text, procedural effect overlays): [GLUtils.texImage2D] reallocates the whole
+   * texture on every call (`glTexImage2D`), which on mobile GPUs means a fresh multi-megabyte
+   * allocation per frame. With [reuseStorage] the pixels go through `glTexSubImage2D` into the
+   * existing storage instead. Any failure falls back to the classic path.
+   */
+  fun uploadBitmapToTexture(bitmap: Bitmap, targetTexId: Int, reuseStorage: Boolean = false): Int {
     if (bitmap.isRecycled) return targetTexId
     var texId = targetTexId
     if (texId == 0) {
@@ -79,13 +88,46 @@ object GlShaderUtil {
     }
     GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texId)
     GLES20.glPixelStorei(GLES20.GL_UNPACK_ALIGNMENT, 1)
-    try {
-      GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
-    } catch (e: Exception) {
-      Log.w(TAG, "Failed to upload bitmap to OpenGL texture", e)
+    var uploaded = false
+    if (reuseStorage && bitmap.config == Bitmap.Config.ARGB_8888) {
+      uploaded = try {
+        val scratch = pixelScratch(bitmap.byteCount)
+        scratch.clear()
+        bitmap.copyPixelsToBuffer(scratch)
+        scratch.position(0)
+        GLES20.glTexSubImage2D(
+          GLES20.GL_TEXTURE_2D, 0, 0, 0, bitmap.width, bitmap.height,
+          GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, scratch
+        )
+        true
+      } catch (e: Exception) {
+        Log.w(TAG, "glTexSubImage2D upload failed, falling back to full upload", e)
+        false
+      }
+    }
+    if (!uploaded) {
+      try {
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+      } catch (e: Exception) {
+        Log.w(TAG, "Failed to upload bitmap to OpenGL texture", e)
+      }
     }
     GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
     return texId
+  }
+
+  /**
+   * Reusable direct buffer for bitmap uploads, one per GL thread (the preview renderer and the
+   * export pipeline render on different threads and both upload bitmaps).
+   */
+  private val uploadScratch = ThreadLocal<java.nio.ByteBuffer>()
+
+  private fun pixelScratch(bytes: Int): java.nio.ByteBuffer {
+    val current = uploadScratch.get()
+    if (current != null && current.capacity() >= bytes) return current
+    val fresh = java.nio.ByteBuffer.allocateDirect(bytes)
+    uploadScratch.set(fresh)
+    return fresh
   }
 
   private val FULLSCREEN_QUAD_BUFFER: java.nio.FloatBuffer by lazy {

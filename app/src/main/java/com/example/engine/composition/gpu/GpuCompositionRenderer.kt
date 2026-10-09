@@ -1346,22 +1346,57 @@ class GpuCompositionRenderer(private val context: Context) {
       }
     }
 
+    // Animated text re-rasterises on (almost) every frame: reuse one scratch bitmap instead of
+    // allocating a fresh full-viewport ARGB bitmap each time.
+    val scratch = obtainTextScratchBitmap(viewportWidth, viewportHeight)
     val bitmap = TextLayerRenderer.renderToBitmap(
       clip = clip,
       currentPosMs = currentPosMs,
       width = viewportWidth,
       height = viewportHeight,
-      context = context
+      context = context,
+      reuse = scratch
     ) ?: return null
 
     val oldTexId = if (cached != null && cached.hash != hash) cached.texId else 0
-    val texId = GlShaderUtil.uploadBitmapToTexture(bitmap, oldTexId)
-    bitmap.recycle()
+    // Same size as the previous upload for this clip -> reuse the texture storage (glTexSubImage2D)
+    // instead of reallocating a multi-megabyte texture every animated frame.
+    val reuseTexId = cached?.takeIf {
+      it.texId > 0 && it.width == bitmap.width && it.height == bitmap.height
+    }?.texId ?: 0
+    val texId = GlShaderUtil.uploadBitmapToTexture(
+      bitmap,
+      if (reuseTexId != 0) reuseTexId else oldTexId,
+      reuseStorage = reuseTexId != 0
+    )
+    // The bitmap belongs to this renderer when it is the scratch one; never recycle that.
+    if (bitmap !== textScratchBitmap) bitmap.recycle()
 
     if (texId == 0) return null
     val entry = CachedTexture(texId, bitmap.width, bitmap.height, hash, currentFrameCounter)
     textTextureCache[clip.id] = entry
     return entry
+  }
+
+  /** Single scratch bitmap reused for every text layer of the current viewport size. */
+  private var textScratchBitmap: Bitmap? = null
+
+  /**
+   * Returns the reusable text bitmap for this viewport size (allocating it on the first frame or
+   * after a size change). No clearing here: [TextLayerRenderer.renderToBitmap] clears the bitmap it
+   * is handed, and clearing twice would memset a full-screen ARGB buffer twice per text frame.
+   */
+  private fun obtainTextScratchBitmap(width: Int, height: Int): Bitmap {
+    val targetW = max(width, 64)
+    val targetH = max(height, 64)
+    val current = textScratchBitmap
+    if (current != null && !current.isRecycled && current.width == targetW && current.height == targetH) {
+      return current
+    }
+    current?.recycle()
+    val fresh = Bitmap.createBitmap(targetW, targetH, Bitmap.Config.ARGB_8888)
+    textScratchBitmap = fresh
+    return fresh
   }
 
   private fun getOrCreateStickerTexture(
@@ -1414,7 +1449,11 @@ class GpuCompositionRenderer(private val context: Context) {
       existing.lastFrameUsed = currentFrameCounter
       return existing.texId
     }
-    val texId = GlShaderUtil.uploadBitmapToTexture(bitmap, existing?.texId ?: 0)
+    // Re-uploading a same-size bitmap (e.g. one extracted frame per export frame on the
+    // retriever fallback path) goes into the existing texture storage instead of reallocating it.
+    val reuse = existing != null && existing.texId > 0 &&
+      existing.width == bitmap.width && existing.height == bitmap.height
+    val texId = GlShaderUtil.uploadBitmapToTexture(bitmap, existing?.texId ?: 0, reuseStorage = reuse)
     val entry = CachedTexture(texId, bitmap.width, bitmap.height, bitmap.generationId, currentFrameCounter)
     imageTextureCache[id] = entry
     return texId
@@ -1463,7 +1502,10 @@ class GpuCompositionRenderer(private val context: Context) {
     )
 
     val oldTexId = cached?.texId ?: 0
-    val texId = GlShaderUtil.uploadBitmapToTexture(bmp, oldTexId)
+    // The procedural overlay is redrawn every ~33 ms step at the same viewport size: keep the
+    // texture storage and upload into it instead of reallocating the full-viewport texture.
+    val reuseStorage = cached != null && cached.texId > 0 && cached.width == bmp.width && cached.height == bmp.height
+    val texId = GlShaderUtil.uploadBitmapToTexture(bmp, if (reuseStorage) cached.texId else oldTexId, reuseStorage)
 
     if (texId == 0) return null
     val entry = CachedTexture(texId, viewportWidth, viewportHeight, hash, currentFrameCounter)
@@ -1724,6 +1766,8 @@ class GpuCompositionRenderer(private val context: Context) {
     proceduralBitmap?.recycle()
     proceduralBitmap = null
     proceduralCanvas = null
+    textScratchBitmap?.recycle()
+    textScratchBitmap = null
     fboOverlayMap.clear()
     fboTransitionA.release()
     fboTransitionB.release()
@@ -1775,6 +1819,8 @@ class GpuCompositionRenderer(private val context: Context) {
     proceduralBitmap?.recycle()
     proceduralBitmap = null
     proceduralCanvas = null
+    textScratchBitmap?.recycle()
+    textScratchBitmap = null
 
     if (program2D != 0) {
       GLES20.glDeleteProgram(program2D)
