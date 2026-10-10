@@ -494,9 +494,13 @@ class VideoExporter(private val context: Context) {
     (_exportState.value as? ExportState.Rendering)?.let { _exportState.value = it.copy(isPaused = false) }
   }
 
+  /** Optional hook so an externally driven export can abort the pipeline immediately. */
+  var onExternalCancel: (() -> Unit)? = null
+
   fun cancelExport() {
     isCancelled = true
     isPaused = false
+    onExternalCancel?.invoke()
   }
 
   fun beginExternalExport(config: ExportConfig) {
@@ -512,11 +516,22 @@ class VideoExporter(private val context: Context) {
     )
   }
 
-  fun updateExternalExportProgress(progress: Float, status: String) {
+  fun updateExternalExportProgress(
+    progress: Float,
+    status: String,
+    currentFrame: Int = 0,
+    totalFrames: Int = 0,
+    fps: Float = 0f,
+    estimatedRemainingSec: Int = 0
+  ) {
     val current = _exportState.value as? ExportState.Rendering ?: return
     _exportState.value = current.copy(
       progressPercent = progress.coerceIn(0f, 1f),
-      status = status
+      status = status,
+      currentFrame = currentFrame,
+      totalFrames = totalFrames,
+      fps = fps,
+      estimatedRemainingSec = estimatedRemainingSec.coerceAtLeast(0)
     )
   }
 
@@ -583,9 +598,10 @@ class VideoExporter(private val context: Context) {
           } catch (ignored: Exception) {}
         }
       }
-      true
+      false
     } catch (e: Exception) {
-      true
+      Log.w(tag, "4K encoder probe failed", e)
+      false
     }
   }
 
@@ -609,7 +625,7 @@ class VideoExporter(private val context: Context) {
   }
 
   /**
-   * Exports one slice of a timeline through the authoritative pipeline (used by [ChunkedExportEngine]).
+   * Exports one slice of a timeline through the authoritative pipeline.
    * Returns true only if a file with a valid video track was written.
    */
   suspend fun exportTimelineSegment(

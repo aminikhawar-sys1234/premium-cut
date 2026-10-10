@@ -8,10 +8,9 @@ import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.net.Uri
 import android.util.Log
-import com.example.domain.model.AudioClip
 import com.example.domain.model.Timeline
 import com.example.domain.model.TrackType
-import com.example.domain.model.VideoClip
+import com.example.engine.controller.PreviewMixPolicy
 import com.example.engine.media.MediaRelinkManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -19,7 +18,6 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
-import kotlin.math.*
 
 data class DecodedPcm(
   val samples: ShortArray,
@@ -255,15 +253,18 @@ class AudioExportProcessor(
     }
 
     fun hasActiveAudio(timeline: Timeline): Boolean {
-        val anySolo = timeline.trackSettings.values.any { it.isSolo }
-        val videoAudible = (timeline.trackSettings[TrackType.MAIN_VIDEO]?.isMuted != true) && (!anySolo || timeline.trackSettings[TrackType.MAIN_VIDEO]?.isSolo == true)
-        val overlayAudible = (timeline.trackSettings[TrackType.OVERLAY]?.isMuted != true) && (!anySolo || timeline.trackSettings[TrackType.OVERLAY]?.isSolo == true)
-        val audioAudible = (timeline.trackSettings[TrackType.AUDIO]?.isMuted != true) && (!anySolo || timeline.trackSettings[TrackType.AUDIO]?.isSolo == true)
-
-        val hasAudibleVideoClips = videoAudible && timeline.videoClips.any { it.isVideo && it.hasAudio && it.volume > 0f }
-        val hasAudibleOverlays = overlayAudible && timeline.overlayClips.any { it.isVideo && it.hasAudio && it.volume > 0f }
-        val hasAudibleAudioClips = audioAudible && timeline.audioClips.any { it.volume > 0f }
-
+        val hasClipSolo = timeline.audioClips.any { it.isSolo }
+        val hasAudibleVideoClips = timeline.videoClips.any {
+            it.isVideo && it.hasAudio && isExportableAudioUri(it.uri) &&
+                PreviewMixPolicy.clipGain(it, timeline, TrackType.MAIN_VIDEO) > 0f
+        }
+        val hasAudibleOverlays = timeline.overlayClips.any {
+            it.isVideo && it.hasAudio && isExportableAudioUri(it.uri) &&
+                PreviewMixPolicy.clipGain(it, timeline, TrackType.OVERLAY) > 0f
+        }
+        val hasAudibleAudioClips = timeline.audioClips.any {
+            isExportableAudioUri(it.uri) && PreviewMixPolicy.audioClipGain(it, timeline, hasClipSolo) > 0f
+        }
         return hasAudibleVideoClips || hasAudibleOverlays || hasAudibleAudioClips
     }
 
@@ -285,7 +286,8 @@ class AudioExportProcessor(
         val tracks = collectAudioTracks(timeline)
         for (track in tracks) {
             if (isCancelled()) return@withContext ShortArray(0)
-            val decoded = decodeOrSynthesizeTrack(track)
+            val decoded = decodeTrackOrFail(track)
+            if (decoded.samples.isEmpty()) continue
             mixTrackIntoBuffer(decoded, track, mixedPcm, totalFrames, targetSampleRate, targetChannelCount)
         }
 
@@ -334,13 +336,14 @@ class AudioExportProcessor(
 
     private fun collectAudioTracks(timeline: Timeline): List<AudioTrackDescriptor> {
         val list = mutableListOf<AudioTrackDescriptor>()
-        val anySolo = timeline.trackSettings.values.any { it.isSolo }
-        val videoAudible = (timeline.trackSettings[TrackType.MAIN_VIDEO]?.isMuted != true) && (!anySolo || timeline.trackSettings[TrackType.MAIN_VIDEO]?.isSolo == true)
-        val overlayAudible = (timeline.trackSettings[TrackType.OVERLAY]?.isMuted != true) && (!anySolo || timeline.trackSettings[TrackType.OVERLAY]?.isSolo == true)
-        val audioAudible = (timeline.trackSettings[TrackType.AUDIO]?.isMuted != true) && (!anySolo || timeline.trackSettings[TrackType.AUDIO]?.isSolo == true)
+        val videoAudible = PreviewMixPolicy.isTrackAudible(timeline, TrackType.MAIN_VIDEO)
+        val overlayAudible = PreviewMixPolicy.isTrackAudible(timeline, TrackType.OVERLAY)
+        val audioAudible = PreviewMixPolicy.isTrackAudible(timeline, TrackType.AUDIO)
 
         if (videoAudible) {
-            timeline.videoClips.filter { it.isVideo && it.hasAudio && it.volume > 0f }.forEach {
+            timeline.videoClips.filter {
+                it.isVideo && it.hasAudio && it.volume > 0f && !it.isMuted && isExportableAudioUri(it.uri)
+            }.forEach {
                 list.add(AudioTrackDescriptor(
                     uri = it.uri,
                     title = it.name,
@@ -361,7 +364,9 @@ class AudioExportProcessor(
             }
         }
         if (overlayAudible) {
-            timeline.overlayClips.filter { it.isVideo && it.hasAudio && it.volume > 0f }.forEach {
+            timeline.overlayClips.filter {
+                it.isVideo && it.hasAudio && it.volume > 0f && !it.isMuted && isExportableAudioUri(it.uri)
+            }.forEach {
                 list.add(AudioTrackDescriptor(
                     uri = it.uri,
                     title = it.name,
@@ -382,7 +387,10 @@ class AudioExportProcessor(
             }
         }
         if (audioAudible) {
-            timeline.audioClips.filter { it.volume > 0f }.forEach {
+            val hasClipSolo = timeline.audioClips.any { it.isSolo }
+            timeline.audioClips.filter {
+                PreviewMixPolicy.audioClipGain(it, timeline, hasClipSolo) > 0f && isExportableAudioUri(it.uri)
+            }.forEach {
                 list.add(AudioTrackDescriptor(
                     uri = it.uri,
                     title = it.title,
@@ -415,21 +423,30 @@ class AudioExportProcessor(
      */
     private fun sourceWindowFor(track: AudioTrackDescriptor): Pair<Long, Long> = audioSourceWindow(track)
 
-    private fun decodeOrSynthesizeTrack(track: AudioTrackDescriptor): DecodedPcm {
+    private fun decodeTrackOrFail(track: AudioTrackDescriptor): DecodedPcm {
         val fx = track.audioEffects
         val (windowStartMs, windowEndMs) = sourceWindowFor(track)
         val cacheKey = "${track.uri}_${track.speed}_${track.isReversed}_$windowStartMs-$windowEndMs" +
             "_${fx.voiceEffect}_${fx.pitchShiftSemitones}_${fx.noiseReductionDb}_${fx.lowGainDb}_${fx.midGainDb}_${fx.highGainDb}_${fx.normalizeVolume}"
         pcmCache[cacheKey]?.let { return it }
 
-        var decoded = when {
-            isSynthesizedCatalogUri(track.uri) ->
-                synthesizePcmForTrack(track)
-            track.uri.isBlank() || context == null ->
-                silentPcmForTrack(track)
-            else ->
-                decodePcmFromMedia(track.uri, windowStartMs, windowEndMs) ?: silentPcmForTrack(track)
+        if (isPlaceholderCatalogUri(track.uri) || track.uri.isBlank()) {
+            Log.w(TAG, "Skipping placeholder audio '${track.title}' (${track.uri}); no real media to decode.")
+            val empty = DecodedPcm(ShortArray(0), sampleRate, 2)
+            pcmCache[cacheKey] = empty
+            return empty
         }
+        if (context == null) {
+            throw ExportPipelineException(
+                "Audio '${track.title}' cannot be decoded without a context.",
+                retryable = false
+            )
+        }
+        var decoded = decodePcmFromMedia(track.uri, windowStartMs, windowEndMs)
+            ?: throw ExportPipelineException(
+                "Could not decode audio from '${track.title}' (${track.uri}). Export stopped instead of writing silence.",
+                retryable = false
+            )
 
         // Apply audio reversal if enabled
         if (track.isReversed && decoded.samples.isNotEmpty()) {
@@ -733,84 +750,6 @@ class AudioExportProcessor(
         }
     }
 
-    private fun isSynthesizedCatalogUri(uri: String): Boolean {
-        if (uri.startsWith("internal://") || uri.startsWith("built_in_sfx_") || uri.startsWith("demo://")) return true
-        if (uri.isBlank() || uri.contains("://") || uri.startsWith("/") || uri.startsWith("file:") || uri.startsWith("content:")) return false
-        // Legacy catalog ids such as sfx_pop / mus_lofi (no scheme, not a filesystem path).
-        return true
-    }
-
-    private fun silentPcmForTrack(track: AudioTrackDescriptor): DecodedPcm {
-        val durationSec = (track.durationMs / 1000.0).coerceIn(0.0, 120.0)
-        val numFrames = (sampleRate * durationSec).toInt().coerceAtLeast(0)
-        return DecodedPcm(ShortArray(numFrames * 2), sampleRate, 2)
-    }
-
-    private fun synthesizePcmForTrack(track: AudioTrackDescriptor): DecodedPcm {
-        val durationSec = (track.durationMs / 1000.0).coerceIn(0.3, 120.0)
-        val numFrames = (sampleRate * durationSec).toInt()
-        val pcm = ShortArray(numFrames * 2)
-
-        val lower = (track.uri + " " + track.title).lowercase()
-        when {
-            lower.contains("whoosh") -> {
-                for (i in 0 until numFrames) {
-                    val t = i.toDouble() / sampleRate
-                    val sweep = (1.0 - (i.toDouble() / numFrames)).coerceIn(0.0, 1.0)
-                    val freq = 120.0 + sweep * 400.0
-                    val env = sin(Math.PI * (i.toDouble() / numFrames))
-                    val sample = (sin(2.0 * Math.PI * freq * t) * env * 28000.0).toInt().toShort()
-                    pcm[i * 2] = sample
-                    pcm[i * 2 + 1] = sample
-                }
-            }
-            lower.contains("pop") -> {
-                for (i in 0 until numFrames) {
-                    val t = i.toDouble() / sampleRate
-                    val env = exp(-t * 24.0)
-                    val sample = (sin(2.0 * Math.PI * 650.0 * t) * env * 30000.0).toInt().toShort()
-                    pcm[i * 2] = sample
-                    pcm[i * 2 + 1] = sample
-                }
-            }
-            lower.contains("ding") || lower.contains("bell") -> {
-                for (i in 0 until numFrames) {
-                    val t = i.toDouble() / sampleRate
-                    val env = exp(-t * 3.5)
-                    val wave = sin(2.0 * Math.PI * 1200.0 * t) * 0.7 + sin(2.0 * Math.PI * 2400.0 * t) * 0.3
-                    val sample = (wave * env * 26000.0).toInt().toShort()
-                    pcm[i * 2] = sample
-                    pcm[i * 2 + 1] = sample
-                }
-            }
-            lower.contains("bass") -> {
-                for (i in 0 until numFrames) {
-                    val t = i.toDouble() / sampleRate
-                    val env = exp(-t * 2.0)
-                    val sample = (sin(2.0 * Math.PI * 85.0 * t) * env * 32000.0).toInt().toShort()
-                    pcm[i * 2] = sample
-                    pcm[i * 2 + 1] = sample
-                }
-            }
-            else -> {
-                val chordFreqs = listOf(220.0, 261.63, 329.63, 392.0) // Am7
-                for (i in 0 until numFrames) {
-                    val t = i.toDouble() / sampleRate
-                    val beat = if ((t % 0.5) < 0.08) 0.6 else 0.0
-                    val chord = chordFreqs.indices.sumOf { idx ->
-                        sin(2.0 * Math.PI * chordFreqs[idx] * t) * (0.2 / (idx + 1))
-                    }
-                    val wave = (chord + beat * sin(2.0 * Math.PI * 90.0 * t)).coerceIn(-1.0, 1.0)
-                    val sample = (wave * 20000.0).toInt().toShort()
-                    pcm[i * 2] = sample
-                    pcm[i * 2 + 1] = sample
-                }
-            }
-        }
-
-        return DecodedPcm(pcm, sampleRate, 2)
-    }
-
     private fun softClipSample(sample: Float): Short {
         val norm = sample / 32768f
         val clipped = when {
@@ -822,6 +761,20 @@ class AudioExportProcessor(
         }
         return (clipped * 32767f).toInt().toShort()
     }
+}
+
+/** Built-in / catalog URIs that have no real media file. Never synthesized into fake PCM. */
+fun isPlaceholderCatalogUri(uri: String): Boolean {
+    if (uri.isBlank()) return true
+    return uri.startsWith("internal://") ||
+        uri.startsWith("built_in_sfx_") ||
+        uri.startsWith("demo://")
+}
+
+/** True when [uri] points at real playable media rather than a catalog placeholder or bare id. */
+fun isExportableAudioUri(uri: String): Boolean {
+    if (isPlaceholderCatalogUri(uri)) return false
+    return uri.contains("://") || uri.startsWith("/")
 }
 
 /**

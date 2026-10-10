@@ -95,12 +95,12 @@ object TemplatesCatalog {
           MediaPlaceholder("v3", "Climax Outro Clip", PlaceholderType.VIDEO, 2500L, "reels_vid_3")
         ),
         textPlaceholders = listOf(
-          TextPlaceholder("t1", "Main Hook Title", "reels_txt_1", "TRENDING NOW"),
-          TextPlaceholder("t2", "Call to Action", "reels_txt_2", "LINK IN BIO")
+          TextPlaceholder("t1", "Main Hook Title", "reels_txt_1", ""),
+          TextPlaceholder("t2", "Call to Action", "reels_txt_2", "")
         ),
         createTimeline = { media, texts ->
-          val t1Text = texts["t1"] ?: "TRENDING NOW"
-          val t2Text = texts["t2"] ?: "LINK IN BIO"
+          val t1Text = texts["t1"].orEmpty()
+          val t2Text = texts["t2"].orEmpty()
           Timeline(
             videoClips = listOf(
               VideoClip(id = "reels_vid_1", name = "Hook", uri = media["v1"] ?: "", timelineStartMs = 0L, durationMs = 2000L),
@@ -113,7 +113,7 @@ object TemplatesCatalog {
               TextClip(id = "reels_txt_2", text = t2Text, timelineStartMs = 5000L, durationMs = 2000L, animationType = "Fade")
             ),
             audioClips = listOf(
-              AudioClip(id = "reels_aud_1", title = "Energetic Beat Drop", uri = "internal://beat", timelineStartMs = 0L, durationMs = 9000L)
+              AudioClip(id = "reels_aud_1", title = "Energetic Beat Drop", uri = "", timelineStartMs = 0L, durationMs = 9000L)
             ),
             transitions = listOf(
               Transition(id = "trans_1", clipIndexBefore = 0, durationMs = 500L, type = TransitionType.DISSOLVE)
@@ -142,7 +142,7 @@ object TemplatesCatalog {
           MediaPlaceholder("v2", "Character Close-up", PlaceholderType.VIDEO, 5000L, "cine_vid_2")
         ),
         textPlaceholders = listOf(
-          TextPlaceholder("t1", "Film Title", "cine_txt_1", "THE HORIZON")
+          TextPlaceholder("t1", "Film Title", "cine_txt_1", "")
         ),
         createTimeline = { media, texts ->
           Timeline(
@@ -151,10 +151,10 @@ object TemplatesCatalog {
               VideoClip(id = "cine_vid_2", name = "Character", uri = media["v2"] ?: "", timelineStartMs = 5000L, durationMs = 5000L)
             ),
             textClips = listOf(
-              TextClip(id = "cine_txt_1", text = texts["t1"] ?: "THE HORIZON", timelineStartMs = 1000L, durationMs = 4000L)
+              TextClip(id = "cine_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 1000L, durationMs = 4000L)
             ),
             audioClips = listOf(
-              AudioClip(id = "cine_aud_1", title = "Cinematic Drone", uri = "internal://drone", timelineStartMs = 0L, durationMs = 10000L)
+              AudioClip(id = "cine_aud_1", title = "Cinematic Drone", uri = "", timelineStartMs = 0L, durationMs = 10000L)
             )
           )
         }
@@ -177,7 +177,7 @@ object TemplatesCatalog {
           MediaPlaceholder("v2", "Reaction Clip", PlaceholderType.VIDEO, 3000L, "short_vid_2")
         ),
         textPlaceholders = listOf(
-          TextPlaceholder("t1", "Reaction Text", "short_txt_1", "WAIT FOR IT...")
+          TextPlaceholder("t1", "Reaction Text", "short_txt_1", "")
         ),
         createTimeline = { media, texts ->
           Timeline(
@@ -186,10 +186,10 @@ object TemplatesCatalog {
               VideoClip(id = "short_vid_2", name = "Reaction", uri = media["v2"] ?: "", timelineStartMs = 3000L, durationMs = 3000L)
             ),
             textClips = listOf(
-              TextClip(id = "short_txt_1", text = texts["t1"] ?: "WAIT FOR IT...", timelineStartMs = 500L, durationMs = 3000L, animationType = "Pop")
+              TextClip(id = "short_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 500L, durationMs = 3000L, animationType = "Pop")
             ),
             audioClips = listOf(
-              AudioClip(id = "short_aud_1", title = "Viral Beat", uri = "internal://viral", timelineStartMs = 0L, durationMs = 6000L)
+              AudioClip(id = "short_aud_1", title = "Viral Beat", uri = "", timelineStartMs = 0L, durationMs = 6000L)
             )
           )
         }
@@ -212,8 +212,8 @@ object TemplatesCatalog {
           MediaPlaceholder("v2", "B-Roll Cutaway", PlaceholderType.VIDEO, 5000L, "yt_long_vid_2")
         ),
         textPlaceholders = listOf(
-          TextPlaceholder("t1", "Video Headline", "yt_long_txt_1", "WELCOME TO MY CHANNEL"),
-          TextPlaceholder("t2", "Outro Call to Action", "yt_long_txt_2", "LIKE & SUBSCRIBE")
+          TextPlaceholder("t1", "Video Headline", "yt_long_txt_1", ""),
+          TextPlaceholder("t2", "Outro Call to Action", "yt_long_txt_2", "")
         ),
         createTimeline = { media, texts ->
           Timeline(
@@ -222,11 +222,11 @@ object TemplatesCatalog {
               VideoClip(id = "yt_long_vid_2", name = "B-Roll", uri = media["v2"] ?: "", timelineStartMs = 10000L, durationMs = 5000L)
             ),
             textClips = listOf(
-              TextClip(id = "yt_long_txt_1", text = texts["t1"] ?: "WELCOME TO MY CHANNEL", timelineStartMs = 500L, durationMs = 4500L, animationType = "Pop"),
-              TextClip(id = "yt_long_txt_2", text = texts["t2"] ?: "LIKE & SUBSCRIBE", timelineStartMs = 10500L, durationMs = 4000L, animationType = "Fade")
+              TextClip(id = "yt_long_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 500L, durationMs = 4500L, animationType = "Pop"),
+              TextClip(id = "yt_long_txt_2", text = texts["t2"].orEmpty(), timelineStartMs = 10500L, durationMs = 4000L, animationType = "Fade")
             ),
             audioClips = listOf(
-              AudioClip(id = "yt_long_aud_1", title = "Upbeat YouTube Background", uri = "internal://youtube_bg", timelineStartMs = 0L, durationMs = 15000L)
+              AudioClip(id = "yt_long_aud_1", title = "Upbeat YouTube Background", uri = "", timelineStartMs = 0L, durationMs = 15000L)
             )
           )
         }
@@ -241,12 +241,12 @@ object TemplatesCatalog {
         aspectRatio = AspectRatio.RATIO_9_16,
         durationMs = 8000L,
         mediaPlaceholders = listOf(MediaPlaceholder("v1", "Main Video", PlaceholderType.VIDEO, 8000L, "yt_vid_1")),
-        textPlaceholders = listOf(TextPlaceholder("t1", "Title", "yt_txt_1", "SUBSCRIBE")),
+        textPlaceholders = listOf(TextPlaceholder("t1", "Title", "yt_txt_1", "")),
         createTimeline = { media, texts ->
           Timeline(
             videoClips = listOf(VideoClip(id = "yt_vid_1", name = "Main", uri = media["v1"] ?: "", timelineStartMs = 0L, durationMs = 8000L)),
-            textClips = listOf(TextClip(id = "yt_txt_1", text = texts["t1"] ?: "SUBSCRIBE", timelineStartMs = 0L, durationMs = 3000L)),
-            audioClips = listOf(AudioClip(id = "yt_aud_1", title = "Intro Track", uri = "internal://intro", timelineStartMs = 0L, durationMs = 8000L))
+            textClips = listOf(TextClip(id = "yt_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 0L, durationMs = 3000L)),
+            audioClips = listOf(AudioClip(id = "yt_aud_1", title = "Intro Track", uri = "", timelineStartMs = 0L, durationMs = 8000L))
           )
         }
       ),
@@ -260,12 +260,12 @@ object TemplatesCatalog {
         aspectRatio = AspectRatio.RATIO_9_16,
         durationMs = 7000L,
         mediaPlaceholders = listOf(MediaPlaceholder("v1", "Story Media", PlaceholderType.VIDEO, 7000L, "insta_vid_1")),
-        textPlaceholders = listOf(TextPlaceholder("t1", "Header", "insta_txt_1", "NEW COLLECTION")),
+        textPlaceholders = listOf(TextPlaceholder("t1", "Header", "insta_txt_1", "")),
         createTimeline = { media, texts ->
           Timeline(
             videoClips = listOf(VideoClip(id = "insta_vid_1", name = "Media", uri = media["v1"] ?: "", timelineStartMs = 0L, durationMs = 7000L)),
-            textClips = listOf(TextClip(id = "insta_txt_1", text = texts["t1"] ?: "NEW COLLECTION", timelineStartMs = 0L, durationMs = 4000L)),
-            audioClips = listOf(AudioClip(id = "insta_aud_1", title = "Chill Lofi", uri = "internal://chill", timelineStartMs = 0L, durationMs = 7000L))
+            textClips = listOf(TextClip(id = "insta_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 0L, durationMs = 4000L)),
+            audioClips = listOf(AudioClip(id = "insta_aud_1", title = "Chill Lofi", uri = "", timelineStartMs = 0L, durationMs = 7000L))
           )
         }
       ),
@@ -279,12 +279,12 @@ object TemplatesCatalog {
         aspectRatio = AspectRatio.RATIO_16_9,
         durationMs = 12000L,
         mediaPlaceholders = listOf(MediaPlaceholder("v1", "Company Demo", PlaceholderType.VIDEO, 12000L, "biz_vid_1")),
-        textPlaceholders = listOf(TextPlaceholder("t1", "Company Name", "biz_txt_1", "ACME CORP")),
+        textPlaceholders = listOf(TextPlaceholder("t1", "Company Name", "biz_txt_1", "")),
         createTimeline = { media, texts ->
           Timeline(
             videoClips = listOf(VideoClip(id = "biz_vid_1", name = "Corporate", uri = media["v1"] ?: "", timelineStartMs = 0L, durationMs = 12000L)),
-            textClips = listOf(TextClip(id = "biz_txt_1", text = texts["t1"] ?: "ACME CORP", timelineStartMs = 0L, durationMs = 5000L)),
-            audioClips = listOf(AudioClip(id = "biz_aud_1", title = "Corporate Tech", uri = "internal://corp", timelineStartMs = 0L, durationMs = 12000L))
+            textClips = listOf(TextClip(id = "biz_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 0L, durationMs = 5000L)),
+            audioClips = listOf(AudioClip(id = "biz_aud_1", title = "Corporate Tech", uri = "", timelineStartMs = 0L, durationMs = 12000L))
           )
         }
       ),
@@ -298,12 +298,12 @@ object TemplatesCatalog {
         aspectRatio = AspectRatio.RATIO_1_1,
         durationMs = 10000L,
         mediaPlaceholders = listOf(MediaPlaceholder("v1", "Product Shot", PlaceholderType.VIDEO, 10000L, "prod_vid_1")),
-        textPlaceholders = listOf(TextPlaceholder("t1", "Product Title", "prod_txt_1", "50% OFF TODAY")),
+        textPlaceholders = listOf(TextPlaceholder("t1", "Product Title", "prod_txt_1", "")),
         createTimeline = { media, texts ->
           Timeline(
             videoClips = listOf(VideoClip(id = "prod_vid_1", name = "Product", uri = media["v1"] ?: "", timelineStartMs = 0L, durationMs = 10000L)),
-            textClips = listOf(TextClip(id = "prod_txt_1", text = texts["t1"] ?: "50% OFF TODAY", timelineStartMs = 0L, durationMs = 4000L)),
-            audioClips = listOf(AudioClip(id = "prod_aud_1", title = "Upbeat Pop", uri = "internal://pop", timelineStartMs = 0L, durationMs = 10000L))
+            textClips = listOf(TextClip(id = "prod_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 0L, durationMs = 4000L)),
+            audioClips = listOf(AudioClip(id = "prod_aud_1", title = "Upbeat Pop", uri = "", timelineStartMs = 0L, durationMs = 10000L))
           )
         }
       ),
@@ -317,12 +317,12 @@ object TemplatesCatalog {
         aspectRatio = AspectRatio.RATIO_16_9,
         durationMs = 15000L,
         mediaPlaceholders = listOf(MediaPlaceholder("v1", "Party Clip", PlaceholderType.VIDEO, 15000L, "bday_vid_1")),
-        textPlaceholders = listOf(TextPlaceholder("t1", "Greeting", "bday_txt_1", "HAPPY BIRTHDAY!")),
+        textPlaceholders = listOf(TextPlaceholder("t1", "Greeting", "bday_txt_1", "")),
         createTimeline = { media, texts ->
           Timeline(
             videoClips = listOf(VideoClip(id = "bday_vid_1", name = "Celebration", uri = media["v1"] ?: "", timelineStartMs = 0L, durationMs = 15000L)),
-            textClips = listOf(TextClip(id = "bday_txt_1", text = texts["t1"] ?: "HAPPY BIRTHDAY!", timelineStartMs = 0L, durationMs = 5000L)),
-            audioClips = listOf(AudioClip(id = "bday_aud_1", title = "Celebration Tune", uri = "internal://party", timelineStartMs = 0L, durationMs = 15000L))
+            textClips = listOf(TextClip(id = "bday_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 0L, durationMs = 5000L)),
+            audioClips = listOf(AudioClip(id = "bday_aud_1", title = "Celebration Tune", uri = "", timelineStartMs = 0L, durationMs = 15000L))
           )
         }
       ),
@@ -340,8 +340,8 @@ object TemplatesCatalog {
           MediaPlaceholder("v2", "Ceremony", PlaceholderType.VIDEO, 6000L, "wed_vid_2")
         ),
         textPlaceholders = listOf(
-          TextPlaceholder("t1", "Couple Names", "wed_txt_1", "Emma & Oliver"),
-          TextPlaceholder("t2", "Wedding Date", "wed_txt_2", "JUNE 20, 2026")
+          TextPlaceholder("t1", "Couple Names", "wed_txt_1", ""),
+          TextPlaceholder("t2", "Wedding Date", "wed_txt_2", "")
         ),
         createTimeline = { media, texts ->
           Timeline(
@@ -350,11 +350,11 @@ object TemplatesCatalog {
               VideoClip(id = "wed_vid_2", name = "Ceremony", uri = media["v2"] ?: "", timelineStartMs = 6000L, durationMs = 6000L)
             ),
             textClips = listOf(
-              TextClip(id = "wed_txt_1", text = texts["t1"] ?: "Emma & Oliver", timelineStartMs = 0L, durationMs = 6000L),
-              TextClip(id = "wed_txt_2", text = texts["t2"] ?: "JUNE 20, 2026", timelineStartMs = 6000L, durationMs = 6000L)
+              TextClip(id = "wed_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 0L, durationMs = 6000L),
+              TextClip(id = "wed_txt_2", text = texts["t2"].orEmpty(), timelineStartMs = 6000L, durationMs = 6000L)
             ),
             audioClips = listOf(
-              AudioClip(id = "wed_aud_1", title = "Emotional Piano & Orchestra", uri = "internal://wedding", timelineStartMs = 0L, durationMs = 12000L)
+              AudioClip(id = "wed_aud_1", title = "Emotional Piano & Orchestra", uri = "", timelineStartMs = 0L, durationMs = 12000L)
             )
           )
         }
@@ -369,12 +369,12 @@ object TemplatesCatalog {
         aspectRatio = AspectRatio.RATIO_16_9,
         durationMs = 10000L,
         mediaPlaceholders = listOf(MediaPlaceholder("v1", "Scenery Shot", PlaceholderType.VIDEO, 10000L, "travel_vid_1")),
-        textPlaceholders = listOf(TextPlaceholder("t1", "Destination", "travel_txt_1", "EXPLORE BALI")),
+        textPlaceholders = listOf(TextPlaceholder("t1", "Destination", "travel_txt_1", "")),
         createTimeline = { media, texts ->
           Timeline(
             videoClips = listOf(VideoClip(id = "travel_vid_1", name = "Scenery", uri = media["v1"] ?: "", timelineStartMs = 0L, durationMs = 10000L)),
-            textClips = listOf(TextClip(id = "travel_txt_1", text = texts["t1"] ?: "EXPLORE BALI", timelineStartMs = 0L, durationMs = 4000L)),
-            audioClips = listOf(AudioClip(id = "travel_aud_1", title = "Tropical House", uri = "internal://tropical", timelineStartMs = 0L, durationMs = 10000L))
+            textClips = listOf(TextClip(id = "travel_txt_1", text = texts["t1"].orEmpty(), timelineStartMs = 0L, durationMs = 4000L)),
+            audioClips = listOf(AudioClip(id = "travel_aud_1", title = "Tropical House", uri = "", timelineStartMs = 0L, durationMs = 10000L))
           )
         }
       )

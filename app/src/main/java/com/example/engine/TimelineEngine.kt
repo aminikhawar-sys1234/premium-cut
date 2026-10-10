@@ -3404,7 +3404,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   fun addAudioClip(
     title: String,
     durationMs: Long = 8000L,
-    uri: String = "internal://$title",
+    uri: String = "",
     waveformData: List<Float>? = null,
     fadeInMs: Long = 400L,
     fadeOutMs: Long = 600L,
