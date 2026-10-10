@@ -1,17 +1,30 @@
 package com.example.ui.components.tracking
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -19,7 +32,12 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import com.example.engine.ai.AttachmentTarget
 import com.example.engine.ai.LiveDetection
 import com.example.engine.ai.MotionTrackingEvaluator
 import com.example.engine.ai.MotionTrackingUiState
@@ -30,6 +48,7 @@ import com.example.engine.ai.TrackingEngineState
 import com.example.engine.ai.tracking.BodyPoseLandmarks
 import com.example.engine.ai.tracking.TrackingSampler
 import kotlin.math.hypot
+import kotlin.math.roundToInt
 
 private val EmeraldAccent = Color(0xFF00D1B2)
 private val CyanBlue = Color(0xFF00B4D8)
@@ -46,8 +65,10 @@ fun MotionTrackingPreviewOverlay(
     videoHeight: Int = 0,
     naturalRotation: Int = 0,
     canvasAspect: Float = 9f / 16f,
+    interactive: Boolean = true,
     onUpdateRegion: (NormalizedRect) -> Unit,
     onSelectDetection: (LiveDetection) -> Unit = {},
+    onAttach: (AttachmentTarget) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     BoxWithConstraints(modifier = modifier.fillMaxSize()) {
@@ -204,60 +225,114 @@ fun MotionTrackingPreviewOverlay(
             mutableStateOf(Offset(selectorBox.left * w, selectorBox.top * h))
         }
 
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInput(w, h, uiState.liveDetections, uiState.targetRegion) {
-                    detectTapGestures { tap ->
-                        val hit = uiState.liveDetections.minByOrNull { det ->
-                            val c = mapPoint(det.box.centerX, det.box.centerY)
-                            hypot(c.x - tap.x, c.y - tap.y)
-                        }
-                        if (hit != null) {
-                            val c = mapPoint(hit.box.centerX, hit.box.centerY)
-                            val tl = mapPoint(hit.box.left, hit.box.top)
-                            val br = mapPoint(hit.box.right, hit.box.bottom)
-                            val inside = tap.x in minOf(tl.x, br.x)..maxOf(tl.x, br.x) &&
-                                tap.y in minOf(tl.y, br.y)..maxOf(tl.y, br.y)
-                            if (inside || hypot(c.x - tap.x, c.y - tap.y) < 48f) {
-                                onSelectDetection(hit)
-                                return@detectTapGestures
+        if (interactive) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .pointerInput(w, h, uiState.liveDetections, uiState.targetRegion) {
+                        detectTapGestures { tap ->
+                            val hit = uiState.liveDetections.minByOrNull { det ->
+                                val c = mapPoint(det.box.centerX, det.box.centerY)
+                                hypot(c.x - tap.x, c.y - tap.y)
                             }
-                        }
-                        val halfW = uiState.targetRegion.width / 2f
-                        val halfH = uiState.targetRegion.height / 2f
-                        val nx = (tap.x / w).coerceIn(0f, 1f)
-                        val ny = (tap.y / h).coerceIn(0f, 1f)
-                        onUpdateRegion(
-                            NormalizedRect(
-                                left = (nx - halfW).coerceIn(0f, 1f - uiState.targetRegion.width),
-                                top = (ny - halfH).coerceIn(0f, 1f - uiState.targetRegion.height),
-                                right = (nx + halfW).coerceIn(uiState.targetRegion.width, 1f),
-                                bottom = (ny + halfH).coerceIn(uiState.targetRegion.height, 1f)
-                            )
-                        )
-                    }
-                }
-                .pointerInput(w, h, dragW, dragH, followBox == null) {
-                    if (followBox != null) return@pointerInput
-                    detectDragGestures(
-                        onDrag = { change, amount ->
-                            change.consume()
-                            dragOffset = Offset(
-                                (dragOffset.x + amount.x).coerceIn(0f, w - dragW),
-                                (dragOffset.y + amount.y).coerceIn(0f, h - dragH)
-                            )
+                            if (hit != null) {
+                                val c = mapPoint(hit.box.centerX, hit.box.centerY)
+                                val tl = mapPoint(hit.box.left, hit.box.top)
+                                val br = mapPoint(hit.box.right, hit.box.bottom)
+                                val inside = tap.x in minOf(tl.x, br.x)..maxOf(tl.x, br.x) &&
+                                    tap.y in minOf(tl.y, br.y)..maxOf(tl.y, br.y)
+                                if (inside || hypot(c.x - tap.x, c.y - tap.y) < 48f) {
+                                    onSelectDetection(hit)
+                                    return@detectTapGestures
+                                }
+                            }
+                            val halfW = uiState.targetRegion.width / 2f
+                            val halfH = uiState.targetRegion.height / 2f
+                            val nx = (tap.x / w).coerceIn(0f, 1f)
+                            val ny = (tap.y / h).coerceIn(0f, 1f)
                             onUpdateRegion(
                                 NormalizedRect(
-                                    left = (dragOffset.x / w).coerceIn(0f, 1f),
-                                    top = (dragOffset.y / h).coerceIn(0f, 1f),
-                                    right = ((dragOffset.x + dragW) / w).coerceIn(0f, 1f),
-                                    bottom = ((dragOffset.y + dragH) / h).coerceIn(0f, 1f)
+                                    left = (nx - halfW).coerceIn(0f, 1f - uiState.targetRegion.width),
+                                    top = (ny - halfH).coerceIn(0f, 1f - uiState.targetRegion.height),
+                                    right = (nx + halfW).coerceIn(uiState.targetRegion.width, 1f),
+                                    bottom = (ny + halfH).coerceIn(uiState.targetRegion.height, 1f)
                                 )
                             )
                         }
-                    )
+                    }
+                    .pointerInput(w, h, dragW, dragH, followBox == null) {
+                        if (followBox != null) return@pointerInput
+                        detectDragGestures(
+                            onDrag = { change, amount ->
+                                change.consume()
+                                dragOffset = Offset(
+                                    (dragOffset.x + amount.x).coerceIn(0f, w - dragW),
+                                    (dragOffset.y + amount.y).coerceIn(0f, h - dragH)
+                                )
+                                onUpdateRegion(
+                                    NormalizedRect(
+                                        left = (dragOffset.x / w).coerceIn(0f, 1f),
+                                        top = (dragOffset.y / h).coerceIn(0f, 1f),
+                                        right = ((dragOffset.x + dragW) / w).coerceIn(0f, 1f),
+                                        bottom = ((dragOffset.y + dragH) / h).coerceIn(0f, 1f)
+                                    )
+                                )
+                            }
+                        )
+                    }
+            )
+        }
+
+        if (uiState.canAttachLayer) {
+            val chipBox = followBox ?: selectorBox
+            val tl = mapPoint(chipBox.left, chipBox.top)
+            val br = mapPoint(chipBox.right, chipBox.bottom)
+            val left = minOf(tl.x, br.x)
+            val bottom = maxOf(tl.y, br.y)
+            val chipX = left.coerceIn(8f, (w - 180f).coerceAtLeast(8f))
+            val chipY = (bottom + 8f).coerceIn(8f, (h - 40f).coerceAtLeast(8f))
+            Row(
+                modifier = Modifier
+                    .offset { IntOffset(chipX.roundToInt(), chipY.roundToInt()) }
+                    .horizontalScroll(rememberScrollState())
+                    .testTag("motion_track_attach_row"),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                TrackAttachChip("Sticker", "motion_track_attach_sticker") {
+                    onAttach(AttachmentTarget.STICKER)
                 }
+                TrackAttachChip("Overlay", "motion_track_attach_overlay") {
+                    onAttach(AttachmentTarget.OVERLAY)
+                }
+                TrackAttachChip("Text", "motion_track_attach_text") {
+                    onAttach(AttachmentTarget.TEXT)
+                }
+                TrackAttachChip("Layer", "motion_track_attach_layer") {
+                    onAttach(AttachmentTarget.TRANSFORM)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TrackAttachChip(label: String, testTag: String, onClick: () -> Unit) {
+    Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xE600D1B2),
+        border = BorderStroke(1.dp, Color(0xFF00E5FF)),
+        modifier = Modifier
+            .clip(RoundedCornerShape(10.dp))
+            .clickable(onClick = onClick)
+            .testTag(testTag)
+    ) {
+        Text(
+            text = label,
+            color = Color.Black,
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
         )
     }
 }

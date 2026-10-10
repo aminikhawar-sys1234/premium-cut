@@ -205,4 +205,10 @@ data class MotionTrackingUiState(
     val selectedLiveId: Int? = null,
     val lockWidth: Float = 0.30f,
     val lockHeight: Float = 0.30f
-)
+) {
+    val hasPreviewTrack: Boolean
+        get() = (activeResult != null && !activeResult.isEmpty) || liveDetections.isNotEmpty()
+
+    val canAttachLayer: Boolean
+        get() = (activeResult != null && !activeResult.isEmpty) || liveDetections.isNotEmpty()
+}

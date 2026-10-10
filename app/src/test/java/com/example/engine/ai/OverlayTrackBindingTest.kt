@@ -10,6 +10,7 @@ import com.example.domain.model.TextClip
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
 import com.example.engine.KeyframeInterpolator
+import com.example.engine.text.TextLayerRenderer
 import com.example.engine.timeline.TimelineEvaluator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -284,6 +285,51 @@ class OverlayTrackBindingTest {
                     KeyframeInterpolator.interpolate(sB, 0L).posX
             ) > 0.05f
         )
+    }
+
+    @Test
+    fun trackedTextKeepsInterpolatorPose() {
+        val h = host()
+        val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(movingFace(), h, true, true, true, 0f, 0f))
+        val text = TextClip(id = "t", text = "Hi", timelineStartMs = 0L, durationMs = 2000L, animationType = "None", trackBindJson = json)
+        val kf = KeyframeInterpolator.interpolate(text, 0L)
+        val state = TextLayerRenderer.evaluateAnimation(text, 0L)
+        assertEquals(kf.posX, state.posX, 1e-3f)
+        assertEquals(kf.posY, state.posY, 1e-3f)
+        assertEquals(kf.scale, state.scale, 1e-3f)
+    }
+
+    @Test
+    fun localSpriteDoesNotReapplyTrackBind() {
+        val h = host()
+        val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(movingFace(), h, true, true, true, 0f, 0f))
+        val sticker = StickerClip(id = "s", durationMs = 2000L, posX = 0.2f, posY = -0.1f, scale = 1.4f, trackBindJson = json)
+        val tracked = KeyframeInterpolator.interpolate(sticker, 0L)
+        val local = com.example.engine.composition.StickerLayerRenderer.forLocalSprite(sticker)
+        assertTrue(local.trackBindJson.isNullOrBlank())
+        assertEquals(0f, local.posX, 0f)
+        val localPose = com.example.engine.composition.StickerLayerRenderer.evaluateAnimation(local, 0L)
+        assertEquals(0f, localPose.posX, 1e-4f)
+        assertTrue(kotlin.math.abs(tracked.posX) > 0.05f)
+    }
+
+    @Test
+    fun timelineEvaluatorSamplesMaskAndStickerForExport() {
+        val h = host()
+        val result = movingFace()
+        val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(result, h, true, true, true, 0f, 0f))
+        val trackedHost = h.copy(
+            motionTrackJson = MotionTrackCodec.encode(result),
+            mask = MaskSettings(enabled = true, shape = MaskShape.RECTANGLE, width = 0.4f, height = 0.4f, followTracking = true)
+        )
+        val sticker = StickerClip(id = "s", durationMs = 4000L, trackBindJson = json)
+        val timeline = Timeline(videoClips = listOf(trackedHost), stickerClips = listOf(sticker), aspectRatio = AspectRatio.RATIO_9_16)
+        val start = TimelineEvaluator().evaluate(timeline, 0L)
+        val mid = TimelineEvaluator().evaluate(timeline, 1000L)
+        assertTrue(mid.activeStickers.single().posX > start.activeStickers.single().posX)
+        val startMask = start.activeMasks.getValue(h.id)
+        val midMask = mid.activeMasks.getValue(h.id)
+        assertTrue(midMask.posX > startMask.posX)
     }
 
     @Test

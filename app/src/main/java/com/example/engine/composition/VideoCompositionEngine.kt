@@ -381,9 +381,9 @@ class VideoCompositionEngine(private val context: Context) {
       drawTextClip(canvas, composedText, canvasWidth, canvasHeight)
     }
 
-    // 5. Draw Stickers
+    // 5. Draw Stickers (sample track binds at the same timeline time as preview/export)
     for (sticker in frame.activeStickers) {
-      drawStickerClip(canvas, sticker, canvasWidth, canvasHeight)
+      drawStickerClip(canvas, sticker, canvasWidth, canvasHeight, frame.timelinePosMs)
     }
 
     // 6. Apply Active Visual Effects (Flash, Glow, Glitch, Light Leak, Lens Flare, RGB Split)
@@ -415,17 +415,17 @@ class VideoCompositionEngine(private val context: Context) {
     )
   }
 
-  private fun drawStickerClip(canvas: Canvas, sticker: ComposedSticker, width: Int, height: Int) {
+  private fun drawStickerClip(
+    canvas: Canvas,
+    sticker: ComposedSticker,
+    width: Int,
+    height: Int,
+    currentPosMs: Long
+  ) {
     StickerLayerRenderer.draw(
       canvas = canvas,
-      clip = sticker.clip.copy(
-        posX = sticker.posX,
-        posY = sticker.posY,
-        scale = sticker.scale,
-        rotation = sticker.rotation,
-        opacity = sticker.opacity
-      ),
-      currentPosMs = sticker.clip.timelineStartMs,
+      clip = sticker.clip,
+      currentPosMs = currentPosMs,
       width = width,
       height = height
     )

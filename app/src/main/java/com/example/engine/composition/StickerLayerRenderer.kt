@@ -19,6 +19,20 @@ data class AnimatedStickerState(
 
 object StickerLayerRenderer {
 
+  /**
+   * Sprite-only copy for preview boxes and GPU textures. Pose comes from
+   * [evaluateAnimation] / the compositor so [StickerClip.trackBindJson] is not applied twice.
+   */
+  fun forLocalSprite(clip: StickerClip): StickerClip = clip.copy(
+    posX = 0f,
+    posY = 0f,
+    scale = 1f,
+    rotation = 0f,
+    opacity = 1f,
+    trackBindJson = null,
+    keyframes = emptyList()
+  )
+
   fun evaluateAnimation(clip: StickerClip, currentPosMs: Long): AnimatedStickerState {
     val relTimeMs = (currentPosMs - clip.timelineStartMs).coerceAtLeast(0L)
     val timeSec = relTimeMs / 1000f
