@@ -33,7 +33,7 @@ import com.example.ui.StudioViewModel
 
 /**
  * Main Text Templates panel (Text tools → Text Templates).
- * 4-column card grid, vertical scroll, live 3D thumbnails from the real renderer.
+ * 4-column card grid, vertical scroll, live 2D/3D thumbnails from the real renderer.
  * Templates come from packaged JSON / installed plugins — no dummy catalog.
  */
 @Composable
@@ -111,7 +111,7 @@ fun TextTemplatesBrowserPanel(
             textAlign = TextAlign.Center
           )
           Text(
-            text = "Packaged 3D templates and downloaded packs appear in this 4-column browser.",
+            text = "Packaged 2D and 3D live-animate templates appear in this 4-column browser.",
             color = Color(0xFF94A3B8),
             fontSize = 12.sp,
             textAlign = TextAlign.Center

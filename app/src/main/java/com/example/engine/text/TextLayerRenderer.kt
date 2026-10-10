@@ -431,10 +431,11 @@ object TextLayerRenderer {
     val scaledMs = (previewLoopMs * speedMultiplier).toLong()
     val totalLoopDur = 2400L
     val loopTime = (scaledMs % totalLoopDur).coerceAtLeast(0L)
+    val previewFontSp = previewFillFontSizeSp(width, height, clip)
     val effectiveClip = if (overridePosY != null) {
-      clip.copy(posX = 0f, posY = overridePosY)
+      clip.copy(posX = 0f, posY = overridePosY, fontSizeSp = previewFontSp)
     } else {
-      clip.copy(posX = 0f, posY = 0f)
+      clip.copy(posX = 0f, posY = 0f, fontSizeSp = previewFontSp)
     }
     val state = evaluateAnimation(effectiveClip, loopTime)
     val loopFadeAlpha = if (loopTime > 2050L) {
@@ -442,6 +443,27 @@ object TextLayerRenderer {
     } else 1f
     val finalState = state.copy(opacity = state.opacity * loopFadeAlpha)
     drawInternal(canvas, effectiveClip, finalState, width, height, context)
+  }
+
+  /**
+   * Thumbnail cards are ~1/4 of the editor width. The canvas scaler is `width / 360`,
+   * so a 28sp title becomes a few pixels tall. Size the preview glyph to fill the card
+   * so live-animate 2D/3D text stays readable.
+   */
+  fun previewFillFontSizeSp(width: Int, height: Int, clip: TextClip): Float {
+    val w = width.coerceAtLeast(1).toFloat()
+    val h = height.coerceAtLeast(1).toFloat()
+    val pad = if (clip.is3D) 0.68f else 0.78f
+    val usableW = w * pad
+    val usableH = h * pad
+    val lines = clip.text.split('\n')
+    val longest = lines.maxOf { it.length }.coerceAtLeast(1)
+    val lineCount = lines.size.coerceAtLeast(1)
+    val widthPerEm = longest * 0.70f
+    val heightPerEm = lineCount * 1.20f
+    val targetPx = minOf(usableW / widthPerEm, usableH / heightPerEm)
+    val scaleFactor = w / 360f
+    return (targetPx / scaleFactor.coerceAtLeast(0.05f)).coerceIn(52f, 240f)
   }
 
   private fun shadedColor(base: Int, shade: Float, alpha: Float): Int = Color.argb(
