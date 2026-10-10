@@ -29,14 +29,17 @@ class ProductionEffectsTest {
   }
 
   @Test
-  fun catalogHasTwentyUniqueRealEffects() {
+  fun catalogHasUniqueRealEffectsInEveryCategory() {
     val all = ProductionEffectCatalog.effects
-    assertEquals(20, all.size)
-    assertEquals(20, all.map { it.id }.toSet().size)
+    assertEquals(25, all.size)
+    assertEquals(25, all.map { it.id }.toSet().size)
+    assertEquals(25, all.map { it.shaderKey }.toSet().size)
     assertEquals(5, all.count { it.category == EffectCategory.VIDEO_EFFECTS })
     assertEquals(5, all.count { it.category == EffectCategory.FACE_EFFECTS })
     assertEquals(5, all.count { it.category == EffectCategory.BODY_EFFECTS })
     assertEquals(5, all.count { it.category == EffectCategory.PHOTO_EFFECTS })
+    assertEquals(5, all.count { it.category == EffectCategory.AI_EFFECTS })
+    assertEquals(EffectCategory.entries.toList(), ProductionEffectCatalog.categories())
     all.forEach { effect ->
       assertTrue(effect.id, effect.shaderKey?.isNotBlank() == true)
       assertTrue(effect.parameters.contains("intensity"))
@@ -44,8 +47,9 @@ class ProductionEffectsTest {
       assertTrue(effect.supportsExport)
       assertEquals(null, effect.effectType)
     }
-    assertEquals(20, EffectsAssetRegistry.getAllEffects().size)
+    assertEquals(25, EffectsAssetRegistry.getAllEffects().size)
     assertEquals(5, EffectsAssetRegistry.getEffects(EffectCategory.FACE_EFFECTS).size)
+    assertEquals(5, EffectsAssetRegistry.getEffects(EffectCategory.AI_EFFECTS).size)
   }
 
   @Test
@@ -62,7 +66,11 @@ class ProductionEffectsTest {
     assertEquals(0.4f, stack.effectAt(0).intensity, 1e-4f)
     assertEquals(0.012f + 0.045f * 0.4f, stack.effectAt(0).getParam<Float>("amount"), 1e-4f)
     assertEquals("noise.filmGrain", stack.effectAt(1).definition.id)
-    listOf("blur.directional", "chromatic.aberration", "light.leak", "color.hdr", "color.pop", "sharpen.unsharp").forEach { id ->
+    listOf(
+      "blur.directional", "chromatic.aberration", "light.leak", "color.hdr", "color.pop",
+      "sharpen.unsharp", "stylize.sketch", "stylize.halftone", "stylize.posterize",
+      "stylize.pixelate", "stylize.duotone"
+    ).forEach { id ->
       assertNotNull(VfxEffectsHost.registry.createEffect(id))
     }
     assertTrue(VfxEffectsHost.registrationSkipped.isEmpty())
@@ -126,6 +134,63 @@ class ProductionEffectsTest {
       val changed = pixels.indices.count { pixels[it] != base[it] }
       assertTrue("${effect.id} thumbnail changed $changed pixels", changed > 8)
     }
+  }
+
+  @Test
+  fun liveThumbnailsProcessTheSourceFrameNotADummyScene() {
+    val src = IntArray(16 * 16) { i ->
+      val x = i % 16
+      val y = i / 16
+      (0xFF shl 24) or ((x * 16) shl 16) or ((y * 16) shl 8) or 80
+    }
+    val unprocessed = EffectThumbnailRaster.apply(null, src, 16, 16)
+    assertEquals(src.toList(), unprocessed.toList())
+    ProductionEffectCatalog.effects.forEach { effect ->
+      val out = EffectThumbnailRaster.apply(effect.shaderKey, src, 16, 16)
+      val changed = out.indices.count { out[it] != src[it] }
+      assertTrue("${effect.id} live thumb changed $changed pixels", changed > 2)
+    }
+  }
+
+  @Test
+  fun registryRejectsDummyEffectsWithoutShaderKey() {
+    val before = EffectsAssetRegistry.getAllEffects().size
+    EffectsAssetRegistry.registerEffect(
+      com.example.engine.effects.registry.RegisteredEffect(
+        id = "dummy.laser",
+        name = "Laser Grid",
+        category = EffectCategory.VIDEO_EFFECTS,
+        effectType = com.example.domain.model.EffectType.LASER_GRID,
+        shaderKey = null,
+      )
+    )
+    assertEquals(before, EffectsAssetRegistry.getAllEffects().size)
+    assertTrue(EffectsAssetRegistry.getEffects(EffectCategory.VIDEO_EFFECTS).none { it.id == "dummy.laser" })
+  }
+
+  @Test
+  fun appliedOnReadsTheSameFieldsPreviewAndExportUse() {
+    val clip = VideoClip(id = "v", name = "v")
+    val glitch = ProductionEffectCatalog.byId("video.glitch")!!
+    val sketch = ProductionEffectCatalog.byId("ai.sketch")!!
+    val slim = ProductionEffectCatalog.byId("face.slim")!!
+    val looked = ProductionEffectApplicator.apply(
+      ProductionEffectApplicator.apply(
+        ProductionEffectApplicator.apply(clip, glitch, 0.6f),
+        sketch,
+        0.8f
+      ),
+      slim,
+      0.5f
+    )
+    assertEquals("video.glitch", ProductionEffectApplicator.appliedOn(looked, EffectCategory.VIDEO_EFFECTS)?.id)
+    assertEquals("ai.sketch", ProductionEffectApplicator.appliedOn(looked, EffectCategory.AI_EFFECTS)?.id)
+    assertEquals("face.slim", ProductionEffectApplicator.appliedOn(looked, EffectCategory.FACE_EFFECTS)?.id)
+    assertEquals(0.6f, ProductionEffectApplicator.intensityOn(looked, glitch), 1e-4f)
+    assertEquals(0.8f, ProductionEffectApplicator.intensityOn(looked, sketch), 1e-4f)
+    val clearedAi = ProductionEffectApplicator.clearCategory(looked, EffectCategory.AI_EFFECTS)
+    assertNull(ProductionEffectApplicator.appliedOn(clearedAi, EffectCategory.AI_EFFECTS))
+    assertEquals("video.glitch", ProductionEffectApplicator.appliedOn(clearedAi, EffectCategory.VIDEO_EFFECTS)?.id)
   }
 
   @Test

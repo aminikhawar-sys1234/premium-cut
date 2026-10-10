@@ -1807,6 +1807,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     hydrateBodyReshape(media)
     hydrateBgRemoval(timelineEngine.timeline.value)
     runCatching { engineController.invalidateClip(clip.id) }
+    if (playbackEngineDelegate.isInitialized()) {
+      runCatching { playbackEngine.applyActiveLookToPlayers() }
+    }
+    refreshCurrentFrame()
   }
 
   /** Selected main video, selected overlay, or the main clip under the playhead. */

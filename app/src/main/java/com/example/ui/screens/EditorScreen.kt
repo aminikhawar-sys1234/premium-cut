@@ -2636,13 +2636,8 @@ private fun EditorBottomToolbar(
   viewModel: StudioViewModel
 ) {
   if (isEffectsToolsOpen) {
-    // Dedicated Effects Sub-Navigation:
-    // Replaces the previous main editor bottom navigation completely when "Effects" is selected!
-    // Contains exactly 4 horizontally arranged options:
-    // 1. Video Effects
-    // 2. Body Effects
-    // 3. Photo Effects
-    // 4. AI Effects
+    // Dedicated Effects sub-navigation. Categories come from the live registry
+    // (Video / Body / Face / Photo / AI when they have real effects).
     EffectsToolsBottomBar(
       activeCategory = activeEffectsCategoryModal,
       onSelectCategory = onSelectEffectsCategory,

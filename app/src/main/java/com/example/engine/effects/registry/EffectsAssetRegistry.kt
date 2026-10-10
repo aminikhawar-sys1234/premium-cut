@@ -4,7 +4,8 @@ import androidx.compose.runtime.mutableStateListOf
 import com.example.domain.model.EffectType
 
 /**
- * Categories for the clean Effects system.
+ * Categories for the Effects tools bottom bar and category panels.
+ * The bar shows only categories that have at least one real registered effect.
  */
 enum class EffectCategory(val displayName: String, val tag: String) {
   VIDEO_EFFECTS("Video Effects", "nav_video_effects"),
@@ -15,7 +16,8 @@ enum class EffectCategory(val displayName: String, val tag: String) {
 }
 
 /**
- * Data specification for a registered Effect Asset / Plugin.
+ * A registered effect asset. [shaderKey] is required for preview, export, and thumbnails.
+ * Entries without a shader key are rejected — they cannot be applied.
  */
 data class RegisteredEffect(
   val id: String,
@@ -30,24 +32,26 @@ data class RegisteredEffect(
   val parameters: List<String> = listOf("intensity"),
   val supportsPreview: Boolean = true,
   val supportsExport: Boolean = true
-)
+) {
+  val isRenderable: Boolean get() = !shaderKey.isNullOrBlank()
+}
 
 /**
- * Production-ready, extensible Effects Asset Registry.
+ * Runtime Effects Asset Registry.
  *
- * CRITICAL RULE:
- * Absolutely NO dummy, fake, sample, or placeholder effect assets are seeded here.
- * The registry starts completely EMPTY. Real plugins and effect asset packages register
- * through these methods at runtime.
+ * Starts empty. ProductionEffectCatalog.install() and remote packages register real
+ * effects (shaderKey required). Dummy / placeholder / shader-less rows are rejected.
  */
 object EffectsAssetRegistry {
 
   private val _effects = mutableStateListOf<RegisteredEffect>()
 
-  // --- Registration API for Plugins and Asset Bundles ---
-
   fun registerEffect(effect: RegisteredEffect) {
-    if (_effects.none { it.id == effect.id }) {
+    if (!effect.isRenderable) return
+    val idx = _effects.indexOfFirst { it.id == effect.id }
+    if (idx >= 0) {
+      if (_effects[idx] != effect) _effects[idx] = effect
+    } else {
       _effects.add(effect)
     }
   }
@@ -56,10 +60,8 @@ object EffectsAssetRegistry {
     _effects.removeAll { it.id == effectId }
   }
 
-  // --- Query API ---
-
   fun getEffects(category: EffectCategory): List<RegisteredEffect> {
-    return _effects.filter { it.category == category }
+    return _effects.filter { it.category == category && it.isRenderable }
   }
 
   fun searchEffects(category: EffectCategory, query: String): List<RegisteredEffect> {
@@ -70,11 +72,13 @@ object EffectsAssetRegistry {
     }
   }
 
-  fun getAllEffects(): List<RegisteredEffect> = _effects.toList()
+  fun getAllEffects(): List<RegisteredEffect> = _effects.filter { it.isRenderable }
 
-  /**
-   * Resets all registered items. Ensures zero leftover mock or temporary data.
-   */
+  fun populatedCategories(): List<EffectCategory> =
+    EffectCategory.entries.filter { getEffects(it).isNotEmpty() }
+
+  fun snapshot(): List<RegisteredEffect> = _effects.toList()
+
   fun clearAll() {
     _effects.clear()
   }

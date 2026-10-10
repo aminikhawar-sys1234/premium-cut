@@ -239,4 +239,19 @@ class Media3EffectPipelineTest {
     val reset = PreviewFilterEffects.effectsFor(clip.copy(filter = FilterSettings()), Timeline())
     assertTrue(reset.none { it is ColorGradingGlEffect })
   }
+
+  @Test
+  fun testPreviewFilterEffects_includesCatalogVfxOnTheLivePreviewPath() {
+    val clip = VideoClip(name = "Fx")
+    val glitch = com.example.engine.effects.ProductionEffectCatalog.byId("video.glitch")!!
+    val looked = com.example.engine.effects.ProductionEffectApplicator.apply(clip, glitch, 0.8f)
+    val effects = PreviewFilterEffects.effectsFor(looked, Timeline())
+    assertTrue(effects.any { it is CustomShaderGlEffect && it.name == "GlitchEffect" })
+    val sketch = com.example.engine.effects.ProductionEffectCatalog.byId("ai.sketch")!!
+    val styled = com.example.engine.effects.ProductionEffectApplicator.apply(looked, sketch, 1f)
+    val styledEffects = PreviewFilterEffects.effectsFor(styled, Timeline())
+    assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "GlitchEffect" })
+    assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "SketchCharcoalEffect" })
+    assertNotEquals(PreviewFilterEffects.signature(clip, Timeline()), PreviewFilterEffects.signature(styled, Timeline()))
+  }
 }
