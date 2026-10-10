@@ -269,16 +269,16 @@ class MotionTrackerEngine {
         val w = refFrame.width
         val h = refFrame.height
 
-        var currentBox = initialBox
-        val initialW = initialBox.width.coerceAtLeast(0.01f)
-        val initialH = initialBox.height.coerceAtLeast(0.01f)
-        var lastGoodBox = initialBox
+        var currentBox = lockBox
+        val initialW = lockBox.width.coerceAtLeast(0.01f)
+        val initialH = lockBox.height.coerceAtLeast(0.01f)
+        var lastGoodBox = lockBox
 
         keyframes.add(
             MotionKeyframe(
                 timestampUs = startUs,
-                centerX = initialBox.centerX,
-                centerY = initialBox.centerY,
+                centerX = lockBox.centerX,
+                centerY = lockBox.centerY,
                 scaleX = 1.0f,
                 scaleY = 1.0f,
                 rotationDeg = 0.0f,
