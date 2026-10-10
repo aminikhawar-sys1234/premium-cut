@@ -574,7 +574,7 @@ fun InteractiveTransformOverlay(
             val nativeCanvas = composeCanvas.nativeCanvas
             StickerLayerRenderer.draw(
               canvas = nativeCanvas,
-              clip = sticker.copy(posX = 0f, posY = 0f, scale = 1f, rotation = 0f),
+              clip = StickerLayerRenderer.forLocalSprite(sticker),
               currentPosMs = currentPosMs,
               width = size.width.toInt(),
               height = size.height.toInt()

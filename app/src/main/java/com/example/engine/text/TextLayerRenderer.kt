@@ -79,8 +79,9 @@ object TextLayerRenderer {
     var rot3DZ = 0f
     var depth3D = if (clip.is3D) clip.depth3D else 0f
 
-    // 1. If custom/generated keyframes are present, they drive the transform directly
-    if (clip.keyframes.isNotEmpty()) {
+    // 1. Keyframes and motion-track binds drive pose. Do not let preset "none"
+    // animations reset scale/position off the tracked box.
+    if (clip.keyframes.isNotEmpty() || !clip.trackBindJson.isNullOrBlank()) {
       return EvaluatedTextState(
         visibleText = visibleText,
         posX = animPosX,

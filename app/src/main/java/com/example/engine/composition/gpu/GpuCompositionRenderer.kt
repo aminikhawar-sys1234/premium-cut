@@ -1324,6 +1324,7 @@ class GpuCompositionRenderer(private val context: Context) {
         clip.rotation.hashCode() xor
         clip.posX.hashCode() xor
         clip.posY.hashCode() xor
+        (clip.trackBindJson?.hashCode() ?: 0) xor
         clip.alignment.hashCode() xor
         animTimeStep xor
         viewportWidth xor
@@ -1427,7 +1428,7 @@ class GpuCompositionRenderer(private val context: Context) {
 
     StickerLayerRenderer.draw(
       canvas = canvas,
-      clip = clip.copy(posX = 0f, posY = 0f, scale = 1f, rotation = 0f, opacity = 1f),
+      clip = StickerLayerRenderer.forLocalSprite(clip),
       currentPosMs = clip.timelineStartMs,
       width = targetWidth,
       height = targetHeight

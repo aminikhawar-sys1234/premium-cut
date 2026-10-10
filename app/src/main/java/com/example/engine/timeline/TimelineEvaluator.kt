@@ -104,7 +104,9 @@ class TimelineEvaluator {
             posY = kf.posY,
             scale = kf.scale,
             rotation = kf.rotation,
-            opacity = kf.opacity
+            opacity = kf.opacity,
+            trackBindJson = null,
+            keyframes = emptyList()
           )
         } else clip
         val state = TextLayerRenderer.evaluateAnimation(effectiveClip, posMs)
@@ -197,7 +199,15 @@ class TimelineEvaluator {
       activeClipTransform = activeClipTransform,
       colorMatrix = colorMatrix,
       colorFilter = colorFilter,
-      activeMasks = activeClip?.mask?.let { mapOf(activeClip.id to it) } ?: emptyMap(),
+      activeMasks = activeClip?.let { clip ->
+        mapOf(
+          clip.id to com.example.engine.ai.OverlayTrackCodec.applyToMask(
+            clip.mask,
+            clip.motionTrackJson,
+            sourcePosMs * 1000L
+          )
+        )
+      } ?: emptyMap(),
       trackVisibility = timeline.trackSettings.mapValues { !it.value.isHidden },
       trackMute = timeline.trackSettings.mapValues { it.value.isMuted },
       trackSolo = timeline.trackSettings.mapValues { it.value.isSolo },

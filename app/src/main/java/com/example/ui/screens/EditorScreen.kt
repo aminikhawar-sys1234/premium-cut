@@ -120,6 +120,7 @@ fun EditorScreen(
   val canRedo by viewModel.timelineEngine.canRedo.collectAsState()
   val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
   val activeTab by viewModel.activeToolbarTab.collectAsState()
+  val trackingUiState by viewModel.motionTrackingState.collectAsState()
   val isSnapping by viewModel.timelineEngine.isSnappingEnabled.collectAsState()
   val timelineZoom by viewModel.timelineEngine.timelineZoom.collectAsState()
   val selectedClipIds by viewModel.timelineEngine.selectedClipIds.collectAsState()
@@ -669,9 +670,10 @@ fun EditorScreen(
             .testTag("video_preview")
         )
 
-        // Motion Tracking Interactive Target & Trajectory Overlay
-        if (activeTab == EditorToolbarTab.MOTION_TRACKING) {
-          val trackingUiState by viewModel.motionTrackingState.collectAsState()
+        // Motion tracking box / path stays on the preview after the panel closes.
+        val showMotionTrackingOverlay =
+          activeTab == EditorToolbarTab.MOTION_TRACKING || trackingUiState.hasPreviewTrack
+        if (showMotionTrackingOverlay) {
           val activeTrackClip = viewModel.getSelectedVideoClip()
           com.example.ui.components.tracking.MotionTrackingPreviewOverlay(
             uiState = trackingUiState,
@@ -680,11 +682,14 @@ fun EditorScreen(
             videoHeight = activeTrackClip?.height ?: 0,
             naturalRotation = activeTrackClip?.naturalRotation ?: 0,
             canvasAspect = aspectRatio.ratio,
+            interactive = activeTab == EditorToolbarTab.MOTION_TRACKING,
             onUpdateRegion = { viewModel.updateTrackingRegion(it) },
             onSelectDetection = { viewModel.selectLiveDetection(it) },
+            onAttach = { viewModel.attachTrackingToLayer(it) },
             modifier = Modifier
               .fillMaxHeight(0.98f)
               .aspectRatio(aspectRatio.ratio, matchHeightConstraintsFirst = true)
+              .testTag("motion_tracking_preview_overlay")
           )
         }
 
@@ -1483,6 +1488,23 @@ fun EditorScreen(
           onAddMedia = safeLaunchMediaPicker,
           modifier = Modifier.fillMaxSize()
         )
+
+        if (activeTab == EditorToolbarTab.MOTION_TRACKING || trackingUiState.hasPreviewTrack) {
+          val activeTrackClip = viewModel.getSelectedVideoClip()
+          com.example.ui.components.tracking.MotionTrackingPreviewOverlay(
+            uiState = trackingUiState,
+            sourceTimeUs = (activeTrackClip?.timelineToSourceMs(currentPosMs) ?: currentPosMs) * 1000L,
+            videoWidth = activeTrackClip?.width ?: 0,
+            videoHeight = activeTrackClip?.height ?: 0,
+            naturalRotation = activeTrackClip?.naturalRotation ?: 0,
+            canvasAspect = aspectRatio.ratio,
+            interactive = activeTab == EditorToolbarTab.MOTION_TRACKING,
+            onUpdateRegion = { viewModel.updateTrackingRegion(it) },
+            onSelectDetection = { viewModel.selectLiveDetection(it) },
+            onAttach = { viewModel.attachTrackingToLayer(it) },
+            modifier = Modifier.fillMaxSize()
+          )
+        }
 
         // Top bar overlay
         Row(

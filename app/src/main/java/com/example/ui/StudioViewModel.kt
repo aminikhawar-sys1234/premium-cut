@@ -781,10 +781,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         fallbackRegion = detection.box
       )
     }
+    val nextResult = run {
+      val keepFullTrack = _motionTrackingState.value.activeResult != null &&
+        _motionTrackingState.value.activeResult!!.keyframes.size > 3 &&
+        _motionTrackingState.value.engineState == TrackingEngineState.COMPLETED
+      if (keepFullTrack) _motionTrackingState.value.activeResult else (seeded ?: _motionTrackingState.value.activeResult)
+    }
+    if (clip != null && nextResult != null && nextResult.keyframes.isNotEmpty()) {
+      persistClipMotionTrack(clip, nextResult)
+    }
     _motionTrackingState.update {
-      val keepFullTrack = it.activeResult != null &&
-        it.activeResult!!.keyframes.size > 3 &&
-        it.engineState == TrackingEngineState.COMPLETED
       it.copy(
         targetRegion = detection.box.clamped(),
         selectedLiveId = detection.id,
@@ -792,7 +798,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         lockHeight = detection.box.height,
         statusMessage = "Locked ${detection.label}",
         errorMessage = null,
-        activeResult = if (keepFullTrack) it.activeResult else (seeded ?: it.activeResult)
+        activeResult = nextResult
       )
     }
   }
@@ -1002,12 +1008,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       }
       return
     }
-    if (_motionTrackingState.value.activeResult == null ||
-      _motionTrackingState.value.activeResult?.keyframes.isNullOrEmpty()
-    ) {
-      _motionTrackingState.update { it.copy(activeResult = result, errorMessage = null) }
-      timelineEngine.setClipMotionTrack(activeClip.id, MotionTrackCodec.encode(result))
-    }
+    _motionTrackingState.update { it.copy(activeResult = result, errorMessage = null) }
+    persistClipMotionTrack(activeClip, result)
 
     val layerStartMs = activeClip.sourceToTimelineMs(result.startTimestampUs / 1000L)
     val layerEndMs = activeClip.sourceToTimelineMs(result.endTimestampUs / 1000L)
@@ -2249,13 +2251,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           activeResult = null,
           engineState = TrackingEngineState.IDLE
         )
-        decoded == null && json == null && state.activeResult?.clipId == clip?.id -> state.copy(
-          activeResult = null,
-          engineState = TrackingEngineState.IDLE
-        )
         else -> state
       }
     }
+  }
+
+  private fun persistClipMotionTrack(clip: VideoClip, result: TrackingResult) {
+    if (result.keyframes.isEmpty()) return
+    timelineEngine.setClipMotionTrack(clip.id, MotionTrackCodec.encode(result))
   }
 
   /** Rebuilds the compositor's cutout registry from the timeline after edit / load / undo / redo. */
@@ -3033,11 +3036,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
     ensureFaceSource(force = true)
     val result = resolveAttachResult(clip)
-    if (result != null && (_motionTrackingState.value.activeResult == null ||
-        _motionTrackingState.value.activeResult?.keyframes.isNullOrEmpty())
-    ) {
+    if (result != null && result.keyframes.isNotEmpty()) {
       _motionTrackingState.update { it.copy(activeResult = result, errorMessage = null) }
-      timelineEngine.setClipMotionTrack(clip.id, MotionTrackCodec.encode(result))
+      persistClipMotionTrack(clip, result)
     }
     if (filter.canExport) {
       if (result == null) {

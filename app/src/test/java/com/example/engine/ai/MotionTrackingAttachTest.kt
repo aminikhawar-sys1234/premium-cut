@@ -95,6 +95,31 @@ class MotionTrackingAttachTest {
     }
 
     @Test
+    fun previewTrackStaysVisibleWithLiveOrCompletedResult() {
+        val empty = MotionTrackingUiState()
+        assertTrue(!empty.hasPreviewTrack)
+        assertTrue(!empty.canAttachLayer)
+        val live = MotionTrackingUiState(
+            liveDetections = listOf(
+                LiveDetection(1, TrackingCategory.FACE, NormalizedRect(0.2f, 0.2f, 0.4f, 0.4f), "Face", 0.9f)
+            )
+        )
+        assertTrue(live.hasPreviewTrack)
+        assertTrue(live.canAttachLayer)
+        val tracked = MotionTrackingUiState(
+            activeResult = MotionTrackingAttach.resultFromLive(
+                clip = clip(),
+                detections = live.liveDetections,
+                selectedId = 1,
+                category = TrackingCategory.FACE,
+                playheadSourceUs = 0L
+            )
+        )
+        assertTrue(tracked.hasPreviewTrack)
+        assertTrue(tracked.canAttachLayer)
+    }
+
+    @Test
     fun facesFromStateUseLiveLockBeforeEmptyTrack() {
         val state = MotionTrackingUiState(
             liveDetections = listOf(
