@@ -114,6 +114,7 @@ object TextTemplateCatalog {
       animationType = source.animationType,
       animationIn = source.animationIn,
       animationOut = source.animationOut,
+      animDurationMs = source.animDurationMs,
       animationDelayMs = source.animationDelayMs,
       animationEasing = source.animationEasing,
       is3D = source.is3D,
@@ -308,11 +309,18 @@ object TextTemplateCatalog {
       return v.ifBlank { fallback }
     }
 
+    val is3D = bool(
+      "is3D",
+      src.has("material3D") || root.has("material3D") ||
+        (src.has("depth3D") && src.optDouble("depth3D") > 0.0) ||
+        (root.has("depth3D") && root.optDouble("depth3D") > 0.0)
+    )
+
     return TextClip(
       text = str("text", str("defaultText", "Aa")),
       fontFamily = str("fontFamily", "sans-serif-black"),
       customFontPath = str("customFontPath", "").takeIf { it.isNotBlank() },
-      fontSizeSp = num("fontSizeSp", 28.0).toFloat(),
+      fontSizeSp = num("fontSizeSp", 44.0).toFloat(),
       fontWeight = num("fontWeight", 800.0).toInt(),
       isItalic = bool("isItalic", false),
       isAllCaps = bool("isAllCaps", false),
@@ -334,11 +342,9 @@ object TextTemplateCatalog {
       animationType = str("animationType", str("animationIn", "None")),
       animationIn = str("animationIn", "None"),
       animationOut = str("animationOut", "Fade"),
-      is3D = bool(
-        "is3D",
-        src.has("material3D") || root.has("material3D") || src.has("depth3D") || root.has("depth3D")
-      ),
-      depth3D = num("depth3D", 12.0).toFloat(),
+      animDurationMs = num("animDurationMs", 1600.0).toLong().coerceAtLeast(200L),
+      is3D = is3D,
+      depth3D = num("depth3D", if (is3D) 12.0 else 0.0).toFloat(),
       bevelAngle3D = num("bevelAngle3D", 24.0).toFloat(),
       color3D = color("color3D", 0xFF1E293B),
       bevelRadius3D = num("bevelRadius3D", 2.0).toFloat(),

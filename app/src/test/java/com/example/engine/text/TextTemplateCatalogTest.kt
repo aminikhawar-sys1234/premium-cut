@@ -28,9 +28,12 @@ class TextTemplateCatalogTest {
   }
 
   @Test
-  fun catalogLoadsUniqueReal3dTemplatesFromAssets() {
+  fun catalogLoadsUniqueReal3dAnd2dTemplatesFromAssets() {
     val templates = TextAssetRegistry.getTemplates()
-    assertTrue("Packaged 3D templates must load from assets", templates.size >= 16)
+    val threeD = templates.filter { it.templateClip.is3D }
+    val twoD = templates.filter { !it.templateClip.is3D }
+    assertTrue("Packaged 3D templates must load from assets", threeD.size >= 16)
+    assertTrue("Packaged 2D live-animate templates must load from assets", twoD.size >= 10)
 
     val ids = templates.map { it.id }
     assertEquals("Duplicate template ids are not allowed", ids.size, ids.toSet().size)
@@ -43,10 +46,33 @@ class TextTemplateCatalogTest {
       assertFalse(template.name.contains("placeholder", ignoreCase = true))
       assertFalse(template.name.matches(Regex("(?i)template\\s*\\d+")))
       assertTrue(template.templateClip.text.isNotBlank())
+      assertTrue(
+        "${template.id} preview text must be large enough to read",
+        template.templateClip.fontSizeSp >= 36f
+      )
+    }
+
+    threeD.forEach { template ->
       assertTrue("${template.id} must be a 3D text style", template.templateClip.is3D)
       assertTrue(template.templateClip.depth3D > 0f)
       assertTrue(template.templateClip.material3D.isNotBlank())
     }
+
+    val liveKeys = twoD.map { it.templateClip.animationIn.trim().lowercase() }.toSet()
+    assertEquals("Each 2D template should use a distinct live animation", twoD.size, liveKeys.size)
+    twoD.forEach { template ->
+      assertFalse("${template.id} must stay 2D", template.templateClip.is3D)
+      assertEquals(0f, template.templateClip.depth3D, 0.01f)
+      assertFalse(TextMotionCatalog.isNone(template.templateClip.animationIn))
+      assertTrue(template.templateClip.animDurationMs >= 1200L)
+    }
+  }
+
+  @Test
+  fun templatePreviewFillsSmallThumbnail() {
+    val clip = TextClip(text = "Aa", fontSizeSp = 28f, is3D = true)
+    val previewSp = TextLayerRenderer.previewFillFontSizeSp(80, 80, clip)
+    assertTrue("Live-animate thumbnail text must be larger than the canvas title size", previewSp > clip.fontSizeSp * 2f)
   }
 
   @Test
@@ -69,6 +95,30 @@ class TextTemplateCatalogTest {
     assertEquals(0xFFFF0000, TextTemplateCatalog.parseColor("#FF0000", 0L))
     assertEquals(0x80AABBCC, TextTemplateCatalog.parseColor("#80AABBCC", 0L))
     assertEquals(0xFFFFFFFF, TextTemplateCatalog.parseColor("nope", 0xFFFFFFFF))
+  }
+
+  @Test
+  fun parseKeeps2dTemplatesFlatAndAnimated() {
+    val parsed = TextTemplateCatalog.parseArray(
+      """
+      {
+        "id": "2d.demo",
+        "name": "Demo",
+        "category": "2D",
+        "text": "Aa",
+        "fontSizeSp": 48,
+        "is3D": false,
+        "depth3D": 0,
+        "animationIn": "Pop",
+        "animDurationMs": 1600
+      }
+      """.trimIndent()
+    ).single()
+    assertFalse(parsed.templateClip.is3D)
+    assertEquals(0f, parsed.templateClip.depth3D, 0.01f)
+    assertEquals("Pop", parsed.templateClip.animationIn)
+    assertEquals(1600L, parsed.templateClip.animDurationMs)
+    assertEquals(48f, parsed.templateClip.fontSizeSp, 0.01f)
   }
 
   @Test
