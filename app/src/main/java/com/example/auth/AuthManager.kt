@@ -10,6 +10,7 @@ import androidx.credentials.GetCredentialResponse
 import androidx.credentials.exceptions.GetCredentialCancellationException
 import androidx.credentials.exceptions.GetCredentialException
 import com.example.BuildConfig
+import com.example.data.firebase.FirebaseBootstrap
 import com.example.data.local.AccountDao
 import com.example.data.local.AppDatabase
 import com.example.data.local.OAuthConnectionDao
@@ -18,7 +19,6 @@ import com.example.data.local.UserAccountEntity
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.FirebaseApp
-import com.google.firebase.FirebaseOptions
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
 import com.google.firebase.auth.GoogleAuthProvider
@@ -133,21 +133,10 @@ class AuthManager private constructor(private val appContext: Context) {
   }
 
   private fun ensureFirebaseInitialized(context: Context) {
-    if (FirebaseApp.getApps(context).isEmpty()) {
-      try {
-        val apiKey = runCatching { BuildConfig.FIREBASE_API_KEY }.getOrDefault("")
-        val projectId = runCatching { BuildConfig.FIREBASE_PROJECT_ID }.getOrDefault("")
-        if (apiKey.isNotBlank() && projectId.isNotBlank()) {
-          val options = FirebaseOptions.Builder()
-            .setApiKey(apiKey)
-            .setApplicationId("1:368906369830:android:7d8a9f0e1b2c3d4e")
-            .setProjectId(projectId)
-            .build()
-          FirebaseApp.initializeApp(context, options)
-        }
-      } catch (e: Exception) {
-        Log.e("AuthManager", "Failed to explicitly initialize FirebaseApp", e)
-      }
+    try {
+      FirebaseBootstrap.ensure(context)
+    } catch (e: Exception) {
+      Log.e("AuthManager", "Failed to explicitly initialize FirebaseApp", e)
     }
   }
 

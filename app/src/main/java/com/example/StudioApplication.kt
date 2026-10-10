@@ -32,21 +32,9 @@ class StudioApplication : Application() {
       }
     }
 
-    // 1. Safe Firebase App Initialization with explicit BuildConfig parameters
+    // Auth, Firestore, and Storage all use project gen-lang-client-0291066258.
     try {
-      if (com.google.firebase.FirebaseApp.getApps(this).isEmpty()) {
-        val apiKey = runCatching { BuildConfig.FIREBASE_API_KEY }.getOrDefault("")
-        val projectId = runCatching { BuildConfig.FIREBASE_PROJECT_ID }.getOrDefault("")
-        val applicationId = runCatching { BuildConfig.FIREBASE_APPLICATION_ID }.getOrDefault("")
-        if (apiKey.isNotBlank() && projectId.isNotBlank() && applicationId.isNotBlank()) {
-          val options = com.google.firebase.FirebaseOptions.Builder()
-            .setApiKey(apiKey)
-            .setApplicationId(applicationId)
-            .setProjectId(projectId)
-            .build()
-          com.google.firebase.FirebaseApp.initializeApp(this, options)
-        }
-      }
+      com.example.data.firebase.FirebaseBootstrap.ensure(this)
     } catch (t: Throwable) {
       Log.w("StudioApplication", "FirebaseApp initialization offline fallback: ${t.message}")
     }

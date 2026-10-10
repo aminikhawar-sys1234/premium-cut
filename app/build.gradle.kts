@@ -4,6 +4,7 @@ plugins {
   alias(libs.plugins.google.devtools.ksp)
   alias(libs.plugins.roborazzi)
   alias(libs.plugins.secrets)
+  alias(libs.plugins.google.services)
   kotlin("plugin.serialization") version "2.2.10"
 }
 
@@ -31,9 +32,11 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
     buildConfigField("String", "OAUTH_CLIENT_ID", "\"368906369830-nqn2crd6fsepp1q9mkikr54pojg6jvjm.apps.googleusercontent.com\"")
-    buildConfigField("String", "FIREBASE_API_KEY", "\"AIzaSyCg6RcmUXofXcDA3o3-YU7So3kbtSsD-nY\"")
+    buildConfigField("String", "FIREBASE_API_KEY", "\"AIzaSyCQIRfpve21--gf8Fiy9lpoxY9PrVle-W4\"")
     buildConfigField("String", "FIREBASE_PROJECT_ID", "\"gen-lang-client-0291066258\"")
     buildConfigField("String", "FIREBASE_APPLICATION_ID", "\"1:368906369830:android:fb75b229a82f28f8861fe7\"")
+    buildConfigField("String", "FIREBASE_STORAGE_BUCKET", "\"gen-lang-client-0291066258.firebasestorage.app\"")
+    buildConfigField("String", "FIREBASE_GCM_SENDER_ID", "\"368906369830\"")
   }
 
   externalNativeBuild {
@@ -95,9 +98,8 @@ secrets {
   ignoreList.add("FIREBASE_APPCHECK_DEBUG_TOKEN")
 }
 
-// Firebase is initialized explicitly in AuthManager.kt from BuildConfig values.
-// The google-services Gradle plugin is intentionally not applied because this
-// repository does not require a checked-in google-services.json for builds.
+// google-services.json is the Firebase project config. FirebaseBootstrap also
+// falls back to the BuildConfig fields above when that resource init is unavailable.
 
 // Some unused dependencies are commented out below instead of being removed.
 // This makes it easy to add them back in the future if needed.
@@ -144,6 +146,7 @@ dependencies {
 
   // Authentication & Credential Manager dependencies
   implementation(libs.firebase.auth)
+  implementation(libs.firebase.functions)
   implementation(libs.androidx.credentials)
   implementation(libs.androidx.credentials.play.services)
   implementation(libs.googleid)
