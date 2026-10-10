@@ -2,10 +2,12 @@ package com.example.ai
 
 import android.content.Context
 import android.graphics.Bitmap
+import com.ahstudio.captions.android.CaptionsGraph
+import com.ahstudio.captions.engine.AutoCaptionOptions
+import com.ahstudio.captions.recognition.CaptionLanguages
 import com.example.ai.providers.*
 import com.example.ai.providers.secure.AISecurityConfig
 import com.example.domain.model.*
-import com.example.engine.audio.AudioEngine
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -53,8 +55,6 @@ class AIToolsService(private val context: Context? = null) {
 
   val highlightDetection: HighlightDetectionProvider = GeminiAIProvider(context)
 
-  private val audioEngine: AudioEngine? = safeContext?.let { AudioEngine(it) }
-
   val isAIConfigured: Boolean
     get() = AISecurityConfig.isConfigured(context)
 
@@ -64,52 +64,58 @@ class AIToolsService(private val context: Context? = null) {
   }
 
   /**
-   * AI Auto Captions: Analyzes actual imported media audio and generates synchronized captions.
-   * If media has no audio or API is unavailable, returns clear failure without fake captions.
+   * AI Auto Captions: uploads the imported clip and reads word times from the
+   * Firebase `transcribeCaptions` function. An empty list means no speech was
+   * measured. Failures stay failures; this method does not invent caption lines.
    */
   suspend fun generateAutoCaptions(
     timeline: Timeline,
     language: String = "English"
   ): Result<List<TextClip>> = withContext(Dispatchers.IO) {
-    if (timeline.videoClips.isEmpty() && timeline.audioClips.isEmpty()) {
-      return@withContext Result.failure(
+    val ctx = safeContext ?: return@withContext Result.failure(
+      IllegalStateException("Auto captions need the app context to reach the Firebase speech engine.")
+    )
+    val mediaUriStr = timeline.audioClips.firstOrNull { it.uri.isNotBlank() }?.uri
+      ?: timeline.videoClips.firstOrNull { it.uri.isNotBlank() }?.uri
+      ?: return@withContext Result.failure(
         IllegalStateException("No media on timeline: Please import a video or audio clip first to generate captions.")
       )
+    val mediaUri = if (mediaUriStr.startsWith("content://") || mediaUriStr.startsWith("file://")) {
+      android.net.Uri.parse(mediaUriStr)
+    } else {
+      android.net.Uri.fromFile(File(mediaUriStr))
     }
-
-    if (!speechToText.isAvailable) {
-      return@withContext Result.failure(
-        IllegalStateException("Speech-to-Text unavailable: No AI provider configured. Please configure your backend endpoint or API credentials in AI Settings.")
-      )
-    }
-
-    // Step 1: Obtain actual audio file
-    var audioFile: File? = null
-
-    val firstAudio = timeline.audioClips.firstOrNull { it.uri.isNotBlank() }
-    if (firstAudio != null) {
-      val candidate = File(firstAudio.uri)
-      if (candidate.exists() && candidate.length() > 0L) {
-        audioFile = candidate
-      } else if (audioEngine != null) {
-        audioFile = audioEngine.extractAudioFromVideo(firstAudio.uri)
+    try {
+      val project = CaptionsGraph.get(ctx).autoEngine.generate(
+        mediaUri = mediaUri,
+        options = AutoCaptionOptions(
+          languageTag = CaptionLanguages.tag(language),
+          preferredProviderId = "firebase-speech",
+        ),
+      ) { }
+      val clips = project.tracks.firstOrNull()?.clips.orEmpty().map { clip ->
+        val startMs = (clip.timing.start.micros / 1000L).coerceAtLeast(0L)
+        val durMs = ((clip.timing.end.micros - clip.timing.start.micros) / 1000L).coerceAtLeast(500L)
+        val wordTimings = clip.words.map { word ->
+          WordTiming(
+            word.text,
+            ((word.start.micros - clip.timing.start.micros) / 1000L).coerceAtLeast(0L),
+            ((word.end.micros - word.start.micros) / 1000L).coerceAtLeast(100L),
+          )
+        }
+        TextClip(
+          id = UUID.randomUUID().toString(),
+          text = clip.displayText,
+          timelineStartMs = startMs,
+          durationMs = durMs,
+          words = wordTimings,
+          subtitleStyle = "Classic",
+        )
       }
+      Result.success(clips)
+    } catch (error: Exception) {
+      Result.failure(error)
     }
-
-    if (audioFile == null && audioEngine != null) {
-      val firstVideo = timeline.videoClips.firstOrNull { it.uri.isNotBlank() }
-      if (firstVideo != null) {
-        audioFile = audioEngine.extractAudioFromVideo(firstVideo.uri)
-      }
-    }
-
-    if (audioFile != null && audioFile.exists() && audioFile.length() > 0L) {
-      return@withContext speechToText.transcribeAudio(audioFile, language)
-    }
-
-    return@withContext Result.failure(
-      IllegalStateException("Auto captions need a real audio or video clip. Title-only caption generation is disabled.")
-    )
   }
 
   /**

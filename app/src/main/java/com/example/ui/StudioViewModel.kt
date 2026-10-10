@@ -2347,13 +2347,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val mediaUri = if (mediaUriStr.startsWith("content://") || mediaUriStr.startsWith("file://")) {
           android.net.Uri.parse(mediaUriStr)
         } else android.net.Uri.fromFile(File(mediaUriStr))
-        val langTag = when (language.lowercase()) {
-          "spanish" -> "es"; "french" -> "fr"; "german" -> "de"; "chinese" -> "zh"
-          "japanese" -> "ja"; "arabic" -> "ar"; "urdu" -> "ur"; "hindi" -> "hi"; else -> "en"
-        }
+        val langTag = com.ahstudio.captions.recognition.CaptionLanguages.tag(language)
         val project = CaptionsGraph.get(getApplication()).autoEngine.generate(
           mediaUri = mediaUri,
-          options = AutoCaptionOptions(languageTag = langTag),
+          options = AutoCaptionOptions(languageTag = langTag, preferredProviderId = "firebase-speech"),
         ) { state ->
           when (state) {
             is CaptionGenerationState.ExtractingAudio -> _aiStatusMessage.value = "Captions Engine: Extracting audio..."
@@ -2465,21 +2462,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
           if (mediaUri != null) {
             try {
-              val langTag = when (language.lowercase()) {
-                "spanish" -> "es"
-                "french" -> "fr"
-                "german" -> "de"
-                "chinese" -> "zh"
-                "japanese" -> "ja"
-                "arabic" -> "ar"
-                "urdu" -> "ur"
-                "hindi" -> "hi"
-                else -> "en"
-              }
+              val langTag = com.ahstudio.captions.recognition.CaptionLanguages.tag(language)
               val captionsGraph = CaptionsGraph.get(getApplication())
               val project = captionsGraph.autoEngine.generate(
                 mediaUri = mediaUri,
-                options = AutoCaptionOptions(languageTag = langTag)
+                options = AutoCaptionOptions(languageTag = langTag, preferredProviderId = "firebase-speech")
               ) { state ->
                 when (state) {
                   is CaptionGenerationState.ExtractingAudio -> _aiStatusMessage.value = "Captions Engine: Extracting audio..."
@@ -2490,8 +2477,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 }
               }
               val primaryTrack = project.tracks.firstOrNull()
-              if (primaryTrack != null && primaryTrack.clips.isNotEmpty()) {
-                val newClips = primaryTrack.clips.map { clip ->
+              val newClips = primaryTrack?.clips.orEmpty().map { clip ->
                   val startMs = (clip.timing.start.micros / 1000L).coerceAtLeast(0L)
                   val durMs = ((clip.timing.end.micros - clip.timing.start.micros) / 1000L).coerceAtLeast(500L)
                   val wordTimings = clip.words.map { w ->
@@ -2508,29 +2494,24 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     subtitleStyle = "Classic"
                   )
                 }
-                val currentList = timelineEngine.timeline.value.textClips.toMutableList()
-                currentList.addAll(newClips)
-                timelineEngine.replaceTimelineKeepingState(timelineEngine.timeline.value.copy(textClips = currentList))
-                _aiStatusMessage.value = "Generated ${newClips.size} auto captions via Captions Engine!"
+                if (newClips.isEmpty()) {
+                  _aiStatusMessage.value = "No spoken words detected in the audio."
+                } else {
+                  val currentList = timelineEngine.timeline.value.textClips.toMutableList()
+                  currentList.addAll(newClips)
+                  timelineEngine.replaceTimelineKeepingState(timelineEngine.timeline.value.copy(textClips = currentList))
+                  _aiStatusMessage.value = "Generated ${newClips.size} captions from the Firebase speech engine."
+                }
                 generatedWithEngine = true
-              }
             } catch (e: Exception) {
-              // Fallback to aiTools if engine extraction encounters format discrepancy
+              _aiStatusMessage.value = e.message ?: "Auto captions failed."
+              generatedWithEngine = true
             }
           }
         }
 
         if (!generatedWithEngine) {
-          val result = aiTools.generateAutoCaptions(timelineEngine.timeline.value, language)
-          val captions = result.getOrThrow()
-          if (captions.isEmpty()) {
-            _aiStatusMessage.value = "No spoken words detected in imported audio."
-          } else {
-            val currentList = timelineEngine.timeline.value.textClips.toMutableList()
-            currentList.addAll(captions)
-            timelineEngine.replaceTimelineKeepingState(timelineEngine.timeline.value.copy(textClips = currentList))
-            _aiStatusMessage.value = "Generated ${captions.size} auto captions successfully!"
-          }
+          _aiStatusMessage.value = "Import a video or audio clip before generating captions."
         }
       } catch (e: Exception) {
         _aiStatusMessage.value = e.message ?: "AI Captions unavailable. Configure backend/API credentials."

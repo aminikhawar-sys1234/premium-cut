@@ -39,9 +39,22 @@ object AiAutoCaptionEngine {
       return@withContext emptyList()
     }
 
-    onProgress(0.1f, "Extracting audio waveform for ${language.displayName}...")
-    // Real caption transcription delegates to backend/Gemini STT
-    onProgress(1.0f, "Completed audio speech scan.")
-    return@withContext emptyList()
+    onProgress(0.1f, "Sending audio to the Firebase speech engine (${language.displayName})...")
+    val result = com.example.ai.AIToolsService(context).generateAutoCaptions(timeline, language.displayName)
+    return@withContext result.fold(
+      onSuccess = { clips ->
+        val status = if (clips.isEmpty()) {
+          "No spoken words detected in the audio."
+        } else {
+          "Generated ${clips.size} captions from the Firebase speech engine."
+        }
+        onProgress(1.0f, status)
+        clips
+      },
+      onFailure = { error ->
+        onProgress(1.0f, error.message ?: "Auto captions failed.")
+        emptyList()
+      },
+    )
   }
 }

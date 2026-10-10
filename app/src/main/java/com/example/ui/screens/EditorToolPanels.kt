@@ -971,7 +971,7 @@ fun CaptionsToolPanel(
         ) {
           CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = CyanAccent)
           Text(
-            text = aiStatusMessage.ifBlank { "Gemini API analyzing audio track & generating captions..." },
+            text = aiStatusMessage.ifBlank { "Firebase speech engine analyzing audio and generating captions..." },
             style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold)
           )
         }
@@ -1139,7 +1139,7 @@ fun CaptionsToolPanel(
               Icon(Icons.Default.Subtitles, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(32.dp))
               Spacer(modifier = Modifier.height(6.dp))
               Text("No captions on timeline yet.", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))
-              Text("Tap 'Generate Captions' above to transcribe audio with Gemini API.", style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent))
+              Text("Tap 'Generate Captions' above to transcribe audio with the Firebase speech engine.", style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent))
             }
           }
         } else {

@@ -46,10 +46,11 @@ fun AiSuiteToolPanel(
 
   var isProcessing by remember { mutableStateOf(false) }
   var statusMessage by remember { mutableStateOf("") }
+  var resultMessage by remember { mutableStateOf<String?>(null) }
   var selectedLanguage by remember { mutableStateOf(CaptionLanguage.URDU) }
 
   val aiFeatures = listOf(
-    AiFeatureItem("captions", "AI Auto Captions", "Urdu, English, Arabic Speech-to-Text", Icons.Default.ClosedCaption),
+    AiFeatureItem("captions", "AI Auto Captions", "Firebase speech-to-text", Icons.Default.ClosedCaption),
     AiFeatureItem("scene_cut", "AI Scene Cut", "Auto detect scene boundaries & split", Icons.Default.ContentCut),
     AiFeatureItem("color", "AI Color Grade", "Intelligent white balance & skin tone", Icons.Default.Palette),
     AiFeatureItem("motion", "Motion Tracker", "Track objects & anchor text/stickers", Icons.Default.GpsFixed),
@@ -80,6 +81,10 @@ fun AiSuiteToolPanel(
       IconButton(onClick = onClose) {
         Icon(Icons.Default.Close, contentDescription = "Close", tint = TextSecondary)
       }
+    }
+
+    resultMessage?.let { message ->
+      Text(message, fontSize = 12.sp, color = Color(0xFFE040FB), fontWeight = FontWeight.Medium)
     }
 
     if (isProcessing) {
@@ -137,12 +142,18 @@ fun AiSuiteToolPanel(
                   isProcessing = true
                   when (feature.id) {
                     "captions" -> {
+                      resultMessage = null
                       val timeline = viewModel.timelineEngine.timeline.value
                       val clips = AiAutoCaptionEngine.generateCaptions(context, timeline, selectedLanguage) { _, msg ->
                         statusMessage = msg
                       }
-                      clips.forEach { clip ->
-                        viewModel.timelineEngine.addTextClipObject(clip)
+                      if (clips.isEmpty()) {
+                        resultMessage = statusMessage.ifBlank { "No spoken words detected in the audio." }
+                      } else {
+                        clips.forEach { clip ->
+                          viewModel.timelineEngine.addTextClipObject(clip)
+                        }
+                        resultMessage = "Generated ${clips.size} captions from the Firebase speech engine."
                       }
                     }
                     "scene_cut" -> {

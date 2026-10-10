@@ -366,14 +366,13 @@ fun AutoCaptionsPanel(
 
             // Execute real caption transcription
             var speakerResult: com.example.ui.StudioViewModel.SpeakerCaptionResult? = null
-            var speakerFailure: String? = null
             val result = if (detectSpeakers) {
-              statusMessage = "Transcribing and detecting speakers..."
-              viewModel.generateSpeakerCaptionClips(selectedSpokenLanguage).also { r -> speakerResult = r.getOrNull(); speakerFailure = r.exceptionOrNull()?.message ?: if (r.isFailure) "unknown error" else null }
-                .map { it.clips }
-                // Engine unavailable for this media: fall back to the standard path (no speaker info).
-                .let { r -> if (r.isSuccess) r else viewModel.aiTools.generateAutoCaptions(timeline, selectedSpokenLanguage) }
+              statusMessage = "Transcribing speech in Firebase and detecting speakers..."
+              viewModel.generateSpeakerCaptionClips(selectedSpokenLanguage).also { r ->
+                speakerResult = r.getOrNull()
+              }.map { it.clips }
             } else {
+              statusMessage = "Transcribing speech with the Firebase speech engine..."
               viewModel.aiTools.generateAutoCaptions(timeline, selectedSpokenLanguage)
             }
             if (result.isSuccess) {
@@ -439,11 +438,7 @@ fun AutoCaptionsPanel(
               }
 
               isGenerating = false
-              val failure = speakerFailure
-              if (detectSpeakers && failure != null) {
-                // Captions were still added (standard path) -- tell the user speakers were NOT detected, keep panel open.
-                statusMessage = "Captions added, but speaker detection failed ($failure). Captions have no speaker labels."
-              } else if (detectSpeakers && speakerResult?.speakers?.size == 1) {
+              if (detectSpeakers && speakerResult?.speakers?.size == 1) {
                 statusMessage = "Captions generated. Only one speaker was detected."
                 onClose()
               } else if (detectSpeakers && (speakerResult?.speakers?.size ?: 0) > 1) {
