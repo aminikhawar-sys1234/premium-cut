@@ -3,12 +3,22 @@ package com.example.ui.components.text
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -21,14 +31,32 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.filled.FormatAlignCenter
+import androidx.compose.material.icons.filled.FormatAlignLeft
+import androidx.compose.material.icons.filled.FormatAlignRight
+import androidx.compose.material.icons.filled.FormatBold
+import androidx.compose.material.icons.filled.FormatItalic
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
@@ -44,23 +72,30 @@ import com.example.engine.text.registry.RegisteredTextTemplate
 import com.example.engine.text.registry.TextTemplateCatalog
 import com.example.ui.StudioViewModel
 import com.example.util.FontManager
+import com.example.util.FontOption
 import java.util.UUID
 
 enum class AddTextSubTool(val label: String, val tag: String) {
   TEMPLATES("Templates", "subtool_templates"),
   FONTS("Fonts", "subtool_fonts"),
-  STYLES("Styles", "subtool_styles"),
-  ANIMATOR("Animator", "subtool_animator"),
-  EFFECTS("Effects", "subtool_effects"),
-  THREE_D("3D Text", "subtool_3d_text"),
-  PAINTING("Painting", "subtool_painting")
+  STYLES("Style", "subtool_styles"),
+  ANIMATOR("Animate", "subtool_animator")
 }
+
+private val Accent = Color(0xFF10B981)
+private val AccentSoft = Color(0xFF34D399)
+private val ChipIdle = Color(0xFF0F2C2C)
+private val ChipIdleBorder = Color(0xFF194444)
+private val PanelFill = Color(0xFF0E2530)
+private val ColorSwatches = listOf(
+  0xFFFFFFFF, 0xFF000000, 0xFFEF4444, 0xFFFACC15, 0xFF10B981,
+  0xFF00E5FF, 0xFF3B82F6, 0xFF8B5CF6, 0xFFEC4899, 0xFFF97316
+)
 
 @Composable
 fun AddTextPanel(
   viewModel: StudioViewModel,
   onClose: () -> Unit,
-  onOpenPainting: () -> Unit,
   modifier: Modifier = Modifier
 ) {
   val context = LocalContext.current
@@ -68,60 +103,60 @@ fun AddTextPanel(
   val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
   val currentPosMs by viewModel.timelineEngine.currentPositionMs.collectAsState()
 
-  // Identify currently selected TextClip or initialize a new draft clip on timeline
-  val existingClip = remember(selectedElement, timeline.textClips) {
+  val selectedClip = remember(selectedElement, timeline.textClips) {
     (selectedElement as? SelectedTrackElement.Text)?.let { sel ->
       timeline.textClips.find { it.id == sel.clipId }
     }
   }
 
-  // Active clip being edited in real-time
-  var activeClipId by remember {
-    mutableStateOf(existingClip?.id ?: "")
-  }
+  var draftId by remember { mutableStateOf(selectedClip?.id) }
+  var textValue by remember { mutableStateOf(selectedClip?.text.orEmpty()) }
+  var activeSubTool by remember { mutableStateOf(AddTextSubTool.TEMPLATES) }
 
-  var textValue by remember {
-    mutableStateOf(existingClip?.text ?: "")
-  }
-
-  // If opening for a brand new text element, initialize it immediately on timeline for live preview
-  LaunchedEffect(Unit) {
-    if (existingClip == null) {
-      val newId = UUID.randomUUID().toString()
-      val insertionTime = currentPosMs.coerceAtLeast(0L)
-      val newClip = TextClip(
-        id = newId,
-        text = "",
-        timelineStartMs = insertionTime,
-        durationMs = 3000L,
-        fontSizeSp = 28f,
-        textColor = 0xFFFFFFFF,
-        strokeWidth = 0f,
-        strokeColor = 0xFF000000,
-        alignment = "Center",
-        animationType = "None",
-        animationIn = "None",
-        animationOut = "None"
-      )
-      activeClipId = newId
-      viewModel.timelineEngine.addTextClipObject(newClip)
-    } else {
-      activeClipId = existingClip.id
-      textValue = existingClip.text
+  LaunchedEffect(selectedClip?.id) {
+    if (selectedClip != null) {
+      draftId = selectedClip.id
+      textValue = selectedClip.text
     }
   }
 
-  // Lookup current clip from timeline state
-  val currentClip = timeline.textClips.find { it.id == activeClipId }
+  val currentClip = draftId?.let { id -> timeline.textClips.find { it.id == id } } ?: selectedClip
 
-  var activeSubTool by remember { mutableStateOf(AddTextSubTool.TEMPLATES) }
+  fun commit(updated: TextClip) {
+    viewModel.timelineEngine.updateTextClip(updated)
+  }
 
-  // Simple lightweight green + blue background
-  val panelBackground = Brush.verticalGradient(
-    colors = listOf(
-      Color(0xFF0A2B27), // Deep emerald
-      Color(0xFF0F263B)  // Deep slate blue
+  fun ensureClip(initialText: String = textValue): TextClip {
+    currentClip?.let { return it }
+    val newId = UUID.randomUUID().toString()
+    val created = TextClip(
+      id = newId,
+      text = initialText,
+      timelineStartMs = currentPosMs.coerceAtLeast(0L),
+      durationMs = 3000L,
+      fontSizeSp = 28f,
+      textColor = 0xFFFFFFFF,
+      strokeWidth = 0f,
+      alignment = "Center",
+      animationType = "None",
+      animationIn = "None",
+      animationOut = "None"
     )
+    draftId = newId
+    viewModel.timelineEngine.addTextClipObject(created)
+    return created
+  }
+
+  fun discardBlankAndClose() {
+    val clip = currentClip
+    if (clip != null && clip.text.isBlank()) {
+      viewModel.timelineEngine.deleteClips(setOf(clip.id))
+    }
+    onClose()
+  }
+
+  val panelBackground = Brush.verticalGradient(
+    colors = listOf(Color(0xFF0A2B27), Color(0xFF0F263B))
   )
 
   Column(
@@ -134,7 +169,6 @@ fun AddTextPanel(
       .padding(horizontal = 14.dp, vertical = 6.dp)
       .testTag("add_text_panel")
   ) {
-    // --- Header: Left: ❌ Close | Center: Title | Right: ✓ Confirm (Slim) ---
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -142,106 +176,65 @@ fun AddTextPanel(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
-      // ❌ Close: Closes the panel (and discards if empty)
       IconButton(
-        onClick = {
-          if (currentClip != null && currentClip.text.isBlank()) {
-            viewModel.timelineEngine.deleteClips(setOf(currentClip.id))
-          }
-          onClose()
-        },
-        modifier = Modifier
-          .size(32.dp)
-          .testTag("add_text_close_btn")
+        onClick = { discardBlankAndClose() },
+        modifier = Modifier.size(32.dp).testTag("add_text_close_btn")
       ) {
-        Icon(
-          imageVector = Icons.Default.Close,
-          contentDescription = "Close",
-          tint = Color.White,
-          modifier = Modifier.size(20.dp)
-        )
+        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White, modifier = Modifier.size(20.dp))
       }
-
-      Text(
-        text = "Add Text",
-        color = Color.White,
-        fontSize = 14.sp,
-        fontWeight = FontWeight.Bold
-      )
-
-      // ✓ Confirm: Commits the currently edited text to the project and closes panel automatically
+      Text("Text", color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.Bold)
       IconButton(
         onClick = {
-          if (currentClip != null && textValue.isNotBlank()) {
-            val updated = currentClip.copy(text = textValue)
-            viewModel.timelineEngine.updateTextClip(updated)
-          } else if (currentClip != null && textValue.isBlank()) {
-            viewModel.timelineEngine.deleteClips(setOf(currentClip.id))
+          if (textValue.isBlank()) {
+            discardBlankAndClose()
+          } else {
+            val clip = ensureClip(textValue)
+            commit(clip.copy(text = textValue))
+            onClose()
           }
-          onClose()
         },
-        modifier = Modifier
-          .size(32.dp)
-          .testTag("add_text_confirm_btn")
+        modifier = Modifier.size(32.dp).testTag("add_text_confirm_btn")
       ) {
-        Icon(
-          imageVector = Icons.Default.Check,
-          contentDescription = "Confirm",
-          tint = Color(0xFF10B981),
-          modifier = Modifier.size(20.dp)
-        )
+        Icon(Icons.Default.Check, contentDescription = "Confirm", tint = Accent, modifier = Modifier.size(20.dp))
       }
     }
 
-    // --- Center Text Editing Field (Live Preview Updated on Every Keystroke) ---
     Surface(
       shape = RoundedCornerShape(10.dp),
       color = Color(0xFF071B20),
-      border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
+      border = androidx.compose.foundation.BorderStroke(1.dp, Accent),
       modifier = Modifier
         .fillMaxWidth()
         .height(48.dp)
         .padding(vertical = 2.dp)
     ) {
       Box(
-        modifier = Modifier
-          .fillMaxSize()
-          .padding(horizontal = 12.dp, vertical = 6.dp),
+        modifier = Modifier.fillMaxSize().padding(horizontal = 12.dp, vertical = 6.dp),
         contentAlignment = Alignment.CenterStart
       ) {
         if (textValue.isEmpty()) {
-          Text(
-            text = "Type text here...",
-            color = Color(0xFF64748B),
-            fontSize = 14.sp
-          )
+          Text("Type text…", color = Color(0xFF64748B), fontSize = 14.sp)
         }
         BasicTextField(
           value = textValue,
           onValueChange = { newText ->
             textValue = newText
-            // Live update project state on timeline so preview updates immediately!
-            if (currentClip != null) {
-              val updated = currentClip.copy(text = newText)
-              viewModel.timelineEngine.updateTextClip(updated)
+            val clip = currentClip
+            if (clip != null) {
+              commit(clip.copy(text = newText))
+            } else if (newText.isNotBlank()) {
+              ensureClip(newText)
             }
           },
-          textStyle = TextStyle(
-            color = Color.White,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.SemiBold
-          ),
-          cursorBrush = SolidColor(Color(0xFF10B981)),
-          modifier = Modifier
-            .fillMaxWidth()
-            .testTag("add_text_input_field")
+          textStyle = TextStyle(color = Color.White, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+          cursorBrush = SolidColor(Accent),
+          modifier = Modifier.fillMaxWidth().testTag("add_text_input_field")
         )
       }
     }
 
     Spacer(modifier = Modifier.height(4.dp))
 
-    // --- Horizontally Scrollable Sub-Tool Row ---
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -253,20 +246,9 @@ fun AddTextPanel(
         val isSelected = activeSubTool == tool
         Surface(
           shape = RoundedCornerShape(16.dp),
-          color = if (isSelected) Color(0xFF10B981) else Color(0xFF0F3235),
-          border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (isSelected) Color(0xFF34D399) else Color(0xFF1A4A4B)
-          ),
-          modifier = Modifier
-            .clickable {
-              if (tool == AddTextSubTool.PAINTING) {
-                onOpenPainting()
-              } else {
-                activeSubTool = tool
-              }
-            }
-            .testTag(tool.tag)
+          color = if (isSelected) Accent else ChipIdle,
+          border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) AccentSoft else ChipIdleBorder),
+          modifier = Modifier.clickable { activeSubTool = tool }.testTag(tool.tag)
         ) {
           Text(
             text = tool.label,
@@ -281,12 +263,7 @@ fun AddTextPanel(
 
     Spacer(modifier = Modifier.height(4.dp))
 
-    // --- Active Sub-Tool Content Area ---
-    Box(
-      modifier = Modifier
-        .fillMaxWidth()
-        .weight(1f)
-    ) {
+    Box(modifier = Modifier.fillMaxWidth().heightIn(min = 168.dp, max = 280.dp)) {
       when (activeSubTool) {
         AddTextSubTool.TEMPLATES -> TemplatesSubToolView(
           currentClip = currentClip,
@@ -348,74 +325,41 @@ private fun TemplatesSubToolView(
   }
 }
 
-// ------------------------------------------------------------------------------------------------
-// 2. FONTS SUB-TOOL (Horizontal Categories, 4-Column Grid, Zero dummy fonts)
-// ------------------------------------------------------------------------------------------------
 @Composable
 private fun FontsSubToolView(
   context: android.content.Context,
   currentClip: TextClip?,
-  onSelectFont: (RegisteredFont) -> Unit
+  onSelectFont: (FontOption) -> Unit
 ) {
-  val categories = listOf(
-    "My Fonts",
-    "Urdu Fonts",
-    "English Fonts",
-    "Arabic",
-    "Hindi",
-    "Chinese",
-    "Other supported languages"
-  )
-  var selectedCategory by remember { mutableStateOf("My Fonts") }
-
-  // Query real fonts from TextAssetRegistry + real imported fonts
+  var selectedCategory by remember { mutableStateOf(FontManager.FONT_CATEGORIES.first()) }
   var refreshTrigger by remember { mutableStateOf(0) }
-  val installedFonts = remember(selectedCategory, refreshTrigger) {
-    if (selectedCategory == "My Fonts") {
-      val imported = FontManager.getAvailableFonts(context).filter { it.isCustom }.map {
-        RegisteredFont(
-          id = it.id,
-          name = it.name,
-          category = "My Fonts",
-          fontFamilyName = it.id,
-          fontFilePath = it.filePath,
-          isCustom = true
-        )
-      }
-      imported + TextAssetRegistry.getFonts("My Fonts")
-    } else {
-      TextAssetRegistry.getFonts(selectedCategory)
-    }
+  val fonts = remember(selectedCategory, refreshTrigger) {
+    FontManager.fontsForCategory(context, selectedCategory)
   }
 
-  // File Picker for importing real font files into "My Fonts"
   val fontPickerLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.OpenDocument()
   ) { uri: Uri? ->
-    if (uri != null) {
-      FontManager.importFont(context, uri)
+    if (uri != null && FontManager.importFont(context, uri) != null) {
+      selectedCategory = "Imported"
       refreshTrigger++
     }
   }
 
   Column(modifier = Modifier.fillMaxSize()) {
-    // Horizontal Categories
     Row(
       modifier = Modifier
         .fillMaxWidth()
         .horizontalScroll(rememberScrollState())
-        .padding(bottom = 10.dp),
+        .padding(bottom = 8.dp),
       horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
-      categories.forEach { cat ->
+      FontManager.FONT_CATEGORIES.forEach { cat ->
         val isSelected = selectedCategory == cat
         Surface(
           shape = RoundedCornerShape(16.dp),
-          color = if (isSelected) Color(0xFF10B981) else Color(0xFF0F2C2C),
-          border = androidx.compose.foundation.BorderStroke(
-            1.dp,
-            if (isSelected) Color(0xFF34D399) else Color(0xFF194444)
-          ),
+          color = if (isSelected) Accent else ChipIdle,
+          border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) AccentSoft else ChipIdleBorder),
           modifier = Modifier.clickable { selectedCategory = cat }
         ) {
           Text(
@@ -429,83 +373,62 @@ private fun FontsSubToolView(
       }
     }
 
-    // 4-Column Card Grid
-    if (installedFonts.isEmpty() && selectedCategory != "My Fonts") {
-      Box(
-        modifier = Modifier
-          .fillMaxWidth()
-          .weight(1f),
-        contentAlignment = Alignment.Center
-      ) {
-        Text(
-          text = "No fonts installed in $selectedCategory.",
-          color = Color(0xFF94A3B8),
-          fontSize = 13.sp
-        )
-      }
-    } else {
-      LazyVerticalGrid(
-        columns = GridCells.Fixed(4),
-        horizontalArrangement = Arrangement.spacedBy(8.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-        modifier = Modifier.fillMaxSize()
-      ) {
-        // In "My Fonts", offer an import card to add real .ttf/.otf fonts
-        if (selectedCategory == "My Fonts") {
-          item {
-            Surface(
-              shape = RoundedCornerShape(8.dp),
-              color = Color(0xFF123B37),
-              border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF10B981)),
-              modifier = Modifier
-                .fillMaxWidth()
-                .height(68.dp)
-                .clickable {
-                  fontPickerLauncher.launch(arrayOf("font/*", "application/x-font-ttf", "application/x-font-otf", "*/*"))
-                }
-            ) {
-              Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center,
-                modifier = Modifier.padding(4.dp)
-              ) {
-                Icon(
-                  imageVector = Icons.Default.Add,
-                  contentDescription = "Import",
-                  tint = Color(0xFF10B981),
-                  modifier = Modifier.size(18.dp)
-                )
-                Text(
-                  text = "Import Font",
-                  color = Color.White,
-                  fontSize = 11.sp,
-                  fontWeight = FontWeight.SemiBold
-                )
-              }
-            }
+    LazyVerticalGrid(
+      columns = GridCells.Fixed(4),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalArrangement = Arrangement.spacedBy(8.dp),
+      modifier = Modifier.fillMaxSize().testTag("fonts_grid")
+    ) {
+      item {
+        Surface(
+          shape = RoundedCornerShape(8.dp),
+          color = Color(0xFF123B37),
+          border = androidx.compose.foundation.BorderStroke(1.dp, Accent),
+          modifier = Modifier
+            .fillMaxWidth()
+            .height(68.dp)
+            .clickable { fontPickerLauncher.launch(FontManager.FONT_PICKER_MIME_TYPES) }
+            .testTag("import_font_card")
+        ) {
+          Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center,
+            modifier = Modifier.padding(4.dp)
+          ) {
+            Icon(Icons.Default.Add, contentDescription = "Import font", tint = Accent, modifier = Modifier.size(18.dp))
+            Text("Import", color = Color.White, fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
           }
         }
+      }
 
-        items(installedFonts) { font ->
-          val isSelected = currentClip?.fontFamily == font.fontFamilyName
-          Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = if (isSelected) Color(0xFF10B981).copy(alpha = 0.25f) else Color(0xFF0E2530),
-            border = androidx.compose.foundation.BorderStroke(
-              1.dp,
-              if (isSelected) Color(0xFF10B981) else Color(0xFF1A4557)
-            ),
-            modifier = Modifier
-              .fillMaxWidth()
-              .height(68.dp)
-              .clickable { onSelectFont(font) }
-          ) {
-            Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(4.dp)) {
+      items(fonts, key = { "${it.category}:${it.id}:${it.filePath}" }) { font ->
+        val isSelected = if (font.isCustom) {
+          currentClip?.customFontPath == font.filePath
+        } else {
+          currentClip?.fontFamily == font.id && currentClip.customFontPath.isNullOrBlank()
+        }
+        Surface(
+          shape = RoundedCornerShape(8.dp),
+          color = if (isSelected) Accent.copy(alpha = 0.25f) else PanelFill,
+          border = androidx.compose.foundation.BorderStroke(1.dp, if (isSelected) Accent else Color(0xFF1A4557)),
+          modifier = Modifier
+            .fillMaxWidth()
+            .height(68.dp)
+            .clickable { onSelectFont(font) }
+        ) {
+          Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(4.dp)) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+              Text(
+                text = font.nativeSample.ifBlank { "Aa" },
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold
+              )
               Text(
                 text = font.name,
-                color = Color.White,
-                fontSize = 11.sp,
-                maxLines = 2,
+                color = Color(0xFFCBD5E1),
+                fontSize = 10.sp,
+                maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center
               )
@@ -517,490 +440,265 @@ private fun FontsSubToolView(
   }
 }
 
-// ------------------------------------------------------------------------------------------------
-// 3. STYLES SUB-TOOL (Stroke, Color Circles, Color Slider 0-100, Text Size Slider 1-100)
-// ------------------------------------------------------------------------------------------------
 @Composable
 private fun StylesSubToolView(
   currentClip: TextClip?,
   onUpdateClip: (TextClip) -> Unit
 ) {
-  if (currentClip == null) return
-
-  var activeColorTarget by remember { mutableStateOf("Text") } // "Text" or "Stroke"
-
-  val colorSwatches = listOf(
-    0xFFFFFFFF to "White",
-    0xFF000000 to "Black",
-    0xFFEF4444 to "Red",
-    0xFFFACC15 to "Yellow",
-    0xFF10B981 to "Green",
-    0xFF00E5FF to "Cyan",
-    0xFF3B82F6 to "Blue",
-    0xFF8B5CF6 to "Purple",
-    0xFFEC4899 to "Pink",
-    0xFFF97316 to "Orange"
-  )
+  val clip = currentClip ?: return
+  var colorTarget by remember { mutableStateOf("Text") }
 
   Column(
-    modifier = Modifier
-      .fillMaxSize()
-      .verticalScroll(rememberScrollState()),
-    verticalArrangement = Arrangement.spacedBy(14.dp)
+    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+    verticalArrangement = Arrangement.spacedBy(10.dp)
   ) {
-    // --- Stroke Width Controls ---
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Text(
-        text = "Stroke Width",
-        color = Color.White,
-        fontSize = 13.sp,
-        fontWeight = FontWeight.SemiBold
-      )
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
-      ) {
-        listOf(
-          0f to "None",
-          2f to "Thin",
-          4f to "Medium",
-          6f to "Bold",
-          8f to "Heavy"
-        ).forEach { (width, label) ->
-          val isSelected = currentClip.strokeWidth == width
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.spacedBy(8.dp),
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      AlignChip(Icons.Default.FormatAlignLeft, clip.alignment.equals("Left", true)) {
+        onUpdateClip(clip.copy(alignment = "Left"))
+      }
+      AlignChip(Icons.Default.FormatAlignCenter, clip.alignment.equals("Center", true) || clip.alignment.isBlank()) {
+        onUpdateClip(clip.copy(alignment = "Center"))
+      }
+      AlignChip(Icons.Default.FormatAlignRight, clip.alignment.equals("Right", true)) {
+        onUpdateClip(clip.copy(alignment = "Right"))
+      }
+      Spacer(Modifier.weight(1f))
+      StyleToggle(Icons.Default.FormatBold, clip.fontWeight >= 700) {
+        onUpdateClip(clip.copy(fontWeight = if (clip.fontWeight >= 700) 400 else 700))
+      }
+      StyleToggle(Icons.Default.FormatItalic, clip.isItalic) {
+        onUpdateClip(clip.copy(isItalic = !clip.isItalic))
+      }
+    }
+
+    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+      listOf(0f to "None", 2f to "Thin", 4f to "Medium", 8f to "Heavy").forEach { (width, label) ->
+        val on = clip.strokeWidth == width
+        Surface(
+          shape = RoundedCornerShape(8.dp),
+          color = if (on) Accent else ChipIdle,
+          modifier = Modifier.weight(1f).height(30.dp).clickable { onUpdateClip(clip.copy(strokeWidth = width)) }
+        ) {
+          Box(contentAlignment = Alignment.Center) {
+            Text(label, color = if (on) Color(0xFF06221D) else Color.White, fontSize = 11.sp)
+          }
+        }
+      }
+    }
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      Text("$colorTarget color", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+      Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        listOf("Text", "Stroke").forEach { target ->
+          val on = colorTarget == target
           Surface(
-            shape = RoundedCornerShape(8.dp),
-            color = if (isSelected) Color(0xFF10B981) else Color(0xFF0F2F32),
-            border = androidx.compose.foundation.BorderStroke(
-              1.dp,
-              if (isSelected) Color(0xFF34D399) else Color(0xFF1E5253)
-            ),
-            modifier = Modifier
-              .weight(1f)
-              .height(34.dp)
-              .clickable {
-                onUpdateClip(currentClip.copy(strokeWidth = width))
-              }
+            shape = RoundedCornerShape(12.dp),
+            color = if (on) Accent else ChipIdle,
+            modifier = Modifier.clickable { colorTarget = target }
           ) {
-            Box(contentAlignment = Alignment.Center) {
-              Text(
-                text = label,
-                color = if (isSelected) Color(0xFF06221D) else Color.White,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                fontSize = 11.sp
-              )
-            }
-          }
-        }
-      }
-    }
-
-    // --- Color Circles: Selectable for Text or Stroke Color ---
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically
-      ) {
-        Text(
-          text = "$activeColorTarget Color",
-          color = Color.White,
-          fontSize = 13.sp,
-          fontWeight = FontWeight.SemiBold
-        )
-
-        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-          listOf("Text", "Stroke").forEach { target ->
-            val isTarget = activeColorTarget == target
-            Surface(
-              shape = RoundedCornerShape(12.dp),
-              color = if (isTarget) Color(0xFF10B981) else Color(0xFF0F2F32),
-              modifier = Modifier.clickable { activeColorTarget = target }
-            ) {
-              Text(
-                text = target,
-                color = if (isTarget) Color(0xFF06221D) else Color.White,
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold,
-                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-              )
-            }
-          }
-        }
-      }
-
-      Row(
-        modifier = Modifier
-          .fillMaxWidth()
-          .horizontalScroll(rememberScrollState()),
-        horizontalArrangement = Arrangement.spacedBy(10.dp)
-      ) {
-        colorSwatches.forEach { (colorVal, _) ->
-          val isCurrent = if (activeColorTarget == "Text") {
-            currentClip.textColor == colorVal
-          } else {
-            currentClip.strokeColor == colorVal
-          }
-
-          Box(
-            modifier = Modifier
-              .size(36.dp)
-              .clip(CircleShape)
-              .background(Color(colorVal))
-              .border(
-                width = if (isCurrent) 2.5.dp else 1.dp,
-                color = if (isCurrent) Color(0xFF10B981) else Color(0xFF475569),
-                shape = CircleShape
-              )
-              .clickable {
-                val updated = if (activeColorTarget == "Text") {
-                  currentClip.copy(textColor = colorVal)
-                } else {
-                  currentClip.copy(strokeColor = colorVal)
-                }
-                onUpdateClip(updated)
-              }
-          )
-        }
-      }
-    }
-
-    // --- Color Adjustment Slider (0 -> 100): Modifies Opacity / Intensity ---
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      val currentAlpha = (currentClip.opacity * 100f).toInt().coerceIn(0, 100)
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-      ) {
-        Text(text = "Color Adjustment", color = Color.White, fontSize = 13.sp)
-        Text(text = "$currentAlpha%", color = Color(0xFF10B981), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-      }
-      Slider(
-        value = currentAlpha.toFloat(),
-        onValueChange = { newVal ->
-          onUpdateClip(currentClip.copy(opacity = newVal / 100f))
-        },
-        valueRange = 0f..100f,
-        colors = SliderDefaults.colors(
-          thumbColor = Color(0xFF10B981),
-          activeTrackColor = Color(0xFF10B981),
-          inactiveTrackColor = Color(0xFF1E3A3A)
-        ),
-        modifier = Modifier.testTag("color_adjustment_slider")
-      )
-    }
-
-    // --- Text Size Slider (1 -> 100): Modifies fontSizeSp in Real-Time ---
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-      val currentSize = currentClip.fontSizeSp.toInt().coerceIn(1, 100)
-      Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween
-      ) {
-        Text(text = "Text Size", color = Color.White, fontSize = 13.sp)
-        Text(text = "${currentSize}sp", color = Color(0xFF10B981), fontSize = 13.sp, fontWeight = FontWeight.Bold)
-      }
-      Slider(
-        value = currentSize.toFloat(),
-        onValueChange = { newSize ->
-          onUpdateClip(currentClip.copy(fontSizeSp = newSize))
-        },
-        valueRange = 1f..100f,
-        colors = SliderDefaults.colors(
-          thumbColor = Color(0xFF10B981),
-          activeTrackColor = Color(0xFF10B981),
-          inactiveTrackColor = Color(0xFF1E3A3A)
-        ),
-        modifier = Modifier.testTag("text_size_slider")
-      )
-    }
-  }
-}
-
-// ------------------------------------------------------------------------------------------------
-// 5. EFFECTS SUB-TOOL (4-Column Grid, First: "None")
-// ------------------------------------------------------------------------------------------------
-@Composable
-private fun EffectsSubToolView(
-  currentClip: TextClip?,
-  onSelectEffect: (String) -> Unit
-) {
-  val registeredEffects = remember { TextAssetRegistry.getEffects() }
-
-  LazyVerticalGrid(
-    columns = GridCells.Fixed(4),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-    modifier = Modifier.fillMaxSize()
-  ) {
-    // First option: None
-    item {
-      val isNone = currentClip?.effectStyle == "None" || currentClip?.effectStyle.isNullOrBlank()
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (isNone) Color(0xFF10B981).copy(alpha = 0.25f) else Color(0xFF0F2F32),
-        border = androidx.compose.foundation.BorderStroke(
-          1.dp,
-          if (isNone) Color(0xFF10B981) else Color(0xFF1E5253)
-        ),
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(68.dp)
-          .clickable { onSelectEffect("None") }
-          .testTag("effect_none_opt")
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Text(
-            text = "None",
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 12.sp
-          )
-        }
-      }
-    }
-
-    // Real registered effects only (empty initially, zero fake effects)
-    items(registeredEffects) { eff ->
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0E2530),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1A4557)),
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(68.dp)
-          .clickable { onSelectEffect(eff.effectKey) }
-      ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(4.dp)) {
-          Text(
-            text = eff.name,
-            color = Color.White,
-            fontSize = 11.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-          )
-        }
-      }
-    }
-  }
-}
-
-// ------------------------------------------------------------------------------------------------
-// 6. 3D TEXT SUB-TOOL (4-Column Grid, First: "None")
-// ------------------------------------------------------------------------------------------------
-@Composable
-private fun ThreeDSubToolView(
-  currentClip: TextClip?,
-  onAdjust: (TextClip) -> Unit,
-  onSelect3D: (Registered3DText?) -> Unit
-) {
-  val registered3D = remember { TextAssetRegistry.get3DAssets() }
-
-  LazyVerticalGrid(
-    columns = GridCells.Fixed(4),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
-    modifier = Modifier.fillMaxSize()
-  ) {
-    // Manual 3D controls (extrusion depth, bevel, side colour) for the selected text clip.
-    if (currentClip != null) {
-      item(span = { androidx.compose.foundation.lazy.grid.GridItemSpan(maxLineSpan) }) {
-        Column(modifier = Modifier.fillMaxWidth().testTag("3d_manual_controls")) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween
-          ) {
-            Text("3D extrusion", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-            Switch(
-              checked = currentClip.is3D,
-              onCheckedChange = { on ->
-                onAdjust(
-                  if (on) currentClip.copy(is3D = true, depth3D = currentClip.depth3D.takeIf { it > 0f } ?: 12f)
-                  else currentClip.copy(is3D = false)
-                )
-              }
+            Text(
+              target,
+              color = if (on) Color(0xFF06221D) else Color.White,
+              fontSize = 11.sp,
+              modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
             )
           }
-          if (currentClip.is3D) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-              Text("Depth ${currentClip.depth3D.toInt()}", color = Color(0xFF9CA3AF), fontSize = 11.sp, modifier = Modifier.width(78.dp))
-              Slider(
-                value = currentClip.depth3D.coerceIn(0f, 60f),
-                onValueChange = { onAdjust(currentClip.copy(depth3D = it)) },
-                valueRange = 0f..60f, modifier = Modifier.weight(1f).height(26.dp)
-              )
-            }
-            ThreeDSliderRow(
-              label = "Direction ${currentClip.bevelAngle3D.toInt()}°",
-              value = currentClip.bevelAngle3D, range = 0f..90f,
-              tag = "3d_direction_slider"
-            ) { onAdjust(currentClip.copy(bevelAngle3D = it)) }
-            ThreeDSliderRow(
-              label = "Bevel ${currentClip.bevelRadius3D.toInt()}px",
-              value = currentClip.bevelRadius3D, range = 0f..12f,
-              tag = "3d_bevel_radius_slider"
-            ) { onAdjust(currentClip.copy(bevelRadius3D = it)) }
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-              Text("Side colour", color = Color(0xFF9CA3AF), fontSize = 11.sp, modifier = Modifier.width(78.dp))
-              listOf(0xFF1E293B, 0xFF7C3AED, 0xFFDC2626, 0xFFF59E0B, 0xFF10B981, 0xFF0EA5E9, 0xFFE5E7EB).forEach { c ->
-                Box(
-                  Modifier.size(24.dp).clip(androidx.compose.foundation.shape.CircleShape).background(Color(c))
-                    .border(if (currentClip.color3D == c) 2.dp else 0.dp, Color.White, androidx.compose.foundation.shape.CircleShape)
-                    .clickable { onAdjust(currentClip.copy(color3D = c)) }
-                )
-              }
-            }
-
-            Row(
-              modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-              verticalAlignment = Alignment.CenterVertically,
-              horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-              Text("True 3D (GPU mesh)", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold)
-              Switch(
-                checked = currentClip.trueMesh3D,
-                onCheckedChange = { on -> onAdjust(currentClip.copy(trueMesh3D = on)) },
-                modifier = Modifier.testTag("3d_true_mesh_switch")
-              )
-            }
-            if (currentClip.trueMesh3D) {
-              val animatorsOn = currentClip.textAnimators.any { it.enabled }
-              Text(
-                if (animatorsOn) "Animators are on, so this clip is drawn with the Canvas look-alike. Disable them for real 3D."
-                else "Real extrusion with lighting. Background box, outline, shadow/glow and effects are not drawn in this mode. Direction tilts the view.",
-                color = Color(0xFF9CA3AF), fontSize = 10.sp
-              )
-            }
-
-            ThreeDSectionLabel("Material")
-            Row(
-              modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("3d_material_row"),
-              horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-              Text3DStyling.MATERIAL_IDS.forEach { id ->
-                ThreeDChip(
-                  label = id.replace('-', ' ').replaceFirstChar { it.uppercase() },
-                  selected = currentClip.material3D == id,
-                  tag = "3d_material_$id"
-                ) { onAdjust(currentClip.copy(material3D = id)) }
-              }
-            }
-
-            ThreeDSectionLabel("Lighting")
-            Row(
-              modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).testTag("3d_light_row"),
-              horizontalArrangement = Arrangement.spacedBy(6.dp)
-            ) {
-              Text3DStyling.LIGHT_PRESETS.forEach { lp ->
-                ThreeDChip(
-                  label = lp.label,
-                  selected = currentClip.lightPreset3D == lp.id,
-                  tag = "3d_light_${lp.id}"
-                ) { onAdjust(currentClip.copy(lightPreset3D = lp.id)) }
-              }
-            }
-            ThreeDSliderRow(
-              label = "Light ${currentClip.lightAngle3D.toInt()}°",
-              value = currentClip.lightAngle3D, range = 0f..360f,
-              tag = "3d_light_angle_slider"
-            ) { onAdjust(currentClip.copy(lightAngle3D = it)) }
-            ThreeDSliderRow(
-              label = "Intensity ${"%.1f".format(currentClip.lightIntensity3D)}",
-              value = currentClip.lightIntensity3D, range = 0f..2f,
-              tag = "3d_light_intensity_slider"
-            ) { onAdjust(currentClip.copy(lightIntensity3D = it)) }
-          }
         }
       }
     }
 
-    // First option: None
-    item {
-      val isNone = currentClip?.is3D != true
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = if (isNone) Color(0xFF10B981).copy(alpha = 0.25f) else Color(0xFF0F2F32),
-        border = androidx.compose.foundation.BorderStroke(
-          1.dp,
-          if (isNone) Color(0xFF10B981) else Color(0xFF1E5253)
-        ),
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(68.dp)
-          .clickable { onSelect3D(null) }
-          .testTag("3d_none_opt")
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Text(
-            text = "None",
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 12.sp
-          )
-        }
+    Row(
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+      ColorSwatches.forEach { colorVal ->
+        val isCurrent = if (colorTarget == "Text") clip.textColor == colorVal else clip.strokeColor == colorVal
+        Box(
+          modifier = Modifier
+            .size(32.dp)
+            .clip(CircleShape)
+            .background(Color(colorVal))
+            .border(if (isCurrent) 2.5.dp else 1.dp, if (isCurrent) Accent else Color(0xFF475569), CircleShape)
+            .clickable {
+              onUpdateClip(
+                if (colorTarget == "Text") clip.copy(textColor = colorVal) else clip.copy(strokeColor = colorVal)
+              )
+            }
+        )
       }
     }
 
-    // Real registered 3D assets only (empty initially, zero fake 3D presets)
-    items(registered3D) { asset ->
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0E2530),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1A4557)),
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(68.dp)
-          .clickable { onSelect3D(asset) }
-      ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(4.dp)) {
-          Text(
-            text = asset.name,
-            color = Color.White,
-            fontSize = 11.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-          )
+    CompactSlider("Size", clip.fontSizeSp, 8f..96f, "sp", "text_size_slider") {
+      onUpdateClip(clip.copy(fontSizeSp = it))
+    }
+    CompactSlider("Opacity", clip.opacity * 100f, 0f..100f, "%", "color_adjustment_slider") {
+      onUpdateClip(clip.copy(opacity = it / 100f))
+    }
+
+    Text("Look", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    Row(
+      modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+      horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+      TextMotionCatalog.EFFECTS.forEach { effect ->
+        val on = clip.effectStyle.equals(effect.key, true) ||
+          (TextMotionCatalog.isNone(clip.effectStyle) && effect.key == "None")
+        Chip(effect.label, on) { onUpdateClip(clip.copy(effectStyle = effect.key)) }
+      }
+    }
+
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+      Text("3D", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+      Switch(
+        checked = clip.is3D,
+        onCheckedChange = { on ->
+          onUpdateClip(if (on) clip.copy(is3D = true, depth3D = clip.depth3D.takeIf { it > 0f } ?: 12f) else clip.copy(is3D = false))
         }
+      )
+    }
+    if (clip.is3D) {
+      CompactSlider("Depth", clip.depth3D, 0f..60f, "px") {
+        onUpdateClip(clip.copy(depth3D = it))
       }
     }
   }
 }
 
 @Composable
-private fun ThreeDSectionLabel(text: String) {
-  Text(text, color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.Bold, modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+private fun AnimateSubToolView(
+  currentClip: TextClip?,
+  onUpdateClip: (TextClip) -> Unit
+) {
+  val clip = currentClip ?: run {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+      Text("Type text to animate", color = Color(0xFF94A3B8), fontSize = 12.sp)
+    }
+    return
+  }
+
+  Column(
+    modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()),
+    verticalArrangement = Arrangement.spacedBy(8.dp)
+  ) {
+    Text("IN", color = AccentSoft, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    FlowChips(TextMotionCatalog.ENTRANCES, clip.animationType.ifBlank { clip.animationIn }) { key ->
+      onUpdateClip(
+        clip.copy(
+          animationType = key,
+          animationIn = key,
+          keyframes = emptyList()
+        )
+      )
+    }
+    Text("OUT", color = AccentSoft, fontSize = 10.sp, fontWeight = FontWeight.Bold)
+    FlowChips(TextMotionCatalog.EXITS, clip.animationOut) { key ->
+      onUpdateClip(clip.copy(animationOut = key, keyframes = emptyList()))
+    }
+    CompactSlider("Duration", clip.animDurationMs.toFloat(), 100f..2000f, " ms") {
+      onUpdateClip(clip.copy(animDurationMs = it.toLong().coerceAtLeast(100L)))
+    }
+    TextAnimatorSubToolView(currentClip = clip, onUpdateClip = onUpdateClip)
+  }
 }
 
 @Composable
-private fun ThreeDSliderRow(
-  label: String,
-  value: Float,
-  range: ClosedFloatingPointRange<Float>,
-  tag: String,
-  onChange: (Float) -> Unit
+private fun FlowChips(
+  presets: List<TextMotionCatalog.Preset>,
+  current: String,
+  onPick: (String) -> Unit
 ) {
-  Row(verticalAlignment = Alignment.CenterVertically) {
-    Text(label, color = Color(0xFF9CA3AF), fontSize = 11.sp, modifier = Modifier.width(78.dp))
-    Slider(
-      value = value.coerceIn(range.start, range.endInclusive),
-      onValueChange = onChange,
-      valueRange = range,
-      modifier = Modifier.weight(1f).height(26.dp).testTag(tag)
+  Row(
+    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+    horizontalArrangement = Arrangement.spacedBy(6.dp)
+  ) {
+    presets.forEach { preset ->
+      val on = current.equals(preset.key, true) ||
+        (TextMotionCatalog.isNone(current) && preset.key == "None")
+      Chip(preset.label, on) { onPick(preset.key) }
+    }
+  }
+}
+
+@Composable
+private fun Chip(label: String, selected: Boolean, onClick: () -> Unit) {
+  Surface(
+    shape = RoundedCornerShape(16.dp),
+    color = if (selected) Accent else ChipIdle,
+    border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) AccentSoft else ChipIdleBorder),
+    modifier = Modifier.clickable(onClick = onClick)
+  ) {
+    Text(
+      label,
+      color = if (selected) Color(0xFF06221D) else Color.White,
+      fontWeight = if (selected) FontWeight.Bold else FontWeight.Normal,
+      fontSize = 12.sp,
+      modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
     )
   }
 }
 
 @Composable
-private fun ThreeDChip(label: String, selected: Boolean, tag: String, onClick: () -> Unit) {
+private fun CompactSlider(
+  label: String,
+  value: Float,
+  range: ClosedFloatingPointRange<Float>,
+  unit: String,
+  tag: String? = null,
+  onChange: (Float) -> Unit
+) {
+  Column {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+      Text(label, color = Color(0xFFCBD5E1), fontSize = 12.sp, modifier = Modifier.weight(1f))
+      Text("${value.toInt()}$unit", color = Color.White, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+    }
+    Slider(
+      value = value.coerceIn(range.start, range.endInclusive),
+      onValueChange = onChange,
+      valueRange = range,
+      colors = SliderDefaults.colors(
+        thumbColor = Accent,
+        activeTrackColor = Accent,
+        inactiveTrackColor = Color(0xFF1E3A3A)
+      ),
+      modifier = Modifier.height(28.dp).then(if (tag != null) Modifier.testTag(tag) else Modifier)
+    )
+  }
+}
+
+@Composable
+private fun AlignChip(icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
   Surface(
-    shape = RoundedCornerShape(16.dp),
-    color = if (selected) Color(0xFF10B981).copy(alpha = 0.25f) else Color(0xFF0F2F32),
-    border = androidx.compose.foundation.BorderStroke(1.dp, if (selected) Color(0xFF10B981) else Color(0xFF1E5253)),
-    modifier = Modifier.clickable(onClick = onClick).testTag(tag)
+    shape = RoundedCornerShape(8.dp),
+    color = if (selected) Accent else ChipIdle,
+    modifier = Modifier.size(32.dp).clickable(onClick = onClick)
   ) {
-    Text(label, color = Color.White, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp))
+    Box(contentAlignment = Alignment.Center) {
+      Icon(icon, contentDescription = null, tint = if (selected) Color(0xFF06221D) else Color.White, modifier = Modifier.size(16.dp))
+    }
+  }
+}
+
+@Composable
+private fun StyleToggle(icon: ImageVector, selected: Boolean, onClick: () -> Unit) {
+  Surface(
+    shape = RoundedCornerShape(8.dp),
+    color = if (selected) Accent else ChipIdle,
+    modifier = Modifier.size(32.dp).clickable(onClick = onClick)
+  ) {
+    Box(contentAlignment = Alignment.Center) {
+      Icon(icon, contentDescription = null, tint = if (selected) Color(0xFF06221D) else Color.White, modifier = Modifier.size(16.dp))
+    }
   }
 }
