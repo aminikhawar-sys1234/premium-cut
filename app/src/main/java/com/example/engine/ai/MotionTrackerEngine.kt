@@ -137,8 +137,9 @@ class MotionTrackerEngine {
         val progress = TrackingSampler.ProgressGate()
         val keyframes = mutableListOf<MotionKeyframe>()
         fun report(p: Float, msg: String, state: TrackingEngineState, force: Boolean = false) {
+            val mapped = TrackingSampler.mapAnalyzeProgress(p, state)
             if (progress.shouldEmit(state, force)) {
-                onProgress(p, msg, state)
+                onProgress(mapped, msg, state)
                 if (keyframes.size >= 2) onPartial?.invoke(keyframes.toList())
             }
         }
@@ -254,7 +255,7 @@ class MotionTrackerEngine {
         ) return
 
         val safeDurationUs = durationUs.coerceAtLeast(1L)
-        val timeStepUs = (1_000_000L / settings.accuracyFps.coerceIn(12, 60))
+        val timeStepUs = TrackingSampler.trackTimeStepUs(safeDurationUs, settings.accuracyFps)
         val endUs = startUs + safeDurationUs
         var currentUs = startUs
 
@@ -361,7 +362,7 @@ class MotionTrackerEngine {
                 TrackingSampler.isRecovering(consecutiveLosses) -> TrackingEngineState.RECOVERING
                 else -> TrackingEngineState.TRACKING
             }
-            report(p, "Tracking object... ${(p * 100).toInt()}%", state, false)
+            report(p, "Tracking object...", state, false)
             currentUs += timeStepUs
         }
 
@@ -442,7 +443,7 @@ class MotionTrackerEngine {
         detect: (Bitmap, Boolean, DetectedTarget?) -> DetectedTarget?
     ) {
         val safeDurationUs = durationUs.coerceAtLeast(1L)
-        val timeStepUs = (1_000_000L / settings.accuracyFps.coerceIn(12, 60))
+        val timeStepUs = TrackingSampler.trackTimeStepUs(safeDurationUs, settings.accuracyFps)
         val endUs = startUs + safeDurationUs
         val (detectW, detectH) = frameSize(retriever, TrackingSampler.DETECT_WIDTH)
 
@@ -485,7 +486,7 @@ class MotionTrackerEngine {
                 landmarkPoints = lock!!.landmarks
             )
         )
-        report(0.12f, "${label.replaceFirstChar { it.uppercase() }} locked. Tracking...", TrackingEngineState.TRACKING, true)
+        report(0f, "${label.replaceFirstChar { it.uppercase() }} locked. Tracking...", TrackingEngineState.TRACKING, true)
 
         var currentBox = initialBox
         var lastGoodBox = initialBox
@@ -641,7 +642,7 @@ class MotionTrackerEngine {
             }
 
             val p = ((currentUs - startUs).toFloat() / safeDurationUs.toFloat()).coerceIn(0f, 1f)
-            report(p, "Tracking $label... ${(p * 100).toInt()}%", state, false)
+            report(p, "Tracking $label...", state, false)
             frameIndex++
             currentUs += timeStepUs
         }
@@ -1027,7 +1028,7 @@ class MotionTrackerEngine {
         label: String
     ): Boolean {
         val safeDurationUs = durationUs.coerceAtLeast(1L)
-        val timeStepUs = (1_000_000L / settings.accuracyFps.coerceIn(12, 60))
+        val timeStepUs = TrackingSampler.trackTimeStepUs(safeDurationUs, settings.accuracyFps)
         val endUs = startUs + safeDurationUs
 
         val (reqW, reqH) = frameSize(retriever, TrackingSampler.FEATURE_WIDTH)
@@ -1053,6 +1054,7 @@ class MotionTrackerEngine {
                 emitCornerPin
             )
         )
+        report(0f, "${label.replaceFirstChar { it.uppercase() }} locked. Tracking...", TrackingEngineState.TRACKING, true)
 
         var currentUs = startUs + timeStepUs
         var consecutiveLosses = 0
@@ -1117,7 +1119,7 @@ class MotionTrackerEngine {
                 TrackingSampler.isRecovering(consecutiveLosses) -> TrackingEngineState.RECOVERING
                 else -> TrackingEngineState.TRACKING
             }
-            report(p, "Tracking $label... ${(p * 100).toInt()}%", state, false)
+            report(p, "Tracking $label...", state, false)
             currentUs += timeStepUs
         }
         return true

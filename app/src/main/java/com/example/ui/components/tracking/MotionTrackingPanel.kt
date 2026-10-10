@@ -155,6 +155,14 @@ fun MotionTrackingPanel(
 
             if (uiState.isTracking) {
                 TrackingProgressBar(uiState.progress, uiState.statusMessage) { viewModel.cancelMotionTracking() }
+            } else if (!uiState.errorMessage.isNullOrBlank()) {
+                Text(
+                    uiState.errorMessage ?: "",
+                    color = Color(0xFFFFB74D),
+                    fontSize = 10.5.sp,
+                    maxLines = 2,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 2.dp)
+                )
             } else if (uiState.statusMessage.isNotBlank()) {
                 Row(
                     modifier = Modifier
@@ -452,7 +460,8 @@ private fun AttachCategoryContent(viewModel: StudioViewModel, uiState: MotionTra
                 followRot = settings.followRotation
             )
         },
-        enabled = uiState.activeResult != null && !uiState.activeResult.isEmpty,
+        enabled = (uiState.activeResult != null && !uiState.activeResult.isEmpty) ||
+            uiState.liveDetections.isNotEmpty(),
         colors = ButtonDefaults.buttonColors(containerColor = Emerald, contentColor = Color.Black),
         shape = RoundedCornerShape(8.dp),
         modifier = Modifier.fillMaxWidth().height(34.dp).testTag("apply_attachment_button")
@@ -461,8 +470,8 @@ private fun AttachCategoryContent(viewModel: StudioViewModel, uiState: MotionTra
         Spacer(Modifier.width(6.dp))
         Text("Attach to ${selectedTarget.title}", fontWeight = FontWeight.Bold, fontSize = 12.sp)
     }
-    if (uiState.activeResult == null || uiState.activeResult.isEmpty) {
-        Text("Track a target first.", color = Color(0xFFFFB74D), fontSize = 10.5.sp)
+    if ((uiState.activeResult == null || uiState.activeResult.isEmpty) && uiState.liveDetections.isEmpty()) {
+        Text("Detect a face, body, or object first, then attach.", color = Color(0xFFFFB74D), fontSize = 10.5.sp)
     }
 }
 

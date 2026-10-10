@@ -72,6 +72,29 @@ class TrackingSamplerTest {
     }
 
     @Test
+    fun analyzeProgressNeverRewindsAfterLock() {
+        val lock = TrackingSampler.mapAnalyzeProgress(0.12f, com.example.engine.ai.TrackingEngineState.DETECTING)
+        val justLocked = TrackingSampler.mapAnalyzeProgress(0f, com.example.engine.ai.TrackingEngineState.TRACKING)
+        val mid = TrackingSampler.mapAnalyzeProgress(0.5f, com.example.engine.ai.TrackingEngineState.TRACKING)
+        val done = TrackingSampler.mapAnalyzeProgress(1f, com.example.engine.ai.TrackingEngineState.COMPLETED)
+        assertEquals(0.12f, lock, 0.001f)
+        assertEquals(0.15f, justLocked, 0.001f)
+        assertTrue("track start must stay at or above lock", justLocked + 1e-4f >= lock)
+        assertEquals(0.15f + 0.5f * 0.85f, mid, 0.001f)
+        assertEquals(1f, done, 0.001f)
+        assertTrue(mid > justLocked)
+    }
+
+    @Test
+    fun adaptiveFpsDropsOnLongClips() {
+        assertEquals(24, TrackingSampler.adaptiveAccuracyFps(4_000_000L, 24))
+        assertEquals(16, TrackingSampler.adaptiveAccuracyFps(12_000_000L, 24))
+        assertEquals(12, TrackingSampler.adaptiveAccuracyFps(25_000_000L, 24))
+        assertEquals(10, TrackingSampler.adaptiveAccuracyFps(60_000_000L, 24))
+        assertTrue(TrackingSampler.trackTimeStepUs(60_000_000L, 24) > TrackingSampler.trackTimeStepUs(3_000_000L, 24))
+    }
+
+    @Test
     fun detectionBudgetBeatsNaive24FpsScan() {
         val naive24Fps = 1_000_000L / 41_666L
         val sparse = TrackingSampler.initialScanTimes(0L, 10_000_000L).size

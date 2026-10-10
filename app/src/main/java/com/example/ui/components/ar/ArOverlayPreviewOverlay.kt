@@ -52,10 +52,10 @@ fun ArOverlayPreviewOverlay(
             val found = currentProvider()
             faces = found
             if (found.isNotEmpty()) { searching = false; break }
-            if (attempts >= 8) { searching = false; break }
+            if (attempts >= 16) { searching = false; break }
             attempts++
             searching = true
-            delay(150)
+            delay(120)
         }
     }
 
