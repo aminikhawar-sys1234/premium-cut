@@ -393,14 +393,16 @@ private fun TemplatesSubToolView(
 ) {
   val installedTemplates = rememberInstalledTextTemplates()
 
-  TextTemplateCardGrid(
-    templates = installedTemplates,
-    selectedClip = currentClip,
-    showNone = true,
-    onNone = { onApplyTemplate(null) },
-    onApply = { onApplyTemplate(it) },
-    modifier = Modifier.fillMaxSize()
-  )
+  TextTemplateGridViewport {
+    TextTemplateCardGrid(
+      templates = installedTemplates,
+      selectedClip = currentClip,
+      showNone = true,
+      onNone = { onApplyTemplate(null) },
+      onApply = { onApplyTemplate(it) },
+      modifier = Modifier.fillMaxSize()
+    )
+  }
 }
 
 // ------------------------------------------------------------------------------------------------

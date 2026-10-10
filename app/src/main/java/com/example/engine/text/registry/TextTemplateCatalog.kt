@@ -50,6 +50,12 @@ object TextTemplateCatalog {
     val name = json.optString("name", json.optString("title")).trim()
     if (id.isEmpty() || name.isEmpty()) return null
     val clipObj = json.optJSONObject("clip")
+    val explicitText = sequenceOf(
+      clipObj?.optString("text"),
+      json.optString("text"),
+      json.optString("defaultText")
+    ).map { it?.trim().orEmpty() }.firstOrNull { it.isNotEmpty() }
+    if (explicitText.isNullOrBlank()) return null
     val clip = if (clipObj != null) clipFromJson(clipObj, json) else clipFromJson(json, json)
     if (clip.text.isBlank()) return null
     return RegisteredTextTemplate(
