@@ -40,7 +40,11 @@ import androidx.compose.ui.unit.sp
 import com.example.domain.model.TextClip
 import com.example.engine.SelectedTrackElement
 import com.example.engine.text.Text3DStyling
-import com.example.engine.text.registry.*
+import com.example.engine.text.registry.Registered3DText
+import com.example.engine.text.registry.RegisteredFont
+import com.example.engine.text.registry.RegisteredTextTemplate
+import com.example.engine.text.registry.TextAssetRegistry
+import com.example.engine.text.registry.TextTemplateCatalog
 import com.example.ui.StudioViewModel
 import com.example.util.FontManager
 import java.util.UUID
@@ -113,7 +117,7 @@ fun AddTextPanel(
   // Lookup current clip from timeline state
   val currentClip = timeline.textClips.find { it.id == activeClipId }
 
-  var activeSubTool by remember { mutableStateOf(AddTextSubTool.STYLES) }
+  var activeSubTool by remember { mutableStateOf(AddTextSubTool.TEMPLATES) }
 
   // Simple lightweight green + blue background
   val panelBackground = Brush.verticalGradient(
@@ -293,30 +297,9 @@ fun AddTextPanel(
             onApplyTemplate = { tmpl ->
               if (currentClip != null) {
                 val updated = if (tmpl == null) {
-                  // "None" option: reset template formatting
-                  currentClip.copy(
-                    fontFamily = "Default",
-                    strokeWidth = 0f,
-                    strokeColor = 0xFF000000,
-                    textColor = 0xFFFFFFFF,
-                    is3D = false,
-                    animationIn = "None",
-                    animationOut = "None",
-                    effectStyle = "None"
-                  )
+                  TextTemplateCatalog.resetStyle(currentClip)
                 } else {
-                  currentClip.copy(
-                    fontFamily = tmpl.templateClip.fontFamily,
-                    fontSizeSp = tmpl.templateClip.fontSizeSp,
-                    textColor = tmpl.templateClip.textColor,
-                    strokeWidth = tmpl.templateClip.strokeWidth,
-                    strokeColor = tmpl.templateClip.strokeColor,
-                    is3D = tmpl.templateClip.is3D,
-                    depth3D = tmpl.templateClip.depth3D,
-                    animationIn = tmpl.templateClip.animationIn,
-                    animationOut = tmpl.templateClip.animationOut,
-                    effectStyle = tmpl.templateClip.effectStyle
-                  )
+                  TextTemplateCatalog.applyStyle(currentClip, tmpl.templateClip, keepText = true)
                 }
                 viewModel.timelineEngine.updateTextClip(updated)
               }
@@ -408,61 +391,16 @@ private fun TemplatesSubToolView(
   currentClip: TextClip?,
   onApplyTemplate: (RegisteredTextTemplate?) -> Unit
 ) {
-  val installedTemplates = remember { TextAssetRegistry.getTemplates() }
+  val installedTemplates = rememberInstalledTextTemplates()
 
-  LazyVerticalGrid(
-    columns = GridCells.Fixed(4),
-    horizontalArrangement = Arrangement.spacedBy(8.dp),
-    verticalArrangement = Arrangement.spacedBy(8.dp),
+  TextTemplateCardGrid(
+    templates = installedTemplates,
+    selectedClip = currentClip,
+    showNone = true,
+    onNone = { onApplyTemplate(null) },
+    onApply = { onApplyTemplate(it) },
     modifier = Modifier.fillMaxSize()
-  ) {
-    // Required functional "None" option as the first/default selection
-    item {
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0F2F32),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1E5253)),
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(70.dp)
-          .clickable { onApplyTemplate(null) }
-          .testTag("template_none_opt")
-      ) {
-        Box(contentAlignment = Alignment.Center) {
-          Text(
-            text = "None",
-            color = Color.White,
-            fontWeight = FontWeight.Bold,
-            fontSize = 13.sp
-          )
-        }
-      }
-    }
-
-    // Real installed templates only (empty initially, no fake templates)
-    items(installedTemplates) { template ->
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0E2530),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color(0xFF1A4557)),
-        modifier = Modifier
-          .fillMaxWidth()
-          .height(70.dp)
-          .clickable { onApplyTemplate(template) }
-      ) {
-        Box(contentAlignment = Alignment.Center, modifier = Modifier.padding(4.dp)) {
-          Text(
-            text = template.name,
-            color = Color.White,
-            fontSize = 11.sp,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center
-          )
-        }
-      }
-    }
-  }
+  )
 }
 
 // ------------------------------------------------------------------------------------------------

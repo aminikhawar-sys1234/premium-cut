@@ -126,7 +126,8 @@ object TextAssetRegistry {
 
   // --- Query API ---
 
-  fun getTemplates(): List<RegisteredTextTemplate> = _templates.toList()
+  /** Observable snapshot for Compose. Mutations from [registerTemplate] recompose readers. */
+  fun getTemplates(): List<RegisteredTextTemplate> = _templates
 
   fun getFonts(category: String): List<RegisteredFont> {
     return _fonts.filter { it.category.equals(category, ignoreCase = true) }

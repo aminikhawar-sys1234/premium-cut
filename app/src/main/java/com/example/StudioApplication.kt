@@ -76,6 +76,11 @@ class StudioApplication : Application() {
         Log.w("StudioApplication", "FirebaseTemplateManager init skipped/failed", t)
       }
       try {
+        com.example.engine.text.registry.TextTemplateCatalog.ensureLoaded(applicationContext)
+      } catch (t: Throwable) {
+        Log.w("StudioApplication", "TextTemplateCatalog load skipped/failed", t)
+      }
+      try {
         com.example.data.repository.NotificationRepository.init(applicationContext)
       } catch (t: Throwable) {
         Log.w("StudioApplication", "NotificationRepository init skipped/failed", t)
