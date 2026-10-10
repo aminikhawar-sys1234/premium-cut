@@ -50,6 +50,7 @@ import com.ahstudio.captions.subtitle.SubtitleExporter
 import com.ahstudio.captions.subtitle.SubtitleFormat
 import com.ahstudio.captions.subtitle.SubtitleImporter
 import com.example.engine.ai.*
+import com.example.engine.ai.tracking.TrackingSampler
 import com.example.engine.ai.cutout.BgRemoveCodec
 import com.example.engine.ai.cutout.BgRemoveParams
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
@@ -502,7 +503,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun setActiveToolbarTab(tab: EditorToolbarTab?) {
+    val previous = _activeToolbarTab.value
     _activeToolbarTab.value = tab
+    if (tab == EditorToolbarTab.MOTION_TRACKING || tab == EditorToolbarTab.AR_EFFECTS) {
+      startLiveMotionDetection()
+    } else if (previous == EditorToolbarTab.MOTION_TRACKING || previous == EditorToolbarTab.AR_EFFECTS) {
+      stopLiveMotionDetection()
+    }
   }
 
   // Motion Tracking Engine & UI State
@@ -510,6 +517,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   private val _motionTrackingState = MutableStateFlow(MotionTrackingUiState())
   val motionTrackingState: StateFlow<MotionTrackingUiState> = _motionTrackingState.asStateFlow()
   private var trackingJob: Job? = null
+  private var liveDetectJob: Job? = null
+  private var detectorsWarmed = false
 
   fun resetMotionTracking() {
     trackingJob?.cancel()
@@ -528,7 +537,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun setTrackingCategory(category: TrackingCategory) {
-    _motionTrackingState.update { it.copy(activeCategory = category, errorMessage = null) }
+    _motionTrackingState.update {
+      it.copy(activeCategory = category, errorMessage = null, liveDetections = emptyList(), selectedLiveId = null)
+    }
   }
 
   fun updateTrackingRegion(region: NormalizedRect) {
@@ -548,7 +559,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
-  fun startMotionTracking(category: TrackingCategory = _motionTrackingState.value.activeCategory, isForward: Boolean = true) {
+  fun startMotionTracking(
+    category: TrackingCategory = _motionTrackingState.value.activeCategory,
+    isForward: Boolean = true,
+    range: TrackRange = if (isForward) TrackRange.FORWARD else TrackRange.BACKWARD
+  ) {
     val activeClip = getSelectedVideoClip()
     if (activeClip == null) {
       _motionTrackingState.update {
@@ -562,47 +577,85 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     trackingJob?.cancel()
     trackingJob = viewModelScope.launch(Dispatchers.Default) {
+      val region = MotionTrackingAttach.pickLockRegion(_motionTrackingState.value)
       _motionTrackingState.update {
         it.copy(
           isTracking = true,
           engineState = TrackingEngineState.DETECTING,
           progress = 0.05f,
           statusMessage = "Detecting ${category.title.lowercase()}...",
-          errorMessage = null
+          errorMessage = null,
+          activeCategory = category,
+          targetRegion = region,
+          lockWidth = region.width,
+          lockHeight = region.height
         )
       }
 
       try {
+        _motionTrackingState.update {
+          it.copy(progress = maxOf(it.progress, 0.08f), statusMessage = "Starting detectors...")
+        }
+        warmMotionDetectors(category)
+        _motionTrackingState.update {
+          it.copy(progress = maxOf(it.progress, 0.10f), statusMessage = "Detecting ${category.title.lowercase()}...")
+        }
         val currentPlayheadMs = timelineEngine.currentPositionMs.value
-        val clipEndTimelineMs = activeClip.timelineStartMs + activeClip.durationMs
+        val playheadSourceUs = activeClip.timelineToSourceMs(currentPlayheadMs) * 1000L
+        val sourceStartUs = activeClip.sourceStartMs * 1000L
+        val sourceEndUs = activeClip.sourceEndMs * 1000L
         val startUs: Long
         val durationUs: Long
-        if (isForward) {
-          startUs = activeClip.timelineToSourceMs(currentPlayheadMs) * 1000L
-          val endUs = activeClip.timelineToSourceMs(clipEndTimelineMs) * 1000L
-          durationUs = (endUs - startUs).coerceAtLeast(100_000L)
-        } else {
-          startUs = activeClip.sourceStartMs * 1000L
-          durationUs = (activeClip.sourceEndMs - activeClip.sourceStartMs).coerceAtLeast(100L) * 1000L
+        when (range) {
+          TrackRange.FORWARD -> {
+            startUs = playheadSourceUs.coerceIn(sourceStartUs, sourceEndUs)
+            durationUs = (sourceEndUs - startUs).coerceAtLeast(100_000L)
+          }
+          TrackRange.BACKWARD -> {
+            startUs = sourceStartUs
+            durationUs = (playheadSourceUs - sourceStartUs).coerceAtLeast(100_000L)
+          }
+          TrackRange.FULL -> {
+            startUs = sourceStartUs
+            durationUs = (sourceEndUs - sourceStartUs).coerceAtLeast(100_000L)
+          }
         }
 
         val settings = _motionTrackingState.value.settings.copy(
-          trackForward = isForward,
-          trackBackward = !isForward
+          trackForward = range != TrackRange.BACKWARD,
+          trackBackward = range != TrackRange.FORWARD,
+          clipSourceStartUs = sourceStartUs
         )
 
         val result = motionTrackerEngine.analyzeMotion(
           context = getApplication(),
           videoUri = activeClip.uri,
           targetClipId = activeClip.id,
-          initialBox = _motionTrackingState.value.targetRegion,
+          initialBox = region,
           startUs = startUs,
           durationUs = durationUs,
           category = category,
           settings = settings,
           onProgress = { p, msg, state ->
             _motionTrackingState.update {
-              it.copy(progress = p, statusMessage = msg, engineState = state)
+              val next = when (state) {
+                TrackingEngineState.FAILED, TrackingEngineState.CANCELLED -> it.progress
+                else -> maxOf(it.progress, p)
+              }
+              it.copy(progress = next.coerceIn(0f, 1f), statusMessage = msg, engineState = state)
+            }
+          },
+          onPartial = { keys ->
+            if (keys.size >= 2) {
+              val partial = TrackingResult(
+                targetId = "partial_${activeClip.id}",
+                clipId = activeClip.id,
+                startTimestampUs = startUs,
+                endTimestampUs = startUs + durationUs,
+                keyframes = keys,
+                targetCategory = category
+              )
+              _motionTrackingState.update { it.copy(activeResult = partial) }
             }
           }
         )
@@ -611,19 +664,49 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           timelineEngine.setClipMotionTrack(activeClip.id, MotionTrackCodec.encode(result))
         }
 
+        val session = result.keyframes.lastOrNull()?.let { last ->
+          TrackingSession(
+            sessionId = result.targetId,
+            targetCategory = category,
+            targetId = result.targetId,
+            startTimestampUs = result.startTimestampUs,
+            endTimestampUs = result.endTimestampUs,
+            currentTimeUs = last.timestampUs,
+            confidence = result.averageConfidence,
+            boundingBox = TrackingSampler.boxFromCenter(
+              last.centerX, last.centerY,
+              region.width * last.scaleX, region.height * last.scaleY
+            ),
+            centerX = last.centerX,
+            centerY = last.centerY,
+            width = region.width * last.scaleX,
+            height = region.height * last.scaleY,
+            rotation = last.rotationDeg,
+            scale = last.scaleX,
+            landmarks = last.landmarkPoints,
+            state = if (result.keyframes.isNotEmpty()) TrackingEngineState.COMPLETED else TrackingEngineState.FAILED,
+            keyframes = result.keyframes
+          )
+        }
+
         _motionTrackingState.update {
           it.copy(
             isTracking = false,
             engineState = if (result.keyframes.isNotEmpty()) TrackingEngineState.COMPLETED else TrackingEngineState.FAILED,
             activeResult = result,
+            activeSession = session,
             progress = 1.0f,
+            detectedFaceCount = if (category == TrackingCategory.FACE) 1 else it.detectedFaceCount,
+            detectedBodyCount = if (category == TrackingCategory.BODY) 1 else it.detectedBodyCount,
+            detectedPointsCount = result.keyframes.size,
             statusMessage = if (result.keyframes.isNotEmpty()) {
-              "Tracked ${result.keyframes.size} frames successfully"
+              "Tracked ${result.keyframes.size} frames"
             } else {
               when (category) {
                 TrackingCategory.FACE -> "No face detected in video"
                 TrackingCategory.BODY -> "No body pose detected in video"
-                else -> "No distinct tracking target found"
+                TrackingCategory.OBJECT -> "No object locked — draw a box or tap a detection"
+                else -> "Not enough trackable detail in the selected area"
               }
             }
           )
@@ -656,7 +739,163 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val activeClip = getSelectedVideoClip() ?: return
     val currentCat = _motionTrackingState.value.activeCategory
     MotionTrackingCache.invalidateClip(activeClip.id)
-    startMotionTracking(currentCat)
+    startMotionTracking(currentCat, range = TrackRange.FULL)
+  }
+
+  fun selectLiveDetection(detection: LiveDetection) {
+    val clip = getSelectedVideoClip()
+    val playheadUs = clip?.let { it.timelineToSourceMs(timelineEngine.currentPositionMs.value) * 1000L } ?: 0L
+    val seeded = clip?.let {
+      MotionTrackingAttach.resultFromLive(
+        clip = it,
+        detections = listOf(detection),
+        selectedId = detection.id,
+        category = detection.category,
+        playheadSourceUs = playheadUs,
+        fallbackRegion = detection.box
+      )
+    }
+    _motionTrackingState.update {
+      val keepFullTrack = it.activeResult != null &&
+        it.activeResult!!.keyframes.size > 3 &&
+        it.engineState == TrackingEngineState.COMPLETED
+      it.copy(
+        targetRegion = detection.box.clamped(),
+        selectedLiveId = detection.id,
+        lockWidth = detection.box.width,
+        lockHeight = detection.box.height,
+        statusMessage = "Locked ${detection.label}",
+        errorMessage = null,
+        activeResult = if (keepFullTrack) it.activeResult else (seeded ?: it.activeResult)
+      )
+    }
+  }
+
+  fun updateFeatureMode(mode: MotionFeatureType) {
+    _motionTrackingState.update {
+      it.copy(settings = it.settings.copy(featureMode = mode))
+    }
+  }
+
+  fun updateBodyRegion(region: BodyTrackingFeature) {
+    _motionTrackingState.update {
+      it.copy(settings = it.settings.copy(bodyRegion = region))
+    }
+  }
+
+  fun updateFollowFlags(position: Boolean, scale: Boolean, rotation: Boolean) {
+    _motionTrackingState.update {
+      it.copy(
+        settings = it.settings.copy(
+          followPosition = position,
+          followScale = scale,
+          followRotation = rotation
+        )
+      )
+    }
+  }
+
+  private fun startLiveMotionDetection() {
+    if (liveDetectJob?.isActive == true) return
+    liveDetectJob = viewModelScope.launch(Dispatchers.Default) {
+      var lastUs = Long.MIN_VALUE
+      var lastClip = ""
+      var lastCat = TrackingCategory.ATTACH
+      while (isActive) {
+        val tab = _activeToolbarTab.value
+        if (tab != EditorToolbarTab.MOTION_TRACKING && tab != EditorToolbarTab.AR_EFFECTS) break
+        val state = _motionTrackingState.value
+        if (state.isTracking) {
+          delay(140)
+          continue
+        }
+        val clip = getSelectedVideoClip()
+        val cat = if (tab == EditorToolbarTab.AR_EFFECTS) {
+          if (state.activeCategory == TrackingCategory.BODY) TrackingCategory.BODY else TrackingCategory.FACE
+        } else {
+          state.activeCategory
+        }
+        val trackable = cat == TrackingCategory.OBJECT ||
+          cat == TrackingCategory.FACE ||
+          cat == TrackingCategory.BODY ||
+          cat == TrackingCategory.MOTION
+        if (clip == null || !trackable) {
+          if (state.liveDetections.isNotEmpty()) {
+            _motionTrackingState.update { it.copy(liveDetections = emptyList()) }
+          }
+          delay(160)
+          continue
+        }
+        val pos = timelineEngine.currentPositionMs.value
+        val us = clip.timelineToSourceMs(pos) * 1000L
+        val sameFrame = us == lastUs && clip.id == lastClip && cat == lastCat
+        if (sameFrame && state.liveDetections.isNotEmpty()) {
+          delay(90)
+          continue
+        }
+        lastUs = us
+        lastClip = clip.id
+        lastCat = cat
+        val detections = runCatching {
+          motionTrackerEngine.detectLive(
+            context = getApplication(),
+            videoUri = clip.uri,
+            timeUs = us,
+            category = cat,
+            region = state.targetRegion,
+            settings = state.settings
+          )
+        }.getOrDefault(emptyList())
+        _motionTrackingState.update {
+          val playheadUs = clip.timelineToSourceMs(pos) * 1000L
+          val seeded = if (it.activeResult == null && detections.isNotEmpty()) {
+            MotionTrackingAttach.resultFromLive(
+              clip = clip,
+              detections = detections,
+              selectedId = it.selectedLiveId,
+              category = cat,
+              playheadSourceUs = playheadUs,
+              fallbackRegion = it.targetRegion
+            )
+          } else it.activeResult
+          it.copy(
+            liveDetections = detections,
+            activeResult = seeded,
+            detectedFaceCount = detections.count { d -> d.category == TrackingCategory.FACE },
+            detectedBodyCount = detections.count { d -> d.category == TrackingCategory.BODY },
+            detectedPointsCount = detections.sumOf { d ->
+              if (d.category == TrackingCategory.MOTION) d.landmarks.size else 0
+            },
+            statusMessage = when {
+              detections.isNotEmpty() && !it.isTracking &&
+                (it.engineState != TrackingEngineState.COMPLETED) ->
+                "Live: ${detections.joinToString { d -> d.label }}"
+              else -> it.statusMessage
+            }
+          )
+        }
+        delay(70)
+      }
+    }
+  }
+
+  private fun stopLiveMotionDetection() {
+    liveDetectJob?.cancel()
+    liveDetectJob = null
+    _motionTrackingState.update { it.copy(liveDetections = emptyList()) }
+  }
+
+  private fun warmMotionDetectors(category: TrackingCategory) {
+    if (detectorsWarmed) return
+    detectorsWarmed = true
+    runCatching {
+      MlKitDetectorPool.warmUp(
+        face = true,
+        body = true,
+        objects = true
+      )
+    }
+    android.util.Log.d("StudioViewModel", "Warmed motion detectors for $category")
   }
 
   fun attachFaceEffect(effectType: EffectType) {
@@ -717,13 +956,31 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     followScale: Boolean = true,
     followRot: Boolean = true
   ) {
-    val activeClip = getSelectedVideoClip() ?: return
-    val result = _motionTrackingState.value.activeResult
-    if (result == null || result.keyframes.isEmpty()) {
+    val activeClip = getSelectedVideoClip()
+    if (activeClip == null) {
       _motionTrackingState.update {
-        it.copy(errorMessage = "Please track an object, face, or motion point first before attaching.")
+        it.copy(
+          errorMessage = "Select a video clip first.",
+          statusMessage = "Select a video clip first."
+        )
       }
       return
+    }
+    val result = resolveAttachResult(activeClip)
+    if (result == null || result.keyframes.isEmpty()) {
+      _motionTrackingState.update {
+        it.copy(
+          errorMessage = "Detect a face, body, or object first, then attach.",
+          statusMessage = "Detect a face, body, or object first, then attach."
+        )
+      }
+      return
+    }
+    if (_motionTrackingState.value.activeResult == null ||
+      _motionTrackingState.value.activeResult?.keyframes.isNullOrEmpty()
+    ) {
+      _motionTrackingState.update { it.copy(activeResult = result, errorMessage = null) }
+      timelineEngine.setClipMotionTrack(activeClip.id, MotionTrackCodec.encode(result))
     }
 
     val layerStartMs = activeClip.sourceToTimelineMs(result.startTimestampUs / 1000L)
@@ -891,7 +1148,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun toggleMotionPathVisibility() {
     _motionTrackingState.update {
-      it.copy(isRegionSelectorActive = !it.isRegionSelectorActive)
+      it.copy(showMotionPath = !it.showMotionPath)
     }
   }
 
@@ -1776,14 +2033,59 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   private fun ensureFaceSource(force: Boolean = false) {
     val registry = com.ahstudio.face.deformation.FaceWarpRegistry
-    if (registry.faceSource == null && (force || _faceDeform.value.isNotEmpty())) {
+    val need = force || _faceDeform.value.isNotEmpty() || _arApplied.value.isNotEmpty()
+    if (!need) return
+    if (registry.faceSource is MotionFaceFallbackSource) return
+    if (registry.faceSource == null) {
       val tracker = com.ahstudio.face.tracking.ClipFaceTracker(
         context = getApplication<Application>().applicationContext,
         uriFor = { id -> mediaClip(id)?.uri },
       )
       clipFaceTracker = tracker
-      registry.faceSource = tracker
+      registry.faceSource = MotionFaceFallbackSource(tracker, ::motionFacesAt)
+    } else {
+      registry.faceSource = MotionFaceFallbackSource(registry.faceSource!!, ::motionFacesAt)
     }
+  }
+
+  private fun motionFacesAt(clipId: String, sourceTimeUs: Long): List<com.ahstudio.face.core.TrackedFace> {
+    val fromState = MotionTrackingAttach.facesFromState(_motionTrackingState.value, clipId, sourceTimeUs)
+    if (fromState.isNotEmpty()) return fromState
+    val clip = mediaClip(clipId) ?: return emptyList()
+    val encoded = clip.motionTrackJson ?: return emptyList()
+    val decoded = MotionTrackCodec.decode(encoded) ?: return emptyList()
+    if (decoded.keyframes.isEmpty()) return emptyList()
+    if (decoded.targetCategory != TrackingCategory.FACE &&
+      decoded.targetCategory != TrackingCategory.BODY
+    ) {
+      return emptyList()
+    }
+    val kf = MotionTrackingEvaluator(decoded).evaluate(sourceTimeUs)
+    val state = _motionTrackingState.value
+    return listOf(
+      MotionTrackingAttach.keyframeToTrackedFace(
+        kf,
+        decoded.targetCategory,
+        state.lockWidth.coerceAtLeast(0.08f),
+        state.lockHeight.coerceAtLeast(0.08f)
+      )
+    )
+  }
+
+  private fun resolveAttachResult(clip: VideoClip): TrackingResult? {
+    val state = _motionTrackingState.value
+    state.activeResult?.takeIf { it.keyframes.isNotEmpty() }?.let { return it }
+    val playheadUs = clip.timelineToSourceMs(timelineEngine.currentPositionMs.value) * 1000L
+    MotionTrackingAttach.resultFromLive(
+      clip = clip,
+      detections = state.liveDetections,
+      selectedId = state.selectedLiveId,
+      category = state.activeCategory,
+      playheadSourceUs = playheadUs,
+      fallbackRegion = if (state.liveDetections.isNotEmpty()) state.targetRegion else null
+    )?.let { return it }
+    val encoded = clip.motionTrackJson
+    return MotionTrackCodec.decode(encoded)?.takeIf { it.keyframes.isNotEmpty() }
   }
 
   private var clipBodyTracker: com.example.engine.effects.ClipBodyTracker? = null
@@ -2586,6 +2888,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       if (filter.isMeshOverlay) {
         _showFaceMeshGrid.value = true
       }
+      ensureFaceSource(force = true)
+      startLiveMotionDetection()
     }
   }
 
@@ -2669,19 +2973,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   /**
-   * Real tracked faces (ML Kit via ClipFaceTracker) at the current playhead, in the upright
-   * source frame. Non-blocking: may be empty while detection is still running.
-   * Clips rotated/flipped vertically by the user are not mapped, so they return no faces.
+   * Real tracked faces at the current playhead, in the upright source frame.
+   * Uses ClipFaceTracker first, then the live motion-tracking lock so filters
+   * sit on the detected face / body even while the face engine is still warming.
    */
   fun arPreviewFaces(): List<com.ahstudio.face.core.TrackedFace> {
     val clip = arPreviewClip() ?: return emptyList()
-    if (clip.rotationDegrees % 360 != 0 || clip.flipVertical) return emptyList()
     ensureFaceSource(force = true)
-    val source = com.ahstudio.face.deformation.FaceWarpRegistry.faceSource ?: return emptyList()
     val posMs = timelineEngine.currentPositionMs.value
     val sourceMs = clip.freezeFrameAtMs ?: clip.timelineToSourceMs(posMs)
-    return runCatching { source.facesAt(clip.id, sourceMs.coerceAtLeast(0L) * 1000L, false) }
+    val sourceUs = sourceMs.coerceAtLeast(0L) * 1000L
+    val source = com.ahstudio.face.deformation.FaceWarpRegistry.faceSource
+    val fromEngine = runCatching { source?.facesAt(clip.id, sourceUs, false).orEmpty() }
       .getOrDefault(emptyList())
+    if (fromEngine.isNotEmpty()) return fromEngine
+    return motionFacesAt(clip.id, sourceUs)
   }
 
   /**
@@ -2695,9 +3001,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _arStatusMessage.value = "Select a video clip first."
       return
     }
+    ensureFaceSource(force = true)
+    val result = resolveAttachResult(clip)
+    if (result != null && (_motionTrackingState.value.activeResult == null ||
+        _motionTrackingState.value.activeResult?.keyframes.isNullOrEmpty())
+    ) {
+      _motionTrackingState.update { it.copy(activeResult = result, errorMessage = null) }
+      timelineEngine.setClipMotionTrack(clip.id, MotionTrackCodec.encode(result))
+    }
     if (filter.canExport) {
-      if (_motionTrackingState.value.activeResult == null) {
-        _arStatusMessage.value = "Track the face first (Motion Tracking tab), then apply."
+      if (result == null) {
+        _arStatusMessage.value = "No face detected yet — wait for the box on the face, then apply."
         return
       }
       attachFaceEffect(com.example.domain.model.EffectType.MOSAIC)
@@ -2708,7 +3022,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       clip.id,
       com.ahstudio.face.overlay.ArOverlayParams(filter.id, _arFilterScale.value, _arFilterOffsetY.value, _arFilterOpacity.value)
     )
-    _arStatusMessage.value = "${filter.name} applied. It is drawn on the clip and included in the export."
+    _arStatusMessage.value = "${filter.name} applied on the detected face / body."
   }
 
   // ==========================================

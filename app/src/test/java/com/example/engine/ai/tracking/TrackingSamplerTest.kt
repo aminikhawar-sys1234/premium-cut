@@ -72,10 +72,64 @@ class TrackingSamplerTest {
     }
 
     @Test
+    fun analyzeProgressNeverRewindsAfterLock() {
+        val lock = TrackingSampler.mapAnalyzeProgress(0.12f, com.example.engine.ai.TrackingEngineState.DETECTING)
+        val justLocked = TrackingSampler.mapAnalyzeProgress(0f, com.example.engine.ai.TrackingEngineState.TRACKING)
+        val mid = TrackingSampler.mapAnalyzeProgress(0.5f, com.example.engine.ai.TrackingEngineState.TRACKING)
+        val done = TrackingSampler.mapAnalyzeProgress(1f, com.example.engine.ai.TrackingEngineState.COMPLETED)
+        assertEquals(0.12f, lock, 0.001f)
+        assertEquals(0.15f, justLocked, 0.001f)
+        assertTrue("track start must stay at or above lock", justLocked + 1e-4f >= lock)
+        assertEquals(0.15f + 0.5f * 0.85f, mid, 0.001f)
+        assertEquals(1f, done, 0.001f)
+        assertTrue(mid > justLocked)
+    }
+
+    @Test
+    fun adaptiveFpsDropsOnLongClips() {
+        assertEquals(24, TrackingSampler.adaptiveAccuracyFps(4_000_000L, 24))
+        assertEquals(16, TrackingSampler.adaptiveAccuracyFps(12_000_000L, 24))
+        assertEquals(12, TrackingSampler.adaptiveAccuracyFps(25_000_000L, 24))
+        assertEquals(10, TrackingSampler.adaptiveAccuracyFps(60_000_000L, 24))
+        assertTrue(TrackingSampler.trackTimeStepUs(60_000_000L, 24) > TrackingSampler.trackTimeStepUs(3_000_000L, 24))
+    }
+
+    @Test
     fun detectionBudgetBeatsNaive24FpsScan() {
         val naive24Fps = 1_000_000L / 41_666L
         val sparse = TrackingSampler.initialScanTimes(0L, 10_000_000L).size
         assertTrue("sparse lock=$sparse should be far below a 1s 24fps scan ($naive24Fps)", sparse <= 5)
         assertTrue(sparse < naive24Fps)
+    }
+}
+
+class BodyPoseLandmarksTest {
+
+    @Test
+    fun fullBodyKeepsAllThirtyThreePoints() {
+        assertEquals(33, BodyPoseLandmarks.COUNT)
+        assertEquals(33, BodyPoseLandmarks.ALL.size)
+        val raw = List(33) { i -> i / 33f to i / 40f }
+        val filtered = BodyPoseLandmarks.filterLandmarks(raw, com.example.engine.ai.BodyTrackingFeature.FULL_BODY)
+        assertEquals(33, filtered.size)
+        assertEquals(33, BodyPoseLandmarks.visibleCount(filtered))
+    }
+
+    @Test
+    fun armFilterHidesLegsAndKeepsWrists() {
+        val raw = List(33) { i -> i.toFloat() to i.toFloat() }
+        val arms = BodyPoseLandmarks.filterLandmarks(raw, com.example.engine.ai.BodyTrackingFeature.ARMS)
+        assertEquals(33, arms.size)
+        assertEquals(-1f, arms[0].first, 0f)
+        assertTrue(arms[15].first >= 0f)
+        assertTrue(arms[16].first >= 0f)
+        assertEquals(-1f, arms[27].first, 0f)
+        assertEquals(BodyPoseLandmarks.ARMS.size, BodyPoseLandmarks.visibleCount(arms))
+    }
+
+    @Test
+    fun idsForMatchesLimbSets() {
+        assertEquals(BodyPoseLandmarks.LEGS.toList(), BodyPoseLandmarks.idsFor(com.example.engine.ai.BodyTrackingFeature.LEGS).toList())
+        assertEquals(BodyPoseLandmarks.UPPER.toList(), BodyPoseLandmarks.idsFor(com.example.engine.ai.BodyTrackingFeature.UPPER_BODY).toList())
     }
 }

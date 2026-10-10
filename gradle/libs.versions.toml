@@ -43,10 +43,13 @@ googleid = "1.1.1"
 media3 = "1.5.1"
 mlkitFaceDetection = "16.1.7"
 mlkitPoseDetection = "18.0.0-beta1"
+mlkitObjectDetection = "17.0.2"
 
 [libraries]
 com-google-mlkit-face-detection = { group = "com.google.mlkit", name = "face-detection", version.ref = "mlkitFaceDetection" }
 com-google-mlkit-pose-detection = { group = "com.google.mlkit", name = "pose-detection-accurate", version.ref = "mlkitPoseDetection" }
+com-google-mlkit-pose-detection-fast = { group = "com.google.mlkit", name = "pose-detection", version.ref = "mlkitPoseDetection" }
+mlkitObjectDetection = { group = "com.google.mlkit", name = "object-detection", version.ref = "mlkitObjectDetection" }
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }
