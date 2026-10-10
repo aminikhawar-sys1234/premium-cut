@@ -3346,12 +3346,8 @@ private fun SyntheticClipPreview(
   }
 
   val (startColor, endColor, iconEmoji) = remember(clip.id, clip.name, stockItem) {
-    if (stockItem != null) {
+    if (stockItem != null && stockItem.uri.isNotBlank()) {
       Triple(Color(stockItem.gradientStart), Color(stockItem.gradientEnd), stockItem.iconEmoji)
-    } else if (clip.name.contains("Mountain", ignoreCase = true) || clip.name.contains("Stream", ignoreCase = true) || clip.uri.contains("nature", ignoreCase = true)) {
-      Triple(Color(0xFF0077B6), Color(0xFF00B4D8), "🏔️")
-    } else if (clip.name.contains("Skyline", ignoreCase = true) || clip.name.contains("Sunset", ignoreCase = true) || clip.name.contains("Golden", ignoreCase = true) || clip.uri.contains("urban", ignoreCase = true)) {
-      Triple(Color(0xFFE85D04), Color(0xFF7209B7), "🌇")
     } else {
       Triple(Color(0xFF1E293B), Color(0xFF0F172A), "🎬")
     }

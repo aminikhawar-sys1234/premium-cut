@@ -86,46 +86,43 @@ class AIToolsService(private val context: Context? = null) {
     // Step 1: Obtain actual audio file
     var audioFile: File? = null
 
-    // Check if an audio clip is present on timeline
-    val firstAudio = timeline.audioClips.firstOrNull()
-    if (firstAudio != null && firstAudio.uri.isNotBlank()) {
+    val firstAudio = timeline.audioClips.firstOrNull { it.uri.isNotBlank() }
+    if (firstAudio != null) {
       val candidate = File(firstAudio.uri)
       if (candidate.exists() && candidate.length() > 0L) {
         audioFile = candidate
+      } else if (audioEngine != null) {
+        audioFile = audioEngine.extractAudioFromVideo(firstAudio.uri)
       }
     }
 
-    // If no standalone audio file, extract real audio from the first video clip
-    if (audioFile == null && timeline.videoClips.isNotEmpty() && audioEngine != null) {
-      val firstVideo = timeline.videoClips.first()
-      audioFile = audioEngine.extractAudioFromVideo(firstVideo.uri)
+    if (audioFile == null && audioEngine != null) {
+      val firstVideo = timeline.videoClips.firstOrNull { it.uri.isNotBlank() }
+      if (firstVideo != null) {
+        audioFile = audioEngine.extractAudioFromVideo(firstVideo.uri)
+      }
     }
 
     if (audioFile != null && audioFile.exists() && audioFile.length() > 0L) {
-      val result = speechToText.transcribeAudio(audioFile, language)
-      if (result.isSuccess) {
-        return@withContext result
-      }
+      return@withContext speechToText.transcribeAudio(audioFile, language)
     }
 
-    // Step 2 Fallback: Generate synchronized dialogue captions via Gemini AI using project title & timeline metadata
-    val videoTitle = timeline.videoClips.firstOrNull()?.name ?: timeline.audioClips.firstOrNull()?.title ?: "Video Project"
-    return@withContext speechToText.transcribeAudio(videoTitle, language)
+    return@withContext Result.failure(
+      IllegalStateException("Auto captions need a real audio or video clip. Title-only caption generation is disabled.")
+    )
   }
 
   /**
-   * Backwards compatible auto captions call accepting project name and duration.
+   * Auto captions require imported media. A title string is not a substitute for audio.
    */
   suspend fun generateAutoCaptions(
     videoTitle: String,
-    durationMs: Long,
-    language: String = "English"
+    @Suppress("UNUSED_PARAMETER") durationMs: Long,
+    @Suppress("UNUSED_PARAMETER") language: String = "English"
   ): List<TextClip> = withContext(Dispatchers.IO) {
-    if (!speechToText.isAvailable) {
-      throw IllegalStateException("AI Provider is not configured. Please configure your backend endpoint or Gemini credentials.")
-    }
-    val res = speechToText.transcribeAudio(videoTitle, language)
-    return@withContext res.getOrThrow()
+    throw IllegalStateException(
+      "Auto captions require imported audio or video. Cannot transcribe '$videoTitle' without media."
+    )
   }
 
   /**

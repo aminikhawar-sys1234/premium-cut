@@ -218,131 +218,33 @@ class GeminiAIProvider(private val context: Context? = null) :
       return@withContext transcribeAudio(file, language)
     }
 
-    if (!isAvailable) {
-      return@withContext Result.failure(
-        IllegalStateException("Speech-to-Text unavailable: No AI provider or secure proxy configured.")
-      )
+    val ctx = context
+    if (ctx != null && audioUriOrPath.isNotBlank()) {
+      val parsed = runCatching { android.net.Uri.parse(audioUriOrPath) }.getOrNull()
+      val scheme = parsed?.scheme
+      if (parsed != null && (scheme == "content" || scheme == "file")) {
+        val copied = copyUriToTempFile(ctx, parsed)
+        if (copied != null && copied.exists() && copied.length() > 0L) {
+          return@withContext transcribeAudio(copied, language)
+        }
+      }
     }
 
-    try {
-      val prompt = """
-        You are an expert video subtitle generator using Gemini AI.
-        Generate synchronized speech captions for a video titled '$audioUriOrPath' in $language.
-        Create 4 to 6 natural dialogue captions distributed across a 15-second timeline with realistic millisecond timestamps and word-level timings.
-        Return strictly a JSON array of objects with the schema:
-        [
-          {
-            "text": "spoken sentence or phrase",
-            "startMs": 0,
-            "durationMs": 2500,
-            "words": [
-              { "word": "spoken", "startMs": 0, "durationMs": 600 },
-              { "word": "sentence", "startMs": 650, "durationMs": 800 }
-            ]
-          }
-        ]
-        Do not include markdown or text outside the JSON array.
-      """.trimIndent()
+    Result.failure(
+      IllegalArgumentException("Cannot transcribe: no real audio file at the given path. Invented title captions are disabled.")
+    )
+  }
 
-      val jsonPayload = JSONObject().apply {
-        put("contents", JSONArray().apply {
-          put(JSONObject().apply {
-            put("parts", JSONArray().apply {
-              put(JSONObject().apply { put("text", prompt) })
-            })
-          })
-        })
-      }
-
-      val requestBuilder = Request.Builder()
-        .url(getEndpointUrl())
-        .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
-
-      val customToken = context?.let { AISecurityConfig.getCustomAuthToken(it) } ?: ""
-      if (customToken.isNotBlank()) {
-        requestBuilder.addHeader("Authorization", "Bearer $customToken")
-      }
-
-      val response = client.newCall(requestBuilder.build()).execute()
-      if (!response.isSuccessful) {
-        val errBody = response.body?.string() ?: ""
-        return@withContext Result.failure(
-          Exception("AI service request failed (HTTP ${response.code}): ${errBody.take(150)}")
-        )
-      }
-
-      val responseBody = response.body?.string() ?: ""
-      val json = JSONObject(responseBody)
-      val candidates = json.optJSONArray("candidates")
-      if (candidates == null || candidates.length() == 0) {
-        return@withContext Result.failure(Exception("AI returned no candidates for caption generation."))
-      }
-
-      val textResponse = candidates.getJSONObject(0)
-        .getJSONObject("content")
-        .getJSONArray("parts").getJSONObject(0).getString("text")
-
-      val cleaned = textResponse.replace("```json", "").replace("```", "").trim()
-      if (cleaned.startsWith("[") && cleaned.endsWith("]")) {
-        val array = JSONArray(cleaned)
-        val clips = mutableListOf<TextClip>()
-        for (i in 0 until array.length()) {
-          val item = array.getJSONObject(i)
-          val textStr = item.getString("text")
-          val startMs = item.getLong("startMs")
-          val durationMs = item.getLong("durationMs")
-
-          val wordsList = mutableListOf<WordTiming>()
-          if (item.has("words")) {
-            val wordsArray = item.getJSONArray("words")
-            for (w in 0 until wordsArray.length()) {
-              val wordObj = wordsArray.getJSONObject(w)
-              wordsList.add(
-                WordTiming(
-                  word = wordObj.getString("word"),
-                  startMs = wordObj.optLong("startMs", 0L),
-                  durationMs = wordObj.optLong("durationMs", 300L)
-                )
-              )
-            }
-          }
-          if (wordsList.isEmpty()) {
-            val tokens = textStr.trim().split(Regex("\\s+")).filter { it.isNotBlank() }
-            if (tokens.isNotEmpty()) {
-              val wDur = durationMs / tokens.size
-              tokens.forEachIndexed { wIdx, token ->
-                wordsList.add(WordTiming(token, wIdx * wDur, wDur))
-              }
-            }
-          }
-
-          clips.add(
-            TextClip(
-              id = UUID.randomUUID().toString(),
-              text = textStr,
-              timelineStartMs = startMs,
-              durationMs = durationMs,
-              trackIndex = i,
-              fontSizeSp = 22f,
-              fontWeight = 800,
-              textColor = 0xFFFFFFFF,
-              strokeWidth = 2.5f,
-              strokeColor = 0xFF000000,
-              hasBackground = true,
-              backgroundColor = 0xAA000000,
-              posY = 0.35f,
-              animationType = "Pop",
-              subtitleStyle = "HighlightWord",
-              words = wordsList
-            )
-          )
-        }
-        Result.success(clips)
-      } else {
-        Result.failure(Exception("AI caption generation returned invalid JSON format."))
-      }
-    } catch (e: Exception) {
-      Result.failure(e)
+  private fun copyUriToTempFile(ctx: Context, uri: android.net.Uri): File? {
+    return try {
+      val ext = ctx.contentResolver.getType(uri)?.substringAfterLast('/') ?: "bin"
+      val dest = File(ctx.cacheDir, "stt_${System.currentTimeMillis()}.$ext")
+      ctx.contentResolver.openInputStream(uri)?.use { input ->
+        dest.outputStream().use { output -> input.copyTo(output) }
+      } ?: return null
+      dest.takeIf { it.exists() && it.length() > 0L }
+    } catch (_: Exception) {
+      null
     }
   }
 

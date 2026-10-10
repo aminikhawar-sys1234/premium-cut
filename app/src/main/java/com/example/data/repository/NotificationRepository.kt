@@ -30,31 +30,7 @@ object NotificationRepository {
   }
 
   private fun loadInitialNotifications() {
-    val p = prefs ?: return
-    val readIds = p.getStringSet("read_ids", emptySet()) ?: emptySet()
-    
-    // Seed real initial system notifications if empty
-    val initialList = listOf(
-      AppNotification(
-        id = "sys_welcome",
-        title = "Welcome to Premier Cut",
-        message = "Start your first project or explore trending creator templates.",
-        timestampMs = System.currentTimeMillis() - 3600_000L * 2,
-        iconType = "info",
-        isRead = readIds.contains("sys_welcome"),
-        targetScreen = AppScreen.HOME
-      ),
-      AppNotification(
-        id = "sys_engine_ready",
-        title = "GPU Acceleration Active",
-        message = "Hardware encoding and real-time multi-track compositor are ready.",
-        timestampMs = System.currentTimeMillis() - 3600_000L * 5,
-        iconType = "project",
-        isRead = readIds.contains("sys_engine_ready"),
-        targetScreen = AppScreen.SETTINGS
-      )
-    )
-    _notifications.value = initialList
+    _notifications.value = emptyList()
   }
 
   fun addNotification(notification: AppNotification) {

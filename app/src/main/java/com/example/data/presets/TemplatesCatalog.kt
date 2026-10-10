@@ -47,8 +47,8 @@ data class VideoTemplate(
   val creatorAvatarUrl: String? = null,
   val previewVideoUrl: String? = null,
   val previewThumbnailUrl: String? = null,
-  val viewsCount: Long = 1240L,
-  val usesCount: Long = 380L,
+  val viewsCount: Long = 0L,
+  val usesCount: Long = 0L,
   val createdAt: Long = System.currentTimeMillis(),
   val createTimeline: (
     mediaReplacements: Map<String, String>,
@@ -335,7 +335,10 @@ object TemplatesCatalog {
         description = "Soft romantic color grading and elegant typography.",
         aspectRatio = AspectRatio.RATIO_16_9,
         durationMs = 12000L,
-        mediaPlaceholders = listOf(MediaPlaceholder("v1", "Couple Dance", PlaceholderType.VIDEO, 12000L, "wed_vid_1")),
+        mediaPlaceholders = listOf(
+          MediaPlaceholder("v1", "Couple Dance", PlaceholderType.VIDEO, 6000L, "wed_vid_1"),
+          MediaPlaceholder("v2", "Ceremony", PlaceholderType.VIDEO, 6000L, "wed_vid_2")
+        ),
         textPlaceholders = listOf(
           TextPlaceholder("t1", "Couple Names", "wed_txt_1", "Emma & Oliver"),
           TextPlaceholder("t2", "Wedding Date", "wed_txt_2", "JUNE 20, 2026")
@@ -343,8 +346,8 @@ object TemplatesCatalog {
         createTimeline = { media, texts ->
           Timeline(
             videoClips = listOf(
-              VideoClip(id = "wed_vid_1", name = "Dance", uri = media["v1"] ?: "file:///couple_dance.mp4", timelineStartMs = 0L, durationMs = 6000L),
-              VideoClip(id = "wed_vid_2", name = "Ceremony", uri = media["v2"] ?: "file:///ceremony.mp4", timelineStartMs = 6000L, durationMs = 6000L)
+              VideoClip(id = "wed_vid_1", name = "Dance", uri = media["v1"] ?: "", timelineStartMs = 0L, durationMs = 6000L),
+              VideoClip(id = "wed_vid_2", name = "Ceremony", uri = media["v2"] ?: "", timelineStartMs = 6000L, durationMs = 6000L)
             ),
             textClips = listOf(
               TextClip(id = "wed_txt_1", text = texts["t1"] ?: "Emma & Oliver", timelineStartMs = 0L, durationMs = 6000L),
