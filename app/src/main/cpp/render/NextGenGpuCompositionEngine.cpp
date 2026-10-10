@@ -26,10 +26,15 @@ precision mediump float;
 in vec2 vUv;
 uniform sampler2D uTexture;
 uniform float uOpacity;
+uniform float uPremultiply;
 out vec4 outColor;
 void main() {
     vec4 c = texture(uTexture, vUv);
-    outColor = vec4(c.rgb * uOpacity, c.a * uOpacity);
+    // Straight-alpha sources (video) keep their RGB and let SRC_ALPHA blend apply opacity.
+    // Premultiplied sources (text, stickers) must scale RGB with opacity or GL_ONE blend
+    // draws them at full strength.
+    vec3 rgb = (uPremultiply > 0.5) ? c.rgb * uOpacity : c.rgb;
+    outColor = vec4(rgb, c.a * uOpacity);
 }
 )glsl";
 
@@ -40,10 +45,12 @@ precision mediump float;
 in vec2 vUv;
 uniform samplerExternalOES uTexture;
 uniform float uOpacity;
+uniform float uPremultiply;
 out vec4 outColor;
 void main() {
     vec4 c = texture(uTexture, vUv);
-    outColor = vec4(c.rgb * uOpacity, c.a * uOpacity);
+    vec3 rgb = (uPremultiply > 0.5) ? c.rgb * uOpacity : c.rgb;
+    outColor = vec4(rgb, c.a * uOpacity);
 }
 )glsl";
 
@@ -164,11 +171,13 @@ bool NextGenGpuCompositionEngine::buildPrograms() {
     st2d_ = glGetUniformLocation(program2d_, "uST");
     opacity2d_ = glGetUniformLocation(program2d_, "uOpacity");
     sampler2d_ = glGetUniformLocation(program2d_, "uTexture");
+    premul2d_ = glGetUniformLocation(program2d_, "uPremultiply");
 
     mvpOes_ = glGetUniformLocation(programOes_, "uMVP");
     stOes_ = glGetUniformLocation(programOes_, "uST");
     opacityOes_ = glGetUniformLocation(programOes_, "uOpacity");
     samplerOes_ = glGetUniformLocation(programOes_, "uTexture");
+    premulOes_ = glGetUniformLocation(programOes_, "uPremultiply");
 
     fxTypeLoc_ = glGetUniformLocation(programEffects_, "uEffectType");
     fxIntensityLoc_ = glGetUniformLocation(programEffects_, "uIntensity");
@@ -320,7 +329,7 @@ void NextGenGpuCompositionEngine::layerMatrix(const RenderLayer& l, float* o) co
     o[13] = l.posY;
 }
 
-void NextGenGpuCompositionEngine::drawTexture(GLuint tex, const float* mvp, const float* st, float opacity, BlendMode mode, bool external) {
+void NextGenGpuCompositionEngine::drawTexture(GLuint tex, const float* mvp, const float* st, float opacity, BlendMode mode, bool external, bool premultiply) {
     GLuint p = external ? programOes_ : program2d_;
     if (lastProgram_ != p) {
         glUseProgram(p);
@@ -342,6 +351,8 @@ void NextGenGpuCompositionEngine::drawTexture(GLuint tex, const float* mvp, cons
     glUniformMatrix4fv(hs, 1, GL_FALSE, st);
     glUniform1f(ho, opacity);
     glUniform1i(hsam, 0);
+    GLint hp = external ? premulOes_ : premul2d_;
+    if (hp >= 0) glUniform1f(hp, premultiply ? 1.0f : 0.0f);
 
     blend(mode);
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
@@ -393,7 +404,8 @@ void NextGenGpuCompositionEngine::renderFrame(const std::vector<RenderLayer>& in
 
         // Sample as OES only when the caller marked a live SurfaceTexture. Layer type
         // cannot decide this: Kotlin already converted BASE_VIDEO / VIDEO to GL_TEXTURE_2D.
-        drawTexture(l.textureId, mvp, st, l.opacity, l.blendMode, l.isExternal);
+        drawTexture(l.textureId, mvp, st, l.opacity, l.blendMode, l.isExternal,
+                    l.blendMode == BlendMode::PREMULTIPLIED);
     }
 
     glBindVertexArray(0);
@@ -445,7 +457,7 @@ void NextGenGpuCompositionEngine::renderExternalTexture(GLuint tex, const float*
     glClear(GL_COLOR_BUFFER_BIT);
     glBindVertexArray(vao_);
     lastTexture_ = 0;
-    drawTexture(tex, mvp, st, 1.0f, BlendMode::NORMAL, true);
+    drawTexture(tex, mvp, st, 1.0f, BlendMode::NORMAL, true, false);
     glBindVertexArray(0);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
     glDisable(GL_BLEND);

@@ -131,7 +131,8 @@ class CustomVideoEngineController(
     if (clip != null && clip.isVideo && isPlayableInPlayer(clip.uri)) {
       ensureClipLoaded(clip)
       playbackController.setPlaybackSpeed(clip.speed)
-      playbackController.setVolume(PreviewMixPolicy.clipGain(clip, timeline, TrackType.MAIN_VIDEO))
+      val rel = (currentPosMs - clip.timelineStartMs).coerceAtLeast(0L)
+      playbackController.setVolume(PreviewMixPolicy.clipGainAt(clip, timeline, TrackType.MAIN_VIDEO, rel))
       if (!isPlaying) {
         playbackController.seekTo(clip.timelineToSourceMs(currentPosMs), resumeAfter = false, exact = true)
       }
@@ -241,7 +242,8 @@ class CustomVideoEngineController(
     if (nextClip != null && nextClip.isVideo && isPlayableInPlayer(nextClip.uri)) {
       ensureClipLoaded(nextClip)
       playbackController.setPlaybackSpeed(nextClip.speed)
-      playbackController.setVolume(PreviewMixPolicy.clipGain(nextClip, currentTimeline, TrackType.MAIN_VIDEO))
+      val rel = (nextTimelinePos - nextClip.timelineStartMs).coerceAtLeast(0L)
+      playbackController.setVolume(PreviewMixPolicy.clipGainAt(nextClip, currentTimeline, TrackType.MAIN_VIDEO, rel))
       playbackController.seekTo(
         nextClip.timelineToSourceMs(nextTimelinePos),
         resumeAfter = resumeAfter && timelineSyncManager.isPlaying,

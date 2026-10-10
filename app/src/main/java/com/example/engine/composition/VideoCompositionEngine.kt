@@ -100,6 +100,19 @@ data class ComposedTransition(
   val clipAfter: VideoClip
 )
 
+/**
+ * Opacity for the canvas fallback renderer.
+ * [transitionScale] multiplies the keyframe opacity; it never replaces it with fully opaque.
+ */
+internal fun canvasPaintAlpha(
+  keyframeOpacity: Float,
+  effectAlpha: Float = 1f,
+  transitionScale: Float = 1f
+): Int {
+  val base = keyframeOpacity.coerceIn(0f, 1f) * effectAlpha.coerceIn(0f, 1f)
+  return (base * transitionScale.coerceIn(0f, 1f) * 255f).toInt().coerceIn(0, 255)
+}
+
 class VideoCompositionEngine(private val context: Context) {
 
   private val humanAnalysis = AdvancedHumanAnalysis()
@@ -245,7 +258,7 @@ class VideoCompositionEngine(private val context: Context) {
           (canvasWidth / 2f) + (clip.cropOffsetX + kf.posX) * (canvasWidth / 2f),
           (canvasHeight / 2f) + (clip.cropOffsetY + kf.posY) * (canvasHeight / 2f)
         )
-        paint.alpha = (kf.opacity * 255).toInt().coerceIn(0, 255)
+        paint.alpha = canvasPaintAlpha(kf.opacity)
       } else {
         matrix.postScale(baseScale, baseScale)
         matrix.postTranslate(canvasWidth / 2f, canvasHeight / 2f)
@@ -257,16 +270,18 @@ class VideoCompositionEngine(private val context: Context) {
         matrix.postScale(motion.scaleX, motion.scaleY, canvasWidth / 2f, canvasHeight / 2f)
         matrix.postRotate(motion.rotation, canvasWidth / 2f, canvasHeight / 2f)
         matrix.postTranslate(motion.translationX * canvasWidth, motion.translationY * canvasHeight)
-        paint.alpha = ((paint.alpha / 255f) * motion.alpha * 255f).toInt().coerceIn(0, 255)
+        paint.alpha = canvasPaintAlpha(paint.alpha / 255f, effectAlpha = motion.alpha)
       }
 
-      // Single-bitmap fallback. The shader path blends both clips; this matches that motion
-      // for whichever side is the bitmap currently in hand.
+      // Keyframe / effect opacity is already on the paint. The pose scales that alpha
+      // so a faded clip does not jump back to full strength during the transition.
+      // The shader path blends both clips; this matches that motion for the bitmap in hand.
+      val baseAlpha = paint.alpha
       if (frame.activeTransition != null) {
         val tr = frame.activeTransition
         val incoming = clip?.id == tr.clipAfter.id
         val pose = TransitionPreviewMotion.resolve(tr.type, tr.progress, incoming)
-        paint.alpha = ((paint.alpha / 255f) * pose.opacity * 255f).toInt().coerceIn(0, 255)
+        paint.alpha = canvasPaintAlpha(baseAlpha / 255f, transitionScale = pose.opacity)
         matrix.postTranslate(pose.translateX * canvasWidth, pose.translateY * canvasHeight)
         if (pose.scale != 1f) {
           matrix.postScale(pose.scale, pose.scale, canvasWidth / 2f, canvasHeight / 2f)
@@ -295,7 +310,6 @@ class VideoCompositionEngine(private val context: Context) {
           canvas.drawRect(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat(), flashPaint)
         }
       } else {
-        paint.alpha = 255
         canvas.drawBitmap(mainBitmap, matrix, paint)
       }
     }

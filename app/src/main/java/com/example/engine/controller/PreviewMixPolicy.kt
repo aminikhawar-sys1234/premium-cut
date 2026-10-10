@@ -5,6 +5,7 @@ import com.example.domain.model.Timeline
 import com.example.domain.model.TrackSettings
 import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
+import com.example.engine.KeyframeInterpolator
 
 /**
  * Track level (hide / mute / solo) rules for the live preview player.
@@ -43,6 +44,20 @@ object PreviewMixPolicy {
     if (!isTrackAudible(timeline, type)) return 0f
     if (clip.isMuted) return 0f
     return clip.volume.coerceIn(0f, 2f)
+  }
+
+  /**
+   * [clipGain] with the volume envelope at [relTimeMs]. Keyframes replace the static slider
+   * (they are absolute levels). Mute / solo still force silence. No keyframes → [clipGain].
+   */
+  fun clipGainAt(clip: VideoClip, timeline: Timeline, type: TrackType, relTimeMs: Long): Float {
+    val gated = clipGain(clip, timeline, type)
+    if (gated <= 0f || clip.keyframes.isEmpty()) return gated
+    val staticVol = clip.volume.coerceIn(0f, 2f)
+    if (staticVol <= 0.0001f) return 0f
+    val envelope = KeyframeInterpolator.interpolateVolume(clip.keyframes, relTimeMs, clip.volume)
+      .coerceAtLeast(0f)
+    return (gated / staticVol * envelope).coerceIn(0f, 2f)
   }
 
   /** Effective preview gain for an audio lane clip (track gate + clip mute/solo). */

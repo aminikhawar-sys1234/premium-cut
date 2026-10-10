@@ -309,6 +309,9 @@ class PlaybackController(
     if (currentClip?.id != nextClip?.id) {
       handleClipTransition(nextClip, bounded, resumeAfter = _timelineState.value.isPlaying)
     } else if (_timelineState.value.isPlaying && nextClip != null && nextClip.isVideo) {
+      if (nextClip.keyframes.isNotEmpty()) {
+        playbackManager.setVolume(mainVideoGain(nextClip))
+      }
       correctSourceDriftIfNeeded(nextClip, bounded)
     }
   }
@@ -434,7 +437,8 @@ class PlaybackController(
     val state = _timelineState.value
     if (state.isMuted) return 0f
     if (!PreviewMixPolicy.isTrackAudible(state.timeline, TrackType.MAIN_VIDEO)) return 0f
-    return PreviewMixPolicy.clipGain(clip, state.timeline, TrackType.MAIN_VIDEO) * state.volume
+    val rel = (state.positionMs - clip.timelineStartMs).coerceAtLeast(0L)
+    return PreviewMixPolicy.clipGainAt(clip, state.timeline, TrackType.MAIN_VIDEO, rel) * state.volume
   }
 
   private fun findClipAt(timeline: Timeline, posMs: Long): VideoClip? {

@@ -63,6 +63,9 @@ object GpuShaders {
       
       // Opacity
       uniform float uOpacity;
+      // 1 = texture RGB is already premultiplied (text, stickers). Scale RGB with opacity.
+      // 0 = straight alpha (video). SRC_ALPHA blend applies opacity; scaling RGB here darkens twice.
+      uniform float uPremultiply;
       
       // Keyframe Blur & Effect
       uniform float uBlur;
@@ -350,6 +353,9 @@ object GpuShaders {
         
         // 10. Opacity
         color.rgb = clamp(color.rgb, 0.0, 1.0);
+        if (uPremultiply > 0.5) {
+          color.rgb *= uOpacity;
+        }
         color.a *= uOpacity;
         
         gl_FragColor = color;

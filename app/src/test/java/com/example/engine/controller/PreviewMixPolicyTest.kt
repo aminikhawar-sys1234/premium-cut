@@ -1,6 +1,7 @@
 package com.example.engine.controller
 
 import com.example.domain.model.AudioClip
+import com.example.domain.model.ClipKeyframe
 import com.example.domain.model.Timeline
 import com.example.domain.model.TrackSettings
 import com.example.domain.model.TrackType
@@ -39,6 +40,16 @@ class PreviewMixPolicyTest {
     assertTrue(PreviewMixPolicy.isTrackVisible(tl, TrackType.MAIN_VIDEO))
     assertTrue(PreviewMixPolicy.isTrackAudible(tl, TrackType.MAIN_VIDEO))
     assertEquals(1.0f, PreviewMixPolicy.clipGain(clip(), tl, TrackType.MAIN_VIDEO), 0.0001f)
+  }
+
+  @Test
+  fun volumeKeyframeReplacesTheStaticSlider() {
+    val tl = timeline(TrackSettings(TrackType.MAIN_VIDEO))
+    val animated = clip(volume = 1f).copy(
+      keyframes = listOf(ClipKeyframe(timeMs = 0L, volume = 0.25f))
+    )
+    assertEquals(0.25f, PreviewMixPolicy.clipGainAt(animated, tl, TrackType.MAIN_VIDEO, 0L), 0.001f)
+    assertEquals(0f, PreviewMixPolicy.clipGainAt(animated.copy(isMuted = true), tl, TrackType.MAIN_VIDEO, 0L), 0.001f)
   }
 
   @Test

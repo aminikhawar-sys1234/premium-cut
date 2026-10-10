@@ -4627,7 +4627,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
             if (clip.id == selected.clipId) {
               val relTime = (_currentPositionMs.value - clip.timelineStartMs).coerceIn(0L, clip.durationMs)
               val existing = clip.keyframes.filterNot { kotlin.math.abs(it.timeMs - relTime) < 50L }
-              val currentVol = KeyframeInterpolator.interpolateVolume(clip, relTime)
+              val currentVol = KeyframeInterpolator.interpolateVolume(clip.keyframes, relTime, clip.volume)
               val newKf = customKeyframe?.copy(timeMs = relTime) ?: ClipKeyframe(
                 timeMs = relTime,
                 volume = currentVol
@@ -7292,7 +7292,13 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     val relMs = posMs - clip.timelineStartMs
     if (relMs < 0L || relMs > clip.durationMs) return 0f
 
-    var baseVol = clip.volume
+    // Keyframes store the envelope level itself. Multiplying them by clip.volume squared a
+    // 0.5 keyframe on a 0.5 clip down to 0.25 and ignored the drawn curve.
+    var baseVol = if (clip.keyframes.isNotEmpty()) {
+      KeyframeInterpolator.interpolateVolume(clip.keyframes, relMs, clip.volume)
+    } else {
+      clip.volume
+    }
 
     // Apply Fade In
     if (clip.fadeInMs > 0L && relMs < clip.fadeInMs) {
@@ -7305,12 +7311,6 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
       val remaining = (clip.durationMs - relMs).coerceAtLeast(0L)
       val progress = (remaining.toFloat() / clip.fadeOutMs).coerceIn(0f, 1f)
       baseVol *= (progress * progress)
-    }
-
-    // Apply Keyframes
-    if (clip.keyframes.isNotEmpty()) {
-      val kfVol = KeyframeInterpolator.interpolateVolume(clip.keyframes, relMs)
-      baseVol *= kfVol
     }
 
     return baseVol.coerceAtLeast(0f)
@@ -7331,11 +7331,10 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     val relMs = posMs - clip.timelineStartMs
     if (relMs < 0L || relMs > clip.durationMs) return 0f
 
-    var baseVol = clip.volume
-
-    if (clip.keyframes.isNotEmpty()) {
-      val kf = KeyframeInterpolator.interpolate(clip, relMs)
-      baseVol *= kf.volume
+    val baseVol = if (clip.keyframes.isNotEmpty()) {
+      KeyframeInterpolator.interpolate(clip, relMs).volume
+    } else {
+      clip.volume
     }
 
     return baseVol.coerceAtLeast(0f)
