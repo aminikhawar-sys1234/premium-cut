@@ -21,6 +21,8 @@ import com.example.domain.model.timelineToSourceMs
 import com.example.engine.controller.CustomVideoEngineController
 import com.example.engine.controller.PlaybackSyncPolicy
 import com.example.engine.controller.PreviewMixPolicy
+import com.example.engine.color.ColorEngineHost
+import com.example.engine.effects.media3.LutStripBaker
 import com.example.engine.effects.media3.Media3EffectPipeline
 import com.example.engine.effects.media3.PreviewFilterEffects
 import com.example.engine.media.MediaRelinkManager
@@ -170,28 +172,52 @@ class VideoPlaybackEngine(
     applyActiveLookToPlayers()
   }
 
-  /** Pushes clip-local (or timeline) filter + adjustments onto ExoPlayer via Media3 effects. */
-  fun applyActiveLookToPlayers() {
-    val clip = _activeClip.value
+  /**
+   * Pushes clip-local (or timeline) filter + adjustments + LUT onto ExoPlayer via Media3 effects.
+   * [force] rebinds even when the look signature is unchanged (needed after a failed setVideoEffects
+   * or when the paused frame must be redrawn). [preferClipId] uses that main-track clip's look when
+   * the playhead is still on a different clip (filter tap before seek).
+   */
+  fun applyActiveLookToPlayers(force: Boolean = false, preferClipId: String? = null) {
+    val preferred = preferClipId?.let { id -> currentTimeline.videoClips.find { it.id == id } }
+    val clip = preferred ?: _activeClip.value
     val sig = PreviewFilterEffects.signature(clip, currentTimeline)
-    if (sig != lastPreviewFilterSignature) {
-      lastPreviewFilterSignature = sig
-      val effects = PreviewFilterEffects.effectsFor(clip, currentTimeline)
-      Media3EffectPipeline.applyRealtimeEffects(player, effects)
-      Log.d(TAG, "Applied preview filter ${PreviewFilterEffects.effectiveFilter(clip, currentTimeline).type} effects=${effects.size}")
+    if (force || sig != lastPreviewFilterSignature) {
+      val lut = PreviewFilterEffects.lutLook(clip)
+      val lutBmp = if (clip != null && ColorEngineHost.isBypassed(clip.id)) {
+        null
+      } else {
+        lut?.first?.let { LutStripBaker.bitmapFor(context, it) }
+      }
+      val effects = PreviewFilterEffects.effectsFor(clip, currentTimeline, lutBmp, lut?.second ?: 1f)
+      if (Media3EffectPipeline.applyRealtimeEffects(player, effects)) {
+        lastPreviewFilterSignature = sig
+        Log.d(
+          TAG,
+          "Applied preview filter ${PreviewFilterEffects.effectiveFilter(clip, currentTimeline).type}" +
+            " lut=${lut?.first ?: "none"} effects=${effects.size} force=$force"
+        )
+      }
     }
-    applyOverlayLooks()
+    applyOverlayLooks(force)
   }
 
-  private fun applyOverlayLooks() {
+  private fun applyOverlayLooks(force: Boolean = false) {
     val activeIds = currentTimeline.overlayClips.map { it.id }.toSet()
     lastOverlayFilterSignatures.keys.toList().filter { it !in activeIds }.forEach { lastOverlayFilterSignatures.remove(it) }
     for (overlay in currentTimeline.overlayClips) {
       val p = overlayPlayers[overlay.id] ?: continue
       val sig = PreviewFilterEffects.signature(overlay, currentTimeline)
-      if (lastOverlayFilterSignatures[overlay.id] == sig) continue
-      lastOverlayFilterSignatures[overlay.id] = sig
-      Media3EffectPipeline.applyRealtimeEffects(p, PreviewFilterEffects.effectsFor(overlay, currentTimeline))
+      if (!force && lastOverlayFilterSignatures[overlay.id] == sig) continue
+      val lut = PreviewFilterEffects.lutLook(overlay)
+      val lutBmp = lut?.first?.let { LutStripBaker.bitmapFor(context, it) }
+      if (Media3EffectPipeline.applyRealtimeEffects(
+          p,
+          PreviewFilterEffects.effectsFor(overlay, currentTimeline, lutBmp, lut?.second ?: 1f)
+        )
+      ) {
+        lastOverlayFilterSignatures[overlay.id] = sig
+      }
     }
   }
 

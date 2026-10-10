@@ -3,8 +3,11 @@ package com.example
 import com.example.domain.model.*
 import com.example.engine.SelectedTrackElement
 import com.example.engine.TimelineEngine
+import com.ahstudio.color.core.LutState
+import com.example.engine.color.ColorEngineHost
 import com.example.engine.composition.ColorFilterGenerator
 import com.example.engine.effects.media3.ColorGradingGlEffect
+import com.example.engine.effects.media3.LutGlEffect
 import com.example.engine.effects.media3.PreviewFilterEffects
 import org.junit.Assert.*
 import org.junit.Before
@@ -225,5 +228,47 @@ class VideoFiltersTest {
     )
     assertEquals(FilterType.GOLDEN_AUTUMN, PreviewFilterEffects.effectiveFilter(clip, timeline).type)
     assertEquals(FilterType.OCEANIC_VIEW, PreviewFilterEffects.effectiveFilter(null, timeline).type)
+  }
+
+  @Test
+  fun testPreviewFilterEffectsIncludeLutLookInSignature() {
+    val grade = ColorEngineHost.encode(
+      ColorEngineHost.decodeOrDefault(null).copy(
+        lut = LutState(lutId = "teal_orange", intensity = 0.8f)
+      )
+    )
+    val clip = VideoClip(
+      id = "v1",
+      name = "v1",
+      uri = "uri1",
+      durationMs = 3000L,
+      colorGradeJson = grade
+    )
+    val timeline = Timeline(videoClips = listOf(clip))
+    val look = PreviewFilterEffects.lutLook(clip)
+    assertEquals("teal_orange", look?.first)
+    assertEquals(0.8f, look!!.second, 0.001f)
+    assertTrue(PreviewFilterEffects.signature(clip, timeline).contains("teal_orange"))
+    assertFalse(PreviewFilterEffects.signature(clip.copy(colorGradeJson = null), timeline).contains("teal_orange"))
+
+    val lutBmp = LutGlEffect.createIdentityLut(16)
+    val withLut = PreviewFilterEffects.effectsFor(clip, timeline, lutBmp, 0.8f)
+    val without = PreviewFilterEffects.effectsFor(clip.copy(colorGradeJson = null), timeline)
+    assertTrue("LUT must add a live-preview pass", withLut.size > without.size)
+  }
+
+  @Test
+  fun testColorGradingGlEffectAppliesVideoQualityAndToneFields() {
+    val quality = ColorGradingGlEffect.fromTimeline(
+      VideoAdjustments(autoEnhance = 0.6f, whites = 0.3f, blacks = -0.2f, fade = 0.4f, denoise = 0.5f, colorFix = 0.3f),
+      FilterSettings()
+    )
+    assertFalse(quality.isNoOp(1920, 1080))
+    assertEquals(0.6f, quality.autoEnhance, 0.001f)
+    assertEquals(0.3f, quality.whites, 0.001f)
+    assertEquals(-0.2f, quality.blacks, 0.001f)
+    assertEquals(0.4f, quality.fade, 0.001f)
+    assertEquals(0.5f, quality.denoise, 0.001f)
+    assertEquals(0.3f, quality.colorFix, 0.001f)
   }
 }

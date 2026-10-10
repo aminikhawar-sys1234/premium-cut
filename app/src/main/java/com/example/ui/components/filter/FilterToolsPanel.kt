@@ -2,11 +2,7 @@ package com.example.ui.components.filter
 
 import android.content.Context
 import android.graphics.Bitmap
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -161,6 +157,14 @@ fun FilterToolsPanel(
     if (!viewModel.timelineEngine.updateClipAdjustments(adj, selectedClip?.id)) {
       viewModel.timelineEngine.updateAdjustments(adj)
     }
+    viewModel.refreshCurrentFrame(preferClipId = selectedClip?.id)
+  }
+
+  val applyLook: (FilterSettings) -> Unit = { look ->
+    currentFilter = look
+    viewModel.timelineEngine.updateFilter(look, selectedClip?.id)
+    viewModel.revealClipForLookPreview(selectedClip)
+    viewModel.refreshCurrentFrame(preferClipId = selectedClip?.id)
   }
 
   var activeTab by remember { mutableStateOf(initialTab) }
@@ -222,12 +226,11 @@ fun FilterToolsPanel(
     color = BlueGreenDarkBottom,
     shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
     border = BorderStroke(1.dp, BlueGreenBorder),
-    modifier = modifier.fillMaxWidth().wrapContentHeight()
+    modifier = modifier.fillMaxWidth().fillMaxHeight()
   ) {
     Column(
       modifier = Modifier
-        .fillMaxWidth()
-        .wrapContentHeight()
+        .fillMaxSize()
         .background(
           Brush.verticalGradient(
             listOf(BlueGreenDarkTop, BlueGreenDarkBottom)
@@ -250,9 +253,12 @@ fun FilterToolsPanel(
             when (activeTab) {
               FilterToolsTab.FILTERS -> {
                 val reset = FilterSettings(type = FilterType.NONE, intensity = 1.0f)
-                currentFilter = reset
-                viewModel.timelineEngine.updateFilter(reset, selectedClip?.id)
-                viewModel.refreshCurrentFrame()
+                applyLook(reset)
+                lutClip?.id?.let { id ->
+                  ColorEngineHost.applyToEngine(id, ColorEngineHost.decodeOrDefault(lutClip.colorGradeJson).copy(lut = null))
+                  viewModel.timelineEngine.setClipColorGrade(id, null)
+                  viewModel.refreshCurrentFrame(preferClipId = id)
+                }
               }
               FilterToolsTab.ADJUST -> {
                 val reset = currentAdjustments.copy(
@@ -419,11 +425,7 @@ fun FilterToolsPanel(
               lutClipId = lutClip?.id,
               lutClipGradeJson = lutClip?.colorGradeJson,
               baseBitmap = baseThumbnailBitmap,
-              onFilterChange = { newFilter ->
-                currentFilter = newFilter
-                viewModel.timelineEngine.updateFilter(newFilter, selectedClip?.id)
-                viewModel.refreshCurrentFrame()
-              }
+              onFilterChange = applyLook
             )
           }
           FilterToolsTab.ADJUST -> {
@@ -514,7 +516,8 @@ private fun FiltersTabContent(
     val next = grade.copy(lut = lutId?.let { LutState(lutId = it, intensity = intensity) })
     ColorEngineHost.applyToEngine(id, next)
     viewModel.timelineEngine.setClipColorGrade(id, if (next.isIdentity()) null else ColorEngineHost.encode(next))
-    viewModel.refreshCurrentFrame()
+    viewModel.revealClipForLookPreview(viewModel.timelineEngine.timeline.value.videoClips.find { it.id == id })
+    viewModel.refreshCurrentFrame(preferClipId = id)
   }
 
   // LUT files load asynchronously; re-render once the LUT is actually available.
@@ -711,7 +714,7 @@ private fun FiltersTabContent(
                 .clip(RoundedCornerShape(4.dp))
                 .clickable {
                   viewModel.timelineEngine.applyFilterToAllClips(currentFilter)
-                  viewModel.refreshCurrentFrame()
+                  viewModel.refreshCurrentFrame(preferClipId = selectedClipId)
                 }
                 .testTag("filter_apply_all_button")
             ) {
@@ -1059,8 +1062,7 @@ private fun FilterCardItem(
             modifier = Modifier.fillMaxSize()
           )
         } else {
-          // Clean procedural gradient preview
-          ProceduralFilterPreview(type = type)
+          NeutralLookSwatch(colorFilter = composeColorFilter)
         }
 
         if (type != FilterType.NONE && onToggleFavourite != null) {
@@ -1620,47 +1622,44 @@ private data class QualityToolConfig(
 )
 
 /**
- * Procedural fallback preview for filters
+ * Shared neutral swatch so a missing clip thumbnail still shows the real ColorMatrix,
+ * not a per-filter fake color cartoon.
  */
 @Composable
-private fun ProceduralFilterPreview(
-  type: FilterType,
+private fun NeutralLookSwatch(
+  colorFilter: ColorFilter?,
   modifier: Modifier = Modifier
 ) {
-  val baseColors = remember(type) {
-    when (type) {
-      FilterType.NONE -> listOf(Color(0xFF334155), Color(0xFF0F172A))
-      FilterType.FOUR_K -> listOf(Color(0xFF0284C7), Color(0xFF1E3A8A), Color(0xFF0F172A))
-      FilterType.BLACKLIGHT_FIX -> listOf(Color(0xFFD97706), Color(0xFFB45309), Color(0xFF1E1B4B))
-      FilterType.ENHANCE -> listOf(Color(0xFF38BDF8), Color(0xFF818CF8), Color(0xFF312E81))
-      FilterType.HDR -> listOf(Color(0xFFFF007F), Color(0xFF7928CA), Color(0xFF0284C7))
-      FilterType.GLOW -> listOf(Color(0xFFFDE047), Color(0xFFF472B6), Color(0xFF4F46E5))
-      FilterType.FOCUS -> listOf(Color(0xFF10B981), Color(0xFF0369A1), Color(0xFF0F172A))
-      FilterType.QUALITY_RESTORATION -> listOf(Color(0xFF2DD4BF), Color(0xFF2563EB), Color(0xFF0F172A))
-      FilterType.GOLDEN_AUTUMN -> listOf(Color(0xFFF97316), Color(0xFF9A3412), Color(0xFF451A03))
-      FilterType.OCEANIC_VIEW -> listOf(Color(0xFF06B6D4), Color(0xFF0369A1), Color(0xFF082F49))
-      FilterType.ALMOND -> listOf(Color(0xFFFDE68A), Color(0xFFD4A373), Color(0xFF78350F))
-      FilterType.SUNLIGHT_ORANGE_BLUE -> listOf(Color(0xFFFB923C), Color(0xFF0284C7), Color(0xFF0F172A))
-      FilterType.CINEMATIC -> listOf(Color(0xFF0D9488), Color(0xFFF97316), Color(0xFF042F2E))
-      FilterType.WARM -> listOf(Color(0xFFF59E0B), Color(0xFFD97706), Color(0xFF451A03))
-      FilterType.COOL -> listOf(Color(0xFF0284C7), Color(0xFF38BDF8), Color(0xFF082F49))
-      FilterType.PORTRAIT -> listOf(Color(0xFFF43F5E), Color(0xFFFB7185), Color(0xFF881337))
-      FilterType.BLACK_AND_WHITE -> listOf(Color(0xFFE2E8F0), Color(0xFF64748B), Color(0xFF0F172A))
-      FilterType.VINTAGE -> listOf(Color(0xFFB45309), Color(0xFFFDE68A), Color(0xFF451A03))
-      FilterType.SATURATION -> listOf(Color(0xFFEC4899), Color(0xFF3B82F6), Color(0xFF1E1B4B))
-      FilterType.FILM -> listOf(Color(0xFFA16207), Color(0xFF78350F), Color(0xFF1C1917))
-      FilterType.RETRO -> listOf(Color(0xFFD946EF), Color(0xFF8B5CF6), Color(0xFF3B0764))
-      FilterType.NATURE -> listOf(Color(0xFF10B981), Color(0xFF047857), Color(0xFF064E3B))
-      FilterType.FOOD -> listOf(Color(0xFFEA580C), Color(0xFFFACC15), Color(0xFF7C2D12))
-      FilterType.TRAVEL -> listOf(Color(0xFF0284C7), Color(0xFF10B981), Color(0xFF064E3B))
-      FilterType.SOCIAL_MEDIA -> listOf(Color(0xFFFF007F), Color(0xFF8B5CF6), Color(0xFF312E81))
-    }
-  }
+  val bmp = remember { FilterLookSwatch.bitmap() }
+  Image(
+    bitmap = bmp.asImageBitmap(),
+    contentDescription = null,
+    colorFilter = colorFilter,
+    contentScale = ContentScale.Crop,
+    modifier = modifier.fillMaxSize()
+  )
+}
 
-  Canvas(modifier = modifier.fillMaxSize()) {
-    drawRect(
-      brush = Brush.verticalGradient(baseColors),
-      size = size
-    )
+private object FilterLookSwatch {
+  fun bitmap(): Bitmap {
+    val w = 32
+    val h = 32
+    val px = IntArray(w * h)
+    for (y in 0 until h) {
+      val t = y / (h - 1).toFloat()
+      val r = ((0.55f * (1f - t) + 0.22f * t) * 255f).toInt().coerceIn(0, 255)
+      val g = ((0.48f * (1f - t) + 0.28f * t) * 255f).toInt().coerceIn(0, 255)
+      val b = ((0.40f * (1f - t) + 0.18f * t) * 255f).toInt().coerceIn(0, 255)
+      val row = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+      for (x in 0 until w) {
+        val band = when {
+          x < w / 3 -> 0x00_18_28
+          x < (2 * w) / 3 -> 0x00_00_00
+          else -> 0x20_10_00
+        }
+        px[y * w + x] = row + band
+      }
+    }
+    return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
   }
 }

@@ -455,9 +455,35 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     playbackEngine.seekTo(safePos)
   }
 
-  /** Re-renders the current frame (e.g. after a colour grade change) without moving the playhead. */
-  fun refreshCurrentFrame() {
-    if (!timelineEngine.isPlaying.value) playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+  /**
+   * Re-renders the current preview frame with the latest Filters / Color Grade look.
+   * Syncs the playback engine immediately (do not wait for the timeline collector) so a
+   * filter tap shows on the live video in the same gesture, then seeks when paused so
+   * Media3 redraws the held frame with the new effects.
+   */
+  fun refreshCurrentFrame(preferClipId: String? = null) {
+    try {
+      playbackEngine.updateTimeline(timelineEngine.timeline.value)
+      playbackEngine.applyActiveLookToPlayers(force = true, preferClipId = preferClipId)
+      if (!timelineEngine.isPlaying.value) {
+        playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+      }
+    } catch (t: Throwable) {
+      android.util.Log.w("StudioViewModel", "Preview look refresh failed", t)
+    }
+  }
+
+  /**
+   * Moves the playhead onto [clip] when the filter/adjust was applied to a clip that is
+   * not currently on screen, so the live preview shows the look immediately.
+   */
+  fun revealClipForLookPreview(clip: com.example.domain.model.VideoClip?) {
+    val target = clip ?: return
+    val pos = timelineEngine.currentPositionMs.value
+    val onClip = pos >= target.timelineStartMs && pos < target.timelineStartMs + target.durationMs
+    if (onClip) return
+    val revealAt = target.timelineStartMs + minOf(80L, (target.durationMs / 2L).coerceAtLeast(0L))
+    seekTo(revealAt)
   }
 
   fun seekToUs(posUs: Long) {

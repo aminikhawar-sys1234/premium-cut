@@ -1,5 +1,6 @@
 package com.example.engine.effects.media3
 
+import android.graphics.Bitmap
 import androidx.media3.common.Effect
 import com.example.domain.model.FilterSettings
 import com.example.domain.model.FilterType
@@ -7,31 +8,61 @@ import com.example.domain.model.Timeline
 import com.example.domain.model.VideoAdjustments
 import com.example.domain.model.VideoClip
 import com.example.domain.model.effectiveAdjustments
+import com.example.engine.color.ColorEngineHost
 
 /**
  * Builds the live-preview Media3 look for Filters tools and Effects tools.
  * Color grading matches export; catalog `vfx:` keys are appended via [PreviewVfxEffects].
+ * LUT looks stored in [VideoClip.colorGradeJson] are applied via [LutGlEffect].
  */
 object PreviewFilterEffects {
 
   fun effectiveFilter(clip: VideoClip?, timeline: Timeline): FilterSettings =
     clip?.filter ?: timeline.filter
 
-  fun effectsFor(clip: VideoClip?, timeline: Timeline): List<Effect> =
+  fun lutLook(clip: VideoClip?): Pair<String, Float>? {
+    val grade = ColorEngineHost.decodeOrDefault(clip?.colorGradeJson)
+    val lut = grade.lut?.takeIf { it.isValid() } ?: return null
+    return lut.lutId to lut.intensity.coerceIn(0f, 1f)
+  }
+
+  fun effectsFor(
+    clip: VideoClip?,
+    timeline: Timeline,
+    lutBitmap: Bitmap? = null,
+    lutIntensity: Float = 1f
+  ): List<Effect> =
     Media3EffectPipeline.buildRealtimePreviewEffects(
       adjustments = clip.effectiveAdjustments(timeline),
-      filterSettings = effectiveFilter(clip, timeline)
+      filterSettings = effectiveFilter(clip, timeline),
+      customLut = lutBitmap,
+      customLutIntensity = lutIntensity
     ) + PreviewVfxEffects.effectsFor(clip)
 
-  fun signature(clip: VideoClip?, timeline: Timeline): String =
-    signature(clip.effectiveAdjustments(timeline), effectiveFilter(clip, timeline)) +
-      "|" + PreviewVfxEffects.signature(clip)
+  fun signature(clip: VideoClip?, timeline: Timeline): String {
+    val lut = lutLook(clip)
+    return signature(
+      clip.effectiveAdjustments(timeline),
+      effectiveFilter(clip, timeline),
+      lutId = lut?.first,
+      lutIntensity = lut?.second ?: 0f
+    ) + "|" + PreviewVfxEffects.signature(clip)
+  }
 
-  fun signature(adjustments: VideoAdjustments, filter: FilterSettings): String {
+  fun signature(
+    adjustments: VideoAdjustments,
+    filter: FilterSettings,
+    lutId: String? = null,
+    lutIntensity: Float = 0f
+  ): String {
     return buildString {
       append(filter.type.name)
       append('|')
       append(filter.intensity)
+      append('|')
+      append(lutId.orEmpty())
+      append('@')
+      append(lutIntensity)
       append('|')
       append(adjustments.brightness)
       append(',')

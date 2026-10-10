@@ -129,6 +129,21 @@ object ColorFilterGenerator {
       result.postConcat(ColorMatrix(cfArray))
     }
 
+    if (adjustments.fade > 0.01f) {
+      val keep = 1f - adjustments.fade.coerceIn(0f, 1f) * 0.55f
+      val lift = 128f * (1f - keep)
+      result.postConcat(
+        ColorMatrix(
+          floatArrayOf(
+            keep, 0f, 0f, 0f, lift,
+            0f, keep, 0f, 0f, lift,
+            0f, 0f, keep, 0f, lift,
+            0f, 0f, 0f, 1f, 0f
+          )
+        )
+      )
+    }
+
     // 6. Active Filter Preset (Clip override if set, otherwise timeline filter)
     val activeFilter = when {
       clipFilter != null -> clipFilter

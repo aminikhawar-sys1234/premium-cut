@@ -581,9 +581,10 @@ fun EditorScreen(
       val timelineHeight = if (isLandscape) 150.dp else 214.dp
       // Text & Filter Tools expand to 45% screen height per user requirement, while other tool panels maintain 37% cap
       val isTextToolActive = activeTextToolModal != null || activeTab == EditorToolbarTab.TEXT
-      val isFilterToolActive = activeTab == EditorToolbarTab.FILTERS || activeTab == EditorToolbarTab.ADJUST
+      val isFilterToolActive = activeTab == EditorToolbarTab.FILTERS ||
+        activeTab == EditorToolbarTab.ADJUST ||
+        activeTab == EditorToolbarTab.VIDEO_QUALITY
       val maxToolPanelHeight = if (isTextToolActive || isFilterToolActive) maxHeight * 0.45f else maxHeight * 0.37f
-      val isFilterToolsOpen = activeTab == EditorToolbarTab.FILTERS || activeTab == EditorToolbarTab.ADJUST
       val isTransitionsOpen = activeTab == EditorToolbarTab.TRANSITIONS
       val isStickersOpen = activeTab == EditorToolbarTab.STICKERS
       val responsiveSpacerHeight = 0.dp
@@ -1118,6 +1119,7 @@ fun EditorScreen(
               activeTab == EditorToolbarTab.FILTERS -> {
                 com.example.ui.components.filter.FilterToolsPanel(
                   viewModel = viewModel,
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.FILTERS,
                   onClose = { viewModel.setActiveToolbarTab(null) }
                 )
@@ -1125,6 +1127,7 @@ fun EditorScreen(
               activeTab == EditorToolbarTab.ADJUST -> {
                 com.example.ui.components.filter.FilterToolsPanel(
                   viewModel = viewModel,
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.ADJUST,
                   onClose = { viewModel.setActiveToolbarTab(null) }
                 )
@@ -1218,6 +1221,7 @@ fun EditorScreen(
               activeTab == EditorToolbarTab.VIDEO_QUALITY -> {
                 com.example.ui.components.filter.FilterToolsPanel(
                   viewModel = viewModel,
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.VIDEO_QUALITY,
                   onClose = { viewModel.setActiveToolbarTab(null) }
                 )

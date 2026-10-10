@@ -9,6 +9,7 @@ import com.example.domain.model.FilterType
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoAdjustments
 import com.example.domain.model.VideoClip
+import com.vfx.engine.core.lut.CubeLut
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -225,6 +226,43 @@ class Media3EffectPipelineTest {
     assertTrue("Should generate at least 2 real-time effects (ColorGrading + Anime)", effects.size >= 2)
     assertTrue("Should include ColorGradingGlEffect", effects.any { it is ColorGradingGlEffect })
     assertTrue("Should include CustomShaderGlEffect for Anime", effects.any { it is CustomShaderGlEffect && it.name == "AnimeCelShadingEffect" })
+  }
+
+  @Test
+  fun testColorGradingGlEffect_videoQualityAndFadeAreNotNoOp() {
+    val fade = ColorGradingGlEffect.fromTimeline(VideoAdjustments(fade = 0.5f))
+    assertFalse(fade.isNoOp(1920, 1080))
+    val hdr = ColorGradingGlEffect.fromTimeline(VideoAdjustments(hdrBoost = 0.7f))
+    assertFalse(hdr.isNoOp(1920, 1080))
+    assertEquals(0.7f, hdr.hdrBoost, 0.001f)
+    val whites = ColorGradingGlEffect.fromTimeline(VideoAdjustments(whites = 0.4f, blacks = -0.25f))
+    assertFalse(whites.isNoOp(1920, 1080))
+  }
+
+  @Test
+  fun testBuildRealtimePreviewEffects_includesCustomLut() {
+    val lut = LutGlEffect.createIdentityLut(16)
+    val effects = Media3EffectPipeline.buildRealtimePreviewEffects(
+      adjustments = VideoAdjustments(),
+      filterSettings = FilterSettings(type = FilterType.NONE),
+      customLut = lut,
+      customLutIntensity = 1f
+    )
+    assertTrue(effects.isNotEmpty())
+    val without = Media3EffectPipeline.buildRealtimePreviewEffects(
+      adjustments = VideoAdjustments(),
+      filterSettings = FilterSettings(type = FilterType.NONE)
+    )
+    assertTrue(effects.size > without.size)
+  }
+
+  @Test
+  fun testLutStripBaker_identityCubeIsVerticalStrip() {
+    val cube = CubeLut.identity3d(8)
+    val bmp = LutStripBaker.toVerticalStrip(cube, 8)
+    assertEquals(8, bmp.width)
+    assertEquals(64, bmp.height)
+    assertEquals(LutGlEffect.LutFormat.VERTICAL_STRIP, LutGlEffect.detectLutFormat(bmp))
   }
 
   @Test
