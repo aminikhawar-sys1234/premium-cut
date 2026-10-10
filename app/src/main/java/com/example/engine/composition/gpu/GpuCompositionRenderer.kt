@@ -11,6 +11,7 @@ import com.example.domain.model.*
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
 import com.example.engine.composition.ComposedFrame
+import com.example.engine.composition.TransitionPreviewMotion
 import com.example.engine.composition.ComposedOverlay
 import com.example.engine.composition.ComposedSticker
 import com.example.engine.composition.ComposedText
@@ -978,75 +979,36 @@ class GpuCompositionRenderer(private val context: Context) {
       }
     }
 
+    var transitionClipStart = -1f
+    var transitionClipEnd = -1f
     if (frame.activeTransition != null) {
       val tr = frame.activeTransition
       val p = tr.progress.coerceIn(0f, 1f)
-      when (tr.type) {
-        TransitionType.FADE, TransitionType.DISSOLVE -> {
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        TransitionType.SLIDE_LEFT -> {
-          Matrix.translateM(mvpMatrix, 0, -p * 2.0f, 0f, 0f)
-        }
-        TransitionType.SLIDE_RIGHT -> {
-          Matrix.translateM(mvpMatrix, 0, p * 2.0f, 0f, 0f)
-        }
-        TransitionType.PUSH_UP -> {
-          Matrix.translateM(mvpMatrix, 0, 0f, p * 2.0f, 0f)
-        }
-        TransitionType.ZOOM_IN -> {
-          val zoom = 1.0f + p * 0.6f
-          Matrix.scaleM(mvpMatrix, 0, zoom, zoom, 1f)
-          finalOpacity = (finalOpacity * (1.0f - p * 0.4f)).coerceIn(0f, 1f)
-        }
-        TransitionType.ZOOM_OUT -> {
-          val zoom = (1.0f - p * 0.4f).coerceAtLeast(0.1f)
-          Matrix.scaleM(mvpMatrix, 0, zoom, zoom, 1f)
-          finalOpacity = (finalOpacity * (1.0f - p * 0.4f)).coerceIn(0f, 1f)
-        }
-        TransitionType.SPIN -> {
-          Matrix.rotateM(mvpMatrix, 0, p * 360f, 0f, 0f, 1f)
-          val zoom = (1.0f - p * 0.5f).coerceAtLeast(0.1f)
-          Matrix.scaleM(mvpMatrix, 0, zoom, zoom, 1f)
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        TransitionType.BLUR, TransitionType.ZOOM_BLUR -> {
-          keyframeBlur = (keyframeBlur + (1.0f - kotlin.math.abs(p - 0.5f) * 2.0f) * 0.04f).coerceIn(0f, 1f)
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        TransitionType.FLASH -> {
-          val flashIntensity = (1.0f - kotlin.math.abs(p - 0.5f) * 2.0f).coerceIn(0f, 1f)
-          finalAdjustments = finalAdjustments.copy(
-            brightness = (finalAdjustments.brightness + flashIntensity * 0.8f).coerceIn(-1f, 1f),
-            exposure = (finalAdjustments.exposure + flashIntensity * 0.6f).coerceIn(-1f, 1f)
-          )
-          if (p >= 0.5f) finalOpacity = (finalOpacity * (1.0f - (p - 0.5f) * 2f)).coerceIn(0f, 1f)
-        }
-        TransitionType.GLITCH, TransitionType.GLITCH_WIPE -> {
-          if (p in 0.15f..0.85f) {
-            val jitterX = (transitionNoise(p, 1) * 0.1f)
-            val jitterY = (transitionNoise(p, 2) * 0.05f)
-            Matrix.translateM(mvpMatrix, 0, jitterX, jitterY, 0f)
-          }
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        TransitionType.WHIP_PAN -> {
-          Matrix.translateM(mvpMatrix, 0, -p * 2.5f, 0f, 0f)
-          keyframeBlur = (keyframeBlur + kotlin.math.sin(p * 3.14159f) * 0.03f).coerceIn(0f, 1f)
-        }
-        TransitionType.WIPE -> {
-          Matrix.translateM(mvpMatrix, 0, -p * 1.5f, 0f, 0f)
-          finalOpacity = (finalOpacity * (1.0f - p * 0.5f)).coerceIn(0f, 1f)
-        }
-        TransitionType.LIGHT_LEAK -> {
-          val flare = kotlin.math.sin(p * 3.14159f).coerceIn(0f, 1f)
-          finalAdjustments = finalAdjustments.copy(
-            brightness = (finalAdjustments.brightness + flare * 0.4f).coerceIn(-1f, 1f),
-            temperature = (finalAdjustments.temperature + flare * 0.5f).coerceIn(-1f, 1f)
-          )
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        else -> {}
+      val incoming = clip?.id == tr.clipAfter.id
+      val pose = TransitionPreviewMotion.resolve(tr.type, p, incoming)
+      finalOpacity = (finalOpacity * pose.opacity).coerceIn(0f, 1f)
+      if (pose.translateX != 0f || pose.translateY != 0f) {
+        Matrix.translateM(mvpMatrix, 0, pose.translateX * 2f, -pose.translateY * 2f, 0f)
+      }
+      if (pose.scale != 1f) {
+        Matrix.scaleM(mvpMatrix, 0, pose.scale, pose.scale, 1f)
+      }
+      if (pose.rotationDeg != 0f) {
+        Matrix.rotateM(mvpMatrix, 0, pose.rotationDeg, 0f, 0f, 1f)
+      }
+      if (pose.extraBlur > 0f) {
+        keyframeBlur = (keyframeBlur + pose.extraBlur).coerceIn(0f, 1f)
+      }
+      if (pose.brightness != 0f || pose.temperature != 0f || pose.flash > 0f) {
+        finalAdjustments = finalAdjustments.copy(
+          brightness = (finalAdjustments.brightness + pose.brightness + pose.flash * 0.85f).coerceIn(-1f, 1f),
+          exposure = (finalAdjustments.exposure + pose.flash * 0.5f).coerceIn(-1f, 1f),
+          temperature = (finalAdjustments.temperature + pose.temperature).coerceIn(-1f, 1f)
+        )
+      }
+      if (pose.clipStart != null && pose.clipEnd != null) {
+        transitionClipStart = pose.clipStart
+        transitionClipEnd = pose.clipEnd
       }
     }
 
@@ -1073,16 +1035,27 @@ class GpuCompositionRenderer(private val context: Context) {
       }
     )
 
-    if (useRowWarp) {
-      GLES20.glGetUniformLocation(program, "uOuterMatrix").let {
-        if (it >= 0) GLES20.glUniformMatrix4fv(it, 1, false, stabOuterMatrix, 0)
+    val scissorTransition = transitionClipStart >= 0f && transitionClipEnd > transitionClipStart
+    if (scissorTransition) {
+      val x = (transitionClipStart * viewportWidth).toInt().coerceIn(0, viewportWidth)
+      val right = (transitionClipEnd * viewportWidth).toInt().coerceIn(0, viewportWidth)
+      GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
+      GLES20.glScissor(x, 0, (right - x).coerceAtLeast(0), viewportHeight)
+    }
+    try {
+      if (useRowWarp) {
+        GLES20.glGetUniformLocation(program, "uOuterMatrix").let {
+          if (it >= 0) GLES20.glUniformMatrix4fv(it, 1, false, stabOuterMatrix, 0)
+        }
+        GLES20.glGetUniformLocation(program, "uRowQuad").let {
+          if (it >= 0) GLES20.glUniform2f(it, rowQuadX, rowQuadY)
+        }
+        drawGeometry(program, stabMeshBuffer, GLES20.GL_TRIANGLES, STAB_MESH_VERTEX_COUNT)
+      } else {
+        drawQuad(program)
       }
-      GLES20.glGetUniformLocation(program, "uRowQuad").let {
-        if (it >= 0) GLES20.glUniform2f(it, rowQuadX, rowQuadY)
-      }
-      drawGeometry(program, stabMeshBuffer, GLES20.GL_TRIANGLES, STAB_MESH_VERTEX_COUNT)
-    } else {
-      drawQuad(program)
+    } finally {
+      if (scissorTransition) GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
     }
     if (targetFbo === fboMain2D && clip != null) {
       val finalMvp = FloatArray(16)
@@ -2113,11 +2086,4 @@ class GpuCompositionRenderer(private val context: Context) {
     }
     imageTextureCache.clear()
   }
-}
-
-/** Deterministic pseudo-noise in [-0.5, 0.5) from transition progress, so preview and export render identical frames. */
-private fun transitionNoise(progress: Float, salt: Int): Float {
-  val step = kotlin.math.floor(progress * 24f)
-  val v = kotlin.math.sin((step + salt * 13.37f) * 127.1f) * 43758.5453f
-  return (v - kotlin.math.floor(v)) - 0.5f
 }

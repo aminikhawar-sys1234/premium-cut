@@ -17,6 +17,10 @@ class BuiltinTransitionDistinctTest {
 
     @Test fun `each user facing transition type maps to a matching definition`() {
         val expected = mapOf(
+            TransitionType.FADE to BuiltinTransitions.FADE_ID,
+            TransitionType.DISSOLVE to BuiltinTransitions.CROSS_DISSOLVE_ID,
+            TransitionType.RADIAL_WIPE to BuiltinTransitions.RADIAL_WIPE_ID,
+            TransitionType.WIPE_RIGHT to BuiltinTransitions.WIPE_ID,
             TransitionType.ZOOM_OUT to BuiltinTransitions.ZOOM_OUT_ID,
             TransitionType.PUSH_UP to BuiltinTransitions.PUSH_UP_ID,
             TransitionType.FLASH to BuiltinTransitions.FLASH_ID,
@@ -32,6 +36,14 @@ class BuiltinTransitionDistinctTest {
         expected.forEach { (type, id) ->
             assertEquals(type.name, id, TransitionAppBridge.getDefinitionForType(type).id)
         }
+        assertTrue(
+            TransitionAppBridge.getDefinitionForType(TransitionType.FADE).id !=
+                TransitionAppBridge.getDefinitionForType(TransitionType.DISSOLVE).id
+        )
+        val wipeDir = (TransitionAppBridge.parametersFor(TransitionType.WIPE)["direction"] as com.ahstudio.transition.core.ParamValue.Vec2Value).values
+        val wipeRightDir = (TransitionAppBridge.parametersFor(TransitionType.WIPE_RIGHT)["direction"] as com.ahstudio.transition.core.ParamValue.Vec2Value).values
+        assertTrue(wipeDir[0] > 0f)
+        assertTrue(wipeRightDir[0] < 0f)
     }
 
     @Test fun `shaders do not use non deterministic inputs`() {

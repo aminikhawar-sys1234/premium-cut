@@ -260,80 +260,39 @@ class VideoCompositionEngine(private val context: Context) {
         paint.alpha = ((paint.alpha / 255f) * motion.alpha * 255f).toInt().coerceIn(0, 255)
       }
 
-      // Handle transition blending if active
+      // Single-bitmap fallback. The shader path blends both clips; this matches that motion
+      // for whichever side is the bitmap currently in hand.
       if (frame.activeTransition != null) {
         val tr = frame.activeTransition
-        when (tr.type) {
-          TransitionType.FADE, TransitionType.DISSOLVE -> {
-            paint.alpha = ((1f - tr.progress) * 255).toInt().coerceIn(0, 255)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
+        val incoming = clip?.id == tr.clipAfter.id
+        val pose = TransitionPreviewMotion.resolve(tr.type, tr.progress, incoming)
+        paint.alpha = ((paint.alpha / 255f) * pose.opacity * 255f).toInt().coerceIn(0, 255)
+        matrix.postTranslate(pose.translateX * canvasWidth, pose.translateY * canvasHeight)
+        if (pose.scale != 1f) {
+          matrix.postScale(pose.scale, pose.scale, canvasWidth / 2f, canvasHeight / 2f)
+        }
+        if (pose.rotationDeg != 0f) {
+          matrix.postRotate(pose.rotationDeg, canvasWidth / 2f, canvasHeight / 2f)
+        }
+        if (pose.clipStart != null && pose.clipEnd != null) {
+          canvas.save()
+          canvas.clipRect(
+            pose.clipStart * canvasWidth,
+            0f,
+            pose.clipEnd * canvasWidth,
+            canvasHeight.toFloat()
+          )
+          canvas.drawBitmap(mainBitmap, matrix, paint)
+          canvas.restore()
+        } else {
+          canvas.drawBitmap(mainBitmap, matrix, paint)
+        }
+        if (pose.flash > 0.01f) {
+          val flashPaint = Paint().apply {
+            color = Color.WHITE
+            alpha = (pose.flash * 240f).toInt().coerceIn(0, 255)
           }
-          TransitionType.WIPE -> {
-            canvas.save()
-            val clipRight = canvasWidth * (1f - tr.progress)
-            canvas.clipRect(0f, 0f, clipRight, canvasHeight.toFloat())
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-            canvas.restore()
-          }
-          TransitionType.SLIDE_LEFT -> {
-            matrix.postTranslate(-canvasWidth * tr.progress, 0f)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
-          TransitionType.SLIDE_RIGHT -> {
-            matrix.postTranslate(canvasWidth * tr.progress, 0f)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
-          TransitionType.PUSH_UP -> {
-            matrix.postTranslate(0f, -canvasHeight * tr.progress)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
-          TransitionType.ZOOM_IN -> {
-            val zoom = 1f + tr.progress * 0.6f
-            matrix.postScale(zoom, zoom, canvasWidth / 2f, canvasHeight / 2f)
-            paint.alpha = ((1f - tr.progress * 0.5f) * 255).toInt().coerceIn(0, 255)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
-          TransitionType.ZOOM_OUT -> {
-            val zoom = (1f - tr.progress * 0.4f).coerceAtLeast(0.1f)
-            matrix.postScale(zoom, zoom, canvasWidth / 2f, canvasHeight / 2f)
-            paint.alpha = ((1f - tr.progress * 0.5f) * 255).toInt().coerceIn(0, 255)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
-          TransitionType.SPIN -> {
-            matrix.postRotate(tr.progress * 360f, canvasWidth / 2f, canvasHeight / 2f)
-            val zoom = (1f - tr.progress * 0.5f).coerceAtLeast(0.1f)
-            matrix.postScale(zoom, zoom, canvasWidth / 2f, canvasHeight / 2f)
-            paint.alpha = ((1f - tr.progress) * 255).toInt().coerceIn(0, 255)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
-          TransitionType.BLUR -> {
-            val zoom = 1f + tr.progress * 0.3f
-            matrix.postScale(zoom, zoom, canvasWidth / 2f, canvasHeight / 2f)
-            paint.alpha = ((1f - tr.progress) * 255).toInt().coerceIn(0, 255)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
-          TransitionType.FLASH -> {
-            paint.alpha = 255
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-            // Draw white flash rectangle overlay
-            val flashAlpha = (if (tr.progress < 0.5f) tr.progress * 2f else (1f - tr.progress) * 2f).coerceIn(0f, 1f)
-            val flashPaint = Paint().apply {
-              color = Color.WHITE
-              alpha = (flashAlpha * 240).toInt().coerceIn(0, 255)
-            }
-            canvas.drawRect(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat(), flashPaint)
-          }
-          TransitionType.GLITCH -> {
-            val jitterX = if (tr.progress in 0.2f..0.8f) (transitionNoise(tr.progress, 1) * 30f) else 0f
-            val jitterY = if (tr.progress in 0.2f..0.8f) (transitionNoise(tr.progress, 2) * 20f) else 0f
-            matrix.postTranslate(jitterX, jitterY)
-            paint.alpha = ((1f - tr.progress) * 255).toInt().coerceIn(0, 255)
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
-          else -> {
-            paint.alpha = 255
-            canvas.drawBitmap(mainBitmap, matrix, paint)
-          }
+          canvas.drawRect(0f, 0f, canvasWidth.toFloat(), canvasHeight.toFloat(), flashPaint)
         }
       } else {
         paint.alpha = 255
@@ -430,11 +389,4 @@ class VideoCompositionEngine(private val context: Context) {
       height = height
     )
   }
-}
-
-/** Deterministic pseudo-noise in [-0.5, 0.5) from transition progress, so preview and export render identical frames. */
-private fun transitionNoise(progress: Float, salt: Int): Float {
-  val step = kotlin.math.floor(progress * 24f)
-  val v = kotlin.math.sin((step + salt * 13.37f) * 127.1f) * 43758.5453f
-  return (v - kotlin.math.floor(v)) - 0.5f
 }
