@@ -67,11 +67,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.TextClip
 import com.example.engine.SelectedTrackElement
-import com.example.engine.text.Text3DStyling
-import com.example.engine.text.registry.Registered3DText
-import com.example.engine.text.registry.RegisteredFont
+import com.example.engine.text.TextMotionCatalog
 import com.example.engine.text.registry.RegisteredTextTemplate
-import com.example.engine.text.registry.TextAssetRegistry
 import com.example.engine.text.registry.TextTemplateCatalog
 import com.example.ui.StudioViewModel
 import com.example.util.FontManager
@@ -79,6 +76,7 @@ import com.example.util.FontOption
 import java.util.UUID
 
 enum class AddTextSubTool(val label: String, val tag: String) {
+  TEMPLATES("Templates", "subtool_templates"),
   FONTS("Fonts", "subtool_fonts"),
   STYLES("Style", "subtool_styles"),
   ANIMATOR("Animate", "subtool_animator")
@@ -113,7 +111,7 @@ fun AddTextPanel(
 
   var draftId by remember { mutableStateOf(selectedClip?.id) }
   var textValue by remember { mutableStateOf(selectedClip?.text.orEmpty()) }
-  var activeSubTool by remember { mutableStateOf(AddTextSubTool.FONTS) }
+  var activeSubTool by remember { mutableStateOf(AddTextSubTool.TEMPLATES) }
 
   LaunchedEffect(selectedClip?.id) {
     if (selectedClip != null) {
@@ -149,7 +147,13 @@ fun AddTextPanel(
     return created
   }
 
-  var activeSubTool by remember { mutableStateOf(AddTextSubTool.TEMPLATES) }
+  fun discardBlankAndClose() {
+    val clip = currentClip
+    if (clip != null && clip.text.isBlank()) {
+      viewModel.timelineEngine.deleteClips(setOf(clip.id))
+    }
+    onClose()
+  }
 
   val panelBackground = Brush.verticalGradient(
     colors = listOf(Color(0xFF0A2B27), Color(0xFF0F263B))
@@ -261,93 +265,39 @@ fun AddTextPanel(
 
     Box(modifier = Modifier.fillMaxWidth().heightIn(min = 168.dp, max = 280.dp)) {
       when (activeSubTool) {
-        AddTextSubTool.TEMPLATES -> {
-          TemplatesSubToolView(
-            currentClip = currentClip,
-            onApplyTemplate = { tmpl ->
-              if (currentClip != null) {
-                val updated = if (tmpl == null) {
-                  TextTemplateCatalog.resetStyle(currentClip)
-                } else {
-                  TextTemplateCatalog.applyStyle(currentClip, tmpl.templateClip, keepText = true)
-                }
-                viewModel.timelineEngine.updateTextClip(updated)
-              }
+        AddTextSubTool.TEMPLATES -> TemplatesSubToolView(
+          currentClip = currentClip,
+          onApplyTemplate = { tmpl ->
+            val clip = currentClip ?: ensureClip()
+            val updated = if (tmpl == null) {
+              TextTemplateCatalog.resetStyle(clip)
+            } else {
+              TextTemplateCatalog.applyStyle(clip, tmpl.templateClip, keepText = true)
             }
-          )
-        }
-
-        AddTextSubTool.FONTS -> {
-          FontsSubToolView(
-            context = context,
-            currentClip = currentClip,
-            onSelectFont = { font ->
-              if (currentClip != null) {
-                val updated = currentClip.copy(
-                  fontFamily = font.fontFamilyName,
-                  customFontPath = font.fontFilePath
-                )
-                viewModel.timelineEngine.updateTextClip(updated)
-              }
-            }
-          )
-        }
-
-        AddTextSubTool.STYLES -> {
-          StylesSubToolView(
-            currentClip = currentClip,
-            onUpdateClip = { updated ->
-              viewModel.timelineEngine.updateTextClip(updated)
-            }
-          )
-        }
-
-        AddTextSubTool.ANIMATOR -> {
-          TextAnimatorSubToolView(
-            currentClip = currentClip,
-            onUpdateClip = { updated ->
-              viewModel.timelineEngine.updateTextClip(updated)
-            }
-          )
-        }
-
-        AddTextSubTool.EFFECTS -> {
-          EffectsSubToolView(
-            currentClip = currentClip,
-            onSelectEffect = { effectKey ->
-              if (currentClip != null) {
-                val updated = currentClip.copy(effectStyle = effectKey)
-                viewModel.timelineEngine.updateTextClip(updated)
-              }
-            }
-          )
-        }
-
-        AddTextSubTool.THREE_D -> {
-          ThreeDSubToolView(
-            currentClip = currentClip,
-            onAdjust = { adjusted -> viewModel.timelineEngine.updateTextClip(adjusted) },
-            onSelect3D = { asset ->
-              if (currentClip != null) {
-                val updated = if (asset == null) {
-                  currentClip.copy(is3D = false, depth3D = 0f, bevelRadius3D = 0f, material3D = "matte", lightPreset3D = "studio")
-                } else {
-                  currentClip.copy(
-                    is3D = true,
-                    depth3D = asset.depth3D,
-                    bevelAngle3D = asset.bevelAngle3D,
-                    color3D = asset.color3D
-                  )
-                }
-                viewModel.timelineEngine.updateTextClip(updated)
-              }
-            }
-          )
-        }
-
-        AddTextSubTool.PAINTING -> {
-          // Painting row item opens real DrawToolPanel directly
-        }
+            commit(updated)
+          }
+        )
+        AddTextSubTool.FONTS -> FontsSubToolView(
+          context = context,
+          currentClip = currentClip,
+          onSelectFont = { font ->
+            val clip = currentClip ?: ensureClip()
+            commit(
+              clip.copy(
+                fontFamily = font.id,
+                customFontPath = font.filePath
+              )
+            )
+          }
+        )
+        AddTextSubTool.STYLES -> StylesSubToolView(
+          currentClip = currentClip,
+          onUpdateClip = { commit(it) }
+        )
+        AddTextSubTool.ANIMATOR -> AnimateSubToolView(
+          currentClip = currentClip,
+          onUpdateClip = { commit(it) }
+        )
       }
     }
   }
