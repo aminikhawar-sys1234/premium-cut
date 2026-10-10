@@ -133,19 +133,19 @@ object TextAssetRegistry {
     return _fonts.filter { it.category.equals(category, ignoreCase = true) }
   }
 
-  fun getAllFonts(): List<RegisteredFont> = _fonts.toList()
+  fun getAllFonts(): List<RegisteredFont> = _fonts
 
   fun getAnimations(category: String): List<RegisteredTextAnimation> {
     return _animations.filter { it.category.equals(category, ignoreCase = true) }
   }
 
-  fun getAllAnimations(): List<RegisteredTextAnimation> = _animations.toList()
+  fun getAllAnimations(): List<RegisteredTextAnimation> = _animations
 
-  fun getStyles(): List<RegisteredTextStyle> = _styles.toList()
+  fun getStyles(): List<RegisteredTextStyle> = _styles
 
-  fun get3DAssets(): List<Registered3DText> = _threeDAssets.toList()
+  fun get3DAssets(): List<Registered3DText> = _threeDAssets
 
-  fun getEffects(): List<RegisteredTextEffect> = _effects.toList()
+  fun getEffects(): List<RegisteredTextEffect> = _effects
 
   /**
    * Resets all registered items. Ensures zero leftover mock or temporary data.

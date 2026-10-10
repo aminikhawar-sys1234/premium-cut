@@ -3449,7 +3449,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   // --- Text Operations ---
 
   fun addTextClip(
-    text: String = "NEW TEXT",
+    text: String = "",
     timelineStartMs: Long? = null,
     durationMs: Long = 3000L,
     fontFamily: String = "Default",

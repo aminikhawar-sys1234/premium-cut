@@ -512,11 +512,11 @@ fun EditorScreen(
       tool.actionKey.equals("TOOL_TEXT", ignoreCase = true) ||
         tool.id.equals("tool_text", ignoreCase = true) ||
         tool.name.contains("Text", ignoreCase = true) -> {
-        // Close/hide main editor bottom nav, open dedicated Text Tools bottom nav
+        // Close/hide main editor bottom nav, open text tools + the lightweight Add Text panel
         isTextToolsOpen = true
         isEffectsToolsOpen = false
         isEditToolsOpen = false
-        activeTextToolModal = null
+        activeTextToolModal = TextToolCategory.ADD_TEXT
         viewModel.setActiveToolbarTab(null)
       }
       tool.actionKey.equals("TOOL_EDIT", ignoreCase = true) -> {
@@ -1082,8 +1082,7 @@ fun EditorScreen(
                   )
                   TextToolCategory.ADD_TEXT -> AddTextPanel(
                     viewModel = viewModel,
-                    onClose = { activeTextToolModal = null },
-                    onOpenPainting = { showDrawingDialog = true }
+                    onClose = { activeTextToolModal = null }
                   )
                   TextToolCategory.TEXT_TEMPLATES -> TextTemplatesBrowserPanel(
                     viewModel = viewModel,
@@ -1197,13 +1196,9 @@ fun EditorScreen(
               )
               activeTab == EditorToolbarTab.EFFECTS -> EffectsToolPanel(viewModel)
               activeTab == EditorToolbarTab.TEXT -> {
-                com.example.ui.components.text.AddTextPanel(
+                AddTextPanel(
                   viewModel = viewModel,
-                  onClose = { viewModel.setActiveToolbarTab(null) },
-                  onOpenPainting = {
-                    viewModel.setActiveToolbarTab(null)
-                    showDrawingDialog = true
-                  }
+                  onClose = { viewModel.setActiveToolbarTab(null) }
                 )
               }
               activeTab == EditorToolbarTab.ELEMENTS -> com.example.ui.components.elements.ElementsToolPanel(
