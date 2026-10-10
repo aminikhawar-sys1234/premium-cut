@@ -30,7 +30,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.TextClip
 import com.example.engine.text.registry.RegisteredTextTemplate
-import com.example.engine.text.registry.TextAssetRegistry
 import com.example.ui.StudioViewModel
 import kotlinx.coroutines.launch
 
@@ -55,8 +54,7 @@ fun AutoCaptionsPanel(
   val outputLanguages = listOf("Urdu", "English", "Hindi", "Arabic", "Chinese")
   var selectedOutputLanguage by remember { mutableStateOf("English") }
 
-  // Installed templates from extensible registry — initially EMPTY (zero fake/mock items)
-  val installedTemplates = TextAssetRegistry.getTemplates()
+  val installedTemplates = rememberInstalledTextTemplates()
   var selectedTemplateId by remember { mutableStateOf<String?>(null) }
 
   var isGenerating by remember { mutableStateOf(false) }
