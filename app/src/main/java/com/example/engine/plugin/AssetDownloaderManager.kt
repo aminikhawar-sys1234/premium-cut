@@ -61,7 +61,6 @@ object AssetDownloaderManager {
     if (isInitialized) return
     isInitialized = true
     loadInstalledCatalog(context)
-    populateDefaultRepositoryCatalog(context)
   }
 
   private fun getAssetsDir(context: Context): File {
@@ -125,76 +124,6 @@ object AssetDownloaderManager {
     } catch (e: Exception) {
       Log.e(TAG, "Failed to save installed assets catalog registry", e)
     }
-  }
-
-  private fun populateDefaultRepositoryCatalog(context: Context) {
-    val existingMap = _catalogAssets.value.associateBy { it.id }
-
-    val repositoryItems = listOf(
-      CatalogAssetItem(
-        id = "font_bebas_neue",
-        name = "Bebas Neue Display Font",
-        category = PluginCategory.FONT,
-        version = "1.2.0",
-        downloadUrl = "https://example.com/assets/fonts/bebas_neue.ttf",
-        sizeBytes = 245000L,
-        sha256Checksum = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-        description = "Bold impact headline font for cinematic trailers and vlogs."
-      ),
-      CatalogAssetItem(
-        id = "lut_cyberpunk_pack",
-        name = "Cyberpunk Neon LUT Pack",
-        category = PluginCategory.FILTER,
-        version = "2.0.0",
-        downloadUrl = "https://example.com/assets/luts/cyberpunk.zip",
-        sizeBytes = 1200000L,
-        sha256Checksum = "a591a6d40bf420404a011733cfb7b190d62c65bf0bcda32b57b277d9ad9f146e",
-        description = "High-contrast teal & magenta color grading presets."
-      ),
-      CatalogAssetItem(
-        id = "sticker_animated_emoji",
-        name = "4K Animated Stickers Collection",
-        category = PluginCategory.STICKER,
-        version = "1.0.1",
-        downloadUrl = "https://example.com/assets/stickers/emoji_pack.zip",
-        sizeBytes = 850000L,
-        sha256Checksum = "d41d8cd98f00b204e9800998ecf8427e",
-        description = "Transparent vector overlay stickers for social media clips."
-      ),
-      CatalogAssetItem(
-        id = "template_social_reels",
-        name = "Instagram Reels Title Card Template",
-        category = PluginCategory.TEXT_TEMPLATE,
-        version = "1.1.0",
-        downloadUrl = "https://example.com/assets/templates/reels_title.zip",
-        sizeBytes = 620000L,
-        sha256Checksum = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-        description = "Modern animated lower-third and title graphics."
-      ),
-      CatalogAssetItem(
-        id = "fx_glitch_distortion",
-        name = "VHS Digital Glitch FX Suite",
-        category = PluginCategory.EFFECT,
-        version = "1.5.0",
-        downloadUrl = "https://example.com/assets/fx/glitch_suite.zip",
-        sizeBytes = 1800000L,
-        sha256Checksum = "4a8a08f09d37b73795649038408b5f33",
-        description = "Real-time GPU shader effect plugin for vintage glitch & chromatic aberration."
-      )
-    )
-
-    val updatedList = repositoryItems.map { repoItem ->
-      val installed = existingMap[repoItem.id]
-      if (installed != null && installed.isInstalled) {
-        installed.copy(
-          hasUpdate = isVersionHigher(repoItem.version, installed.version)
-        )
-      } else {
-        repoItem
-      }
-    }
-
-    _catalogAssets.value = updatedList
   }
 
   suspend fun downloadAndInstallAsset(context: Context, assetId: String) = withContext(Dispatchers.IO) {
@@ -364,10 +293,10 @@ object AssetDownloaderManager {
       }
       PluginManager.uninstallPlugin(context, assetId)
 
-      val updatedList = _catalogAssets.value.map {
-        if (it.id == assetId) {
-          it.copy(isInstalled = false, localFilePath = "")
-        } else it
+      val updatedList = _catalogAssets.value.mapNotNull {
+        if (it.id != assetId) it
+        else if (it.downloadUrl.isBlank()) null
+        else it.copy(isInstalled = false, localFilePath = "")
       }
       _catalogAssets.value = updatedList
       saveInstalledCatalog(context)
@@ -388,18 +317,5 @@ object AssetDownloaderManager {
       }
     }
     return digest.digest().joinToString("") { "%02x".format(it) }
-  }
-
-  private fun isVersionHigher(v1: String, v2: String): Boolean {
-    val p1 = v1.split(".").mapNotNull { it.toIntOrNull() }
-    val p2 = v2.split(".").mapNotNull { it.toIntOrNull() }
-    val maxLen = maxOf(p1.size, p2.size)
-    for (i in 0 until maxLen) {
-      val n1 = p1.getOrElse(i) { 0 }
-      val n2 = p2.getOrElse(i) { 0 }
-      if (n1 > n2) return true
-      if (n1 < n2) return false
-    }
-    return false
   }
 }

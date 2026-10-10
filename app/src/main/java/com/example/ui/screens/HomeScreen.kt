@@ -563,7 +563,7 @@ private fun ProjectsTabContent(
       OutlinedTextField(
         value = searchQuery,
         onValueChange = { searchQuery = it },
-        placeholder = { Text("Search your projects...", color = LightTextTertiary, fontSize = 13.sp) },
+        placeholder = { Text(stringResource(R.string.search_projects), color = LightTextTertiary, fontSize = 13.sp) },
         leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, tint = LightTextSecondary, modifier = Modifier.size(18.dp)) },
         trailingIcon = {
           if (searchQuery.isNotEmpty()) {

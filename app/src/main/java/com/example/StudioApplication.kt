@@ -37,10 +37,11 @@ class StudioApplication : Application() {
       if (com.google.firebase.FirebaseApp.getApps(this).isEmpty()) {
         val apiKey = runCatching { BuildConfig.FIREBASE_API_KEY }.getOrDefault("")
         val projectId = runCatching { BuildConfig.FIREBASE_PROJECT_ID }.getOrDefault("")
-        if (apiKey.isNotBlank() && projectId.isNotBlank()) {
+        val applicationId = runCatching { BuildConfig.FIREBASE_APPLICATION_ID }.getOrDefault("")
+        if (apiKey.isNotBlank() && projectId.isNotBlank() && applicationId.isNotBlank()) {
           val options = com.google.firebase.FirebaseOptions.Builder()
             .setApiKey(apiKey)
-            .setApplicationId("1:368906369830:android:7d8a9f0e1b2c3d4e")
+            .setApplicationId(applicationId)
             .setProjectId(projectId)
             .build()
           com.google.firebase.FirebaseApp.initializeApp(this, options)

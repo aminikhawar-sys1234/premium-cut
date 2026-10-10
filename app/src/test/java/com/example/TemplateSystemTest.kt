@@ -129,7 +129,10 @@ class TemplateSystemTest {
   fun `test template project can be saved and reloaded with full editability`() = runBlocking {
     val weddingTemplate = TemplatesCatalog.templates.first { it.category == "Wedding" }
     val timeline = weddingTemplate.createTimeline(
-      mapOf("v1" to "file:///couple_dance.mp4"),
+      mapOf(
+        "v1" to "content://media/user_dance.mp4",
+        "v2" to "content://media/user_ceremony.mp4"
+      ),
       mapOf("t1" to "Emma & Oliver", "t2" to "JUNE 20, 2026")
     )
 
@@ -153,7 +156,7 @@ class TemplateSystemTest {
     val restored = TimelineSerializer.fromJson(fetched!!.timelineJson)
 
     assertEquals(2, restored.videoClips.size)
-    assertEquals("file:///couple_dance.mp4", restored.videoClips.first().uri)
+    assertEquals("content://media/user_dance.mp4", restored.videoClips.first().uri)
     assertEquals("Emma & Oliver", restored.textClips.first().text)
     assertEquals("Emotional Piano & Orchestra", restored.audioClips.first().title)
 
