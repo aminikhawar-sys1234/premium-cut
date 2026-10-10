@@ -512,7 +512,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       val glInitLatch = CountDownLatch(1)
       glHandler.post {
         try {
-          val core = EglCore(null, EglCore.FLAG_RECORDABLE)
+          val core = EglCore(null, EglCore.FLAG_RECORDABLE or EglCore.FLAG_TRY_GLES3)
           eglCore = core
           val winSurface = WindowSurface(core, surface, false)
           windowSurface = winSurface
@@ -1116,28 +1116,46 @@ class AsyncFramePipelineEngine(private val context: Context) {
     if (t is ExportPipelineException || t is CancellationException) t
     else ExportPipelineException("$prefix: ${t.message ?: t.javaClass.simpleName}", t)
 
-  /** Samples an 8x8 block at the centre of the current (back) framebuffer; true when every sample is essentially black. */
+  /**
+   * True only when the centre and all four quadrants of the back buffer are essentially black.
+   * A centre-only probe treated letterboxed / PiP frames (black canvas in the middle) as failed.
+   */
   private fun isBackBufferBlack(width: Int, height: Int): Boolean {
     return try {
       val size = 8
-      val px = ByteBuffer.allocateDirect(size * size * 4)
-      val x = ((width - size) / 2).coerceAtLeast(0)
-      val y = ((height - size) / 2).coerceAtLeast(0)
-      GLES20.glReadPixels(x, y, size, size, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px)
-      var i = 0
-      while (i < size * size) {
-        val base = i * 4
-        val r = px.get(base).toInt() and 0xFF
-        val g = px.get(base + 1).toInt() and 0xFF
-        val b = px.get(base + 2).toInt() and 0xFF
-        if (r > 6 || g > 6 || b > 6) return false
-        i++
-      }
-      true
+      val midX = ((width - size) / 2).coerceAtLeast(0)
+      val midY = ((height - size) / 2).coerceAtLeast(0)
+      val qX = (width / 4 - size / 2).coerceAtLeast(0)
+      val qY = (height / 4 - size / 2).coerceAtLeast(0)
+      val rX = (width * 3 / 4 - size / 2).coerceAtLeast(0)
+      val rY = (height * 3 / 4 - size / 2).coerceAtLeast(0)
+      val origins = listOf(
+        midX to midY,
+        qX to qY,
+        rX to qY,
+        qX to rY,
+        rX to rY
+      )
+      origins.all { (x, y) -> isBlockBlack(x, y, size) }
     } catch (e: Exception) {
       Log.w(tag, "Black-frame probe unavailable: ${e.message}")
       false
     }
+  }
+
+  private fun isBlockBlack(x: Int, y: Int, size: Int): Boolean {
+    val px = ByteBuffer.allocateDirect(size * size * 4)
+    GLES20.glReadPixels(x, y, size, size, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px)
+    var i = 0
+    while (i < size * size) {
+      val base = i * 4
+      val r = px.get(base).toInt() and 0xFF
+      val g = px.get(base + 1).toInt() and 0xFF
+      val b = px.get(base + 2).toInt() and 0xFF
+      if (r > 6 || g > 6 || b > 6) return false
+      i++
+    }
+    return true
   }
 
   private val fallbackRetrievers = mutableMapOf<String, MediaMetadataRetriever>()

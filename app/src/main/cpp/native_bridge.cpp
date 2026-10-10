@@ -7,7 +7,7 @@
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, NATIVE_RENDER_LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, NATIVE_RENDER_LOG_TAG, __VA_ARGS__)
 
-static constexpr int LAYER_STRIDE = 35;
+static constexpr int LAYER_STRIDE = 36;
 
 static inline ah_engine::NextGenGpuCompositionEngine* getEngine(jlong handle) {
     return reinterpret_cast<ah_engine::NextGenGpuCompositionEngine*>(handle);
@@ -47,6 +47,7 @@ Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeRenderFrame(JNI
         l.posX = p[b+5]; l.posY = p[b+6]; l.scaleX = p[b+7]; l.scaleY = p[b+8]; l.rotation = p[b+9]; l.width = p[b+10]; l.height = p[b+11]; l.opacity = p[b+12];
         l.uOffset = p[b+13]; l.vOffset = p[b+14]; l.uScale = p[b+15]; l.vScale = p[b+16]; l.blendMode = static_cast<ah_engine::BlendMode>(static_cast<int>(p[b+17]));
         l.useCustomMatrix = p[b+18] > 0.5f; if (l.useCustomMatrix) for (int m = 0; m < 16; m++) l.transformMatrix[m] = p[b+19+m];
+        l.isExternal = p[b+35] > 0.5f;
         layers.push_back(l);
     }
     env->ReleaseFloatArrayElements(data, p, JNI_ABORT);

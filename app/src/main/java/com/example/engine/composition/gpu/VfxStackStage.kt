@@ -1,7 +1,6 @@
 package com.example.engine.composition.gpu
 
 import android.opengl.GLES20
-import android.opengl.GLES30
 import android.util.Log
 import com.example.engine.vfx.VfxEffectsHost
 import com.vfx.engine.core.effect.EffectRuntime
@@ -47,7 +46,7 @@ class VfxStackStage {
     val prevProgram = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_CURRENT_PROGRAM, prevProgram, 0)
     val prevActive = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_ACTIVE_TEXTURE, prevActive, 0)
     val prevTex2d = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_TEXTURE_BINDING_2D, prevTex2d, 0)
-    val prevVao = IntArray(1); GLES30.glGetIntegerv(GLES30.GL_VERTEX_ARRAY_BINDING, prevVao, 0)
+    val prevVao = GlEsCompat.currentVao()
     val prevArrayBuf = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_ARRAY_BUFFER_BINDING, prevArrayBuf, 0)
     val blendWasOn = GLES20.glIsEnabled(GLES20.GL_BLEND)
     val depthWasOn = GLES20.glIsEnabled(GLES20.GL_DEPTH_TEST)
@@ -55,9 +54,9 @@ class VfxStackStage {
 
     return try {
       val ctxGpu = gpu ?: GpuContext().also { it.initializeOnCurrentContext(); gpu = it }
-      if (vao == 0) { val v = IntArray(1); GLES30.glGenVertexArrays(1, v, 0); vao = v[0] }
+      if (vao == 0) vao = GlEsCompat.genVao()
       // Private VAO: the effect quad enables vertex attribs 0/1 and must not leak into the compositor's state.
-      GLES30.glBindVertexArray(vao)
+      GlEsCompat.bindVao(vao)
       GLES20.glDisable(GLES20.GL_BLEND)
       GLES20.glDisable(GLES20.GL_DEPTH_TEST)
       GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
@@ -80,7 +79,7 @@ class VfxStackStage {
       disabled = true
       srcTex
     } finally {
-      GLES30.glBindVertexArray(prevVao[0])
+      GlEsCompat.bindVao(prevVao)
       GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, prevArrayBuf[0])
       GLES20.glUseProgram(prevProgram[0])
       GLES20.glActiveTexture(prevActive[0])
@@ -127,7 +126,7 @@ class VfxStackStage {
     runtimes.clear()
     runCatching { gpu?.release() }
     gpu = null
-    if (vao != 0) { runCatching { GLES30.glDeleteVertexArrays(1, intArrayOf(vao), 0) }; vao = 0 }
+    if (vao != 0) { GlEsCompat.deleteVao(vao); vao = 0 }
     cachedJson = null
     cachedStack = null
   }

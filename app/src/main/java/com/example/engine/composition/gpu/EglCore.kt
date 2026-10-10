@@ -17,13 +17,19 @@ class EglCore(
   private var eglDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
   private var eglContext: EGLContext = EGL14.EGL_NO_CONTEXT
   private var eglConfig: EGLConfig? = null
-  private var glVersion = 2
+  var glVersion: Int = 2
+    private set
 
   companion object {
     const val FLAG_RECORDABLE = 0x01
     const val FLAG_TRY_GLES3 = 0x02
     private const val EGL_RECORDABLE_ANDROID = 0x3142
     private const val TAG = "EglCore"
+
+    /** GL major version of the context currently bound on this thread's compositor. */
+    @Volatile
+    var activeGlVersion: Int = 2
+      internal set
   }
 
   init {
@@ -53,6 +59,7 @@ class EglCore(
           eglConfig = config3
           eglContext = context3
           glVersion = 3
+          activeGlVersion = 3
         }
       }
     }
@@ -69,6 +76,7 @@ class EglCore(
       eglConfig = config2
       eglContext = context2
       glVersion = 2
+      if (activeGlVersion < 3) activeGlVersion = 2
     }
   }
 

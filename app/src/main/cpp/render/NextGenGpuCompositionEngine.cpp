@@ -391,9 +391,9 @@ void NextGenGpuCompositionEngine::renderFrame(const std::vector<RenderLayer>& in
         st[12] = l.uOffset;
         st[13] = l.vOffset;
 
-        // Dynamic detection: Video / Base video layers use samplerExternalOES for zero-copy SurfaceTexture
-        bool isExternal = (l.type == LayerType::BASE_VIDEO || l.type == LayerType::VIDEO);
-        drawTexture(l.textureId, mvp, st, l.opacity, l.blendMode, isExternal);
+        // Sample as OES only when the caller marked a live SurfaceTexture. Layer type
+        // cannot decide this: Kotlin already converted BASE_VIDEO / VIDEO to GL_TEXTURE_2D.
+        drawTexture(l.textureId, mvp, st, l.opacity, l.blendMode, l.isExternal);
     }
 
     glBindVertexArray(0);

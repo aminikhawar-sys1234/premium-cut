@@ -60,12 +60,12 @@ class ExportSystemTest {
   }
 
   @Test
-  fun `test 2 - Video plus original audio`() = runBlocking {
+  fun `test 2 - Placeholder catalog audio is not treated as real media`() = runBlocking {
     val timeline = Timeline(
       videoClips = listOf(
         VideoClip(
           name = "Active Video Clip",
-          uri = "sfx_pop", // will trigger synthesis
+          uri = "sfx_pop",
           durationMs = 3000L,
           isVideo = true,
           hasAudio = true,
@@ -75,15 +75,14 @@ class ExportSystemTest {
       )
     )
 
-    assertTrue("Timeline should detect video original audio", audioProcessor.hasActiveAudio(timeline))
+    assertFalse("Bare catalog ids are not exportable audio", audioProcessor.hasActiveAudio(timeline))
     val masterPcm = audioProcessor.mixTimelineAudio(timeline, 3000L)
-    assertTrue("Mixed PCM should have samples", masterPcm.isNotEmpty())
-    val expectedFrames = (3000L * 48000 / 1000L).toInt()
-    assertEquals("Should generate expected number of stereo samples", expectedFrames * 2, masterPcm.size)
+    assertTrue("Mix still allocates the timeline buffer", masterPcm.isNotEmpty())
+    assertTrue("Placeholder audio must not invent a sine-wave mix", masterPcm.all { it == 0.toShort() })
   }
 
   @Test
-  fun `test 3 - Video plus music track`() = runBlocking {
+  fun `test 3 - Internal catalog music is skipped instead of synthesized`() = runBlocking {
     val timeline = Timeline(
       videoClips = listOf(
         VideoClip(name = "Background Video", durationMs = 5000L, isVideo = true, hasAudio = false)
@@ -99,17 +98,14 @@ class ExportSystemTest {
       )
     )
 
-    assertTrue(audioProcessor.hasActiveAudio(timeline))
+    assertFalse(audioProcessor.hasActiveAudio(timeline))
     val masterPcm = audioProcessor.mixTimelineAudio(timeline, 5000L)
-    assertTrue("Should mix music audio track", masterPcm.isNotEmpty())
-
-    // Check that samples are non-zero
-    val nonZeroCount = masterPcm.count { it != 0.toShort() }
-    assertTrue("Music track should contain audio waveform data", nonZeroCount > 100)
+    assertTrue("Should allocate a silent mix for placeholder-only timelines", masterPcm.isNotEmpty())
+    assertTrue("Placeholder catalog must not emit invented waveform data", masterPcm.all { it == 0.toShort() })
   }
 
   @Test
-  fun `test 4 - Video plus voiceover with volume, gain and fades`() = runBlocking {
+  fun `test 4 - Placeholder voiceover stays silent`() = runBlocking {
     val timeline = Timeline(
       videoClips = listOf(
         VideoClip(name = "Host Video", durationMs = 4000L, isVideo = true, hasAudio = false)
@@ -131,14 +127,11 @@ class ExportSystemTest {
 
     val masterPcm = audioProcessor.mixTimelineAudio(timeline, 4000L)
     assertTrue(masterPcm.isNotEmpty())
-
-    // Check that samples before timelineStartMs (first 200ms) are zero/silence
-    val frame200ms = (200L * 44100 / 1000L).toInt()
-    assertEquals("Before voiceover start, buffer should be silent", 0, masterPcm[frame200ms * 2].toInt())
+    assertTrue("Placeholder voiceover must not invent samples", masterPcm.all { it == 0.toShort() })
   }
 
   @Test
-  fun `test 5 - Multiple simultaneous audio tracks mix without clipping`() = runBlocking {
+  fun `test 5 - Placeholder-only mix stays silent and in range`() = runBlocking {
     val timeline = Timeline(
       videoClips = listOf(
         VideoClip(name = "Scene", durationMs = 6000L, isVideo = true, hasAudio = true, uri = "sfx_pop")
@@ -157,29 +150,17 @@ class ExportSystemTest {
           timelineStartMs = 1500L,
           durationMs = 1200L,
           volume = 1.0f
-        ),
-        AudioClip(
-          title = "Voiceover Commentary",
-          uri = "sfx_ding",
-          timelineStartMs = 2000L,
-          durationMs = 2000L,
-          volume = 1.5f,
-          gainDb = 2.0f
         )
       )
     )
 
     val masterPcm = audioProcessor.mixTimelineAudio(timeline, 6000L)
-    assertTrue("Should mix 4 simultaneous audio sources", masterPcm.isNotEmpty())
-
-    // Ensure all samples are within valid 16-bit PCM bounds (-32768 to 32767)
-    for (s in masterPcm) {
-      assertTrue("Sample should never overflow short bounds", s >= -32768 && s <= 32767)
-    }
+    assertTrue("Should allocate the mix buffer", masterPcm.isNotEmpty())
+    assertTrue("Bare catalog ids must not invent mixed audio", masterPcm.all { it == 0.toShort() })
   }
 
   @Test
-  fun `test 6 - Trimmed video and audio bounds`() = runBlocking {
+  fun `test 6 - Trimmed placeholder audio stays silent after the clip`() = runBlocking {
     val timeline = Timeline(
       audioClips = listOf(
         AudioClip(
@@ -194,12 +175,12 @@ class ExportSystemTest {
     )
 
     val masterPcm = audioProcessor.mixTimelineAudio(timeline, 2000L)
-    val afterTrimFrame = (600L * 44100 / 1000L).toInt()
+    val afterTrimFrame = (600L * 48000 / 1000L).toInt()
     assertEquals("Audio after trimmed duration should be silent", 0, masterPcm[afterTrimFrame * 2].toInt())
   }
 
   @Test
-  fun `test 7 - Split clips play sequentially without overlap or gap`() = runBlocking {
+  fun `test 7 - Split clips without real audio stay silent`() = runBlocking {
     val timeline = Timeline(
       videoClips = listOf(
         VideoClip(
@@ -225,10 +206,11 @@ class ExportSystemTest {
     assertTrue(masterPcm.isNotEmpty())
     val expectedFrames = (3000L * 48000 / 1000L).toInt()
     assertEquals(expectedFrames * 2, masterPcm.size)
+    assertTrue(masterPcm.all { it == 0.toShort() })
   }
 
   @Test
-  fun `test 8 - Different clip speeds resample correctly`() = runBlocking {
+  fun `test 8 - Placeholder clips at different speeds stay silent`() = runBlocking {
     val normalTimeline = Timeline(
       audioClips = listOf(
         AudioClip(title = "Normal Speed", uri = "sfx_pop", durationMs = 1000L, speed = 1.0f)
@@ -251,8 +233,9 @@ class ExportSystemTest {
 
     assertEquals(normalPcm.size, fastPcm.size)
     assertEquals(normalPcm.size, slowPcm.size)
-    // Speed alters the waveform progression
-    assertNotEquals(fastPcm[500], slowPcm[500])
+    assertTrue(normalPcm.all { it == 0.toShort() })
+    assertTrue(fastPcm.all { it == 0.toShort() })
+    assertTrue(slowPcm.all { it == 0.toShort() })
   }
 
   @Test

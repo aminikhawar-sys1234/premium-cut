@@ -2487,9 +2487,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       )
 
       videoExporter.beginExternalExport(config)
+      videoExporter.onExternalCancel = { professionalExportEngine.cancel() }
       val progressJob = launch {
         professionalExportEngine.progress.collect { progress ->
-          videoExporter.updateExternalExportProgress(progress.fraction, progress.message)
+          videoExporter.updateExternalExportProgress(
+            progress = progress.fraction,
+            status = progress.message,
+            currentFrame = progress.currentFrame.toInt().coerceAtLeast(0),
+            totalFrames = progress.totalFrames.toInt().coerceAtLeast(0),
+            fps = progress.encodeFps,
+            estimatedRemainingSec = ((progress.estimatedRemainingMs ?: 0L) / 1000L).toInt()
+          )
         }
       }
 
@@ -2499,8 +2507,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           timeline = timelineSnapshot,
           config = config,
           outputFile = outputFile,
-          requireAudio = timelineSnapshot.audioClips.isNotEmpty() ||
-            timelineSnapshot.videoClips.any { it.hasAudio },
+          requireAudio = com.example.engine.export.AudioExportProcessor(getApplication()).hasActiveAudio(timelineSnapshot),
           shouldCancel = { videoExporter.isCancelRequested() },
           isPaused = { videoExporter.isPauseRequested() }
         )

@@ -1,5 +1,6 @@
 package com.example.ui.components.player
 
+import android.os.Handler
 import android.os.Looper
 import android.view.TextureView
 import androidx.media3.exoplayer.ExoPlayer
@@ -35,9 +36,15 @@ object PreviewVideoSurfaceRegistry {
   private const val PRIORITY_SECONDARY = 1
 
   private val lock = Any()
+  private val mainHandler = Handler(Looper.getMainLooper())
   private val boundView = java.util.WeakHashMap<ExoPlayer, WeakReference<TextureView>>()
   private val boundPriority = java.util.WeakHashMap<ExoPlayer, Int>()
   private val primaryView = java.util.WeakHashMap<ExoPlayer, WeakReference<TextureView>>()
+
+  private fun onMain(block: () -> Unit) {
+    if (Looper.myLooper() == Looper.getMainLooper()) block()
+    else mainHandler.post(block)
+  }
 
   /** Binds [view] and remembers it as the surface the player must fall back to. */
   fun bindPrimary(player: ExoPlayer, view: TextureView) {
@@ -65,7 +72,10 @@ object PreviewVideoSurfaceRegistry {
   }
 
   private fun bind(player: ExoPlayer, view: TextureView, priority: Int) {
-    if (Looper.myLooper() != Looper.getMainLooper()) return
+    onMain { bindOnMain(player, view, priority) }
+  }
+
+  private fun bindOnMain(player: ExoPlayer, view: TextureView, priority: Int) {
     synchronized(lock) {
       val owner = boundView[player]?.get()
       if (owner === view) {
@@ -95,7 +105,10 @@ object PreviewVideoSurfaceRegistry {
    * registered primary view gets the output back so the inline preview keeps showing live frames.
    */
   fun release(player: ExoPlayer, view: TextureView) {
-    if (Looper.myLooper() != Looper.getMainLooper()) return
+    onMain { releaseOnMain(player, view) }
+  }
+
+  private fun releaseOnMain(player: ExoPlayer, view: TextureView) {
     synchronized(lock) {
       val wasPrimary = primaryView[player]?.get() === view
       if (wasPrimary) primaryView.remove(player)
