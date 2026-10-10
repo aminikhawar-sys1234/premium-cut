@@ -18,6 +18,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.pow
 
 data class DecodedPcm(
   val samples: ShortArray,
@@ -321,7 +322,8 @@ class AudioExportProcessor(
 
         val tracks = collectAudioTracks(timeline)
         for (track in tracks) {
-            val decoded = decodeOrSynthesizeTrack(track)
+            val decoded = decodeTrackOrFail(track)
+            if (decoded.samples.isEmpty()) continue
             mixTrackIntoBuffer(decoded, track, mixedPcm, totalFrames, targetSampleRate, targetChannelCount)
         }
 
