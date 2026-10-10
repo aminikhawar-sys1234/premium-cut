@@ -42,11 +42,14 @@ object Media3EffectPipeline {
   /**
    * Applies the generated list of Media3 effects to ExoPlayer in real-time.
    */
-  fun applyRealtimeEffects(exoPlayer: ExoPlayer, effects: List<Effect>) {
-    try {
+  /** @return true when ExoPlayer accepted the new effect list. */
+  fun applyRealtimeEffects(exoPlayer: ExoPlayer, effects: List<Effect>): Boolean {
+    return try {
       exoPlayer.setVideoEffects(effects)
+      true
     } catch (e: Exception) {
       android.util.Log.w("Media3EffectPipeline", "Failed to apply real-time video effects to ExoPlayer", e)
+      false
     }
   }
 

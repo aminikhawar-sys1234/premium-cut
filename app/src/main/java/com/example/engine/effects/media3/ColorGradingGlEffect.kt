@@ -37,8 +37,11 @@ class ColorGradingGlEffect(
   val grain: Float = 0f,              // 0f to 1f
   val sharpness: Float = 0f,          // 0f to 1f
   val clarity: Float = 0f,            // 0f to 1f (Adjust clarity + Super Clarity, mid-tone local contrast)
+  val fade: Float = 0f,               // 0f to 1f
   val autoEnhance: Float = 0f,        // 0f to 1f
   val hdrBoost: Float = 0f,           // 0f to 1f
+  val colorFix: Float = 0f,           // 0f to 1f
+  val denoise: Float = 0f,            // 0f to 1f (denoise + anti-flicker)
   val colorMatrix4x4: FloatArray? = null,
   val colorOffset: FloatArray? = null
 ) : GlEffect {
@@ -78,8 +81,11 @@ class ColorGradingGlEffect(
         grain = adjustments.grain,
         sharpness = adjustments.sharpness,
         clarity = (adjustments.clarity + adjustments.superClarity).coerceIn(0f, 1f),
+        fade = adjustments.fade,
         autoEnhance = adjustments.autoEnhance,
         hdrBoost = (adjustments.hdrBoost + adjustments.colorCorrect).coerceIn(0f, 1f),
+        colorFix = adjustments.colorFix,
+        denoise = (adjustments.denoise + adjustments.antiFlicker * 0.5f).coerceIn(0f, 1f),
         colorMatrix4x4 = mat4x4,
         colorOffset = offset
       )
@@ -145,6 +151,13 @@ uniform float uTemperature;
 uniform float uTint;
 uniform float uHighlights;
 uniform float uShadows;
+uniform float uWhites;
+uniform float uBlacks;
+uniform float uFade;
+uniform float uAutoEnhance;
+uniform float uHdrBoost;
+uniform float uColorFix;
+uniform float uDenoise;
 uniform float uVignette;
 uniform float uGrain;
 uniform float uGrainSeed;
@@ -225,6 +238,41 @@ void main() {
     color.rgb += vec3(uShadows * shadowWeight * 0.2 + uHighlights * highlightWeight * 0.2);
   }
 
+  // 6b. Whites & Blacks
+  if (abs(uWhites) > 0.001 || abs(uBlacks) > 0.001) {
+    float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+    float whiteW = smoothstep(0.65, 1.0, lum);
+    float blackW = 1.0 - smoothstep(0.0, 0.35, lum);
+    color.rgb += vec3(uWhites * whiteW * 0.18 + uBlacks * blackW * 0.18);
+  }
+
+  // 6c. Video Quality: Auto Enhance, HDR, Color Fix, Denoise
+  if (uAutoEnhance > 0.01) {
+    float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+    color.rgb = mix(vec3(lum), color.rgb, 1.0 + uAutoEnhance * 0.20);
+    color.rgb = (color.rgb - 0.5) * (1.0 + uAutoEnhance * 0.15) + 0.5 + vec3(uAutoEnhance * 0.04);
+  }
+  if (uHdrBoost > 0.01) {
+    float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+    color.rgb = mix(vec3(lum), color.rgb, 1.0 + uHdrBoost * 0.25);
+    color.rgb = (color.rgb - 0.5) * (1.0 + uHdrBoost * 0.22) + 0.5 + vec3(uHdrBoost * 0.02);
+  }
+  if (uColorFix > 0.01) {
+    color.r *= 1.0 - uColorFix * 0.04;
+    color.g *= 1.0 - uColorFix * 0.03;
+    color.b *= 1.0 + uColorFix * 0.06;
+  }
+  if (uDenoise > 0.01) {
+    vec3 blur = texture2D(uTexSampler, clamp(uv + vec2(uTexelSize.x, 0.0), 0.0, 1.0)).rgb
+              + texture2D(uTexSampler, clamp(uv - vec2(uTexelSize.x, 0.0), 0.0, 1.0)).rgb
+              + texture2D(uTexSampler, clamp(uv + vec2(0.0, uTexelSize.y), 0.0, 1.0)).rgb
+              + texture2D(uTexSampler, clamp(uv - vec2(0.0, uTexelSize.y), 0.0, 1.0)).rgb;
+    color.rgb = mix(color.rgb, blur * 0.25, uDenoise * 0.65);
+  }
+  if (uFade > 0.01) {
+    color.rgb = mix(color.rgb, vec3(0.5), uFade * 0.55);
+  }
+
   // 7. Color Matrix transformation
   if (uUseColorMatrix == 1) {
     color = (uColorMatrix * color) + uColorOffset;
@@ -265,8 +313,11 @@ void main() {
         grain < 0.01f &&
         sharpness < 0.01f &&
         clarity < 0.01f &&
+        fade < 0.01f &&
         autoEnhance < 0.01f &&
-        hdrBoost < 0.01f
+        hdrBoost < 0.01f &&
+        colorFix < 0.01f &&
+        denoise < 0.01f
 
     val hasColorMatrix = colorMatrix4x4 != null && colorOffset != null
     return isDefaultAdjustments && !hasColorMatrix
@@ -290,6 +341,13 @@ void main() {
         program.setFloatUniform("uTint", tint)
         program.setFloatUniform("uHighlights", highlights)
         program.setFloatUniform("uShadows", shadows)
+        program.setFloatUniform("uWhites", whites)
+        program.setFloatUniform("uBlacks", blacks)
+        program.setFloatUniform("uFade", fade)
+        program.setFloatUniform("uAutoEnhance", autoEnhance)
+        program.setFloatUniform("uHdrBoost", hdrBoost)
+        program.setFloatUniform("uColorFix", colorFix)
+        program.setFloatUniform("uDenoise", denoise)
         program.setFloatUniform("uVignette", vignette)
         program.setFloatUniform("uGrain", grain)
         program.setFloatUniform("uGrainSeed", (presentationTimeUs / 1000L % 10000).toFloat() / 1000f)
