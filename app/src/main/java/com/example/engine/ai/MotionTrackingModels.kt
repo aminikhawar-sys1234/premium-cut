@@ -132,6 +132,22 @@ enum class TrackingEngineState {
     FAILED
 }
 
+enum class TrackRange(val title: String) {
+    FORWARD("Forward"),
+    BACKWARD("Backward"),
+    FULL("Full clip")
+}
+
+data class LiveDetection(
+    val id: Int,
+    val category: TrackingCategory,
+    val box: NormalizedRect,
+    val label: String,
+    val confidence: Float,
+    val landmarks: List<Pair<Float, Float>> = emptyList(),
+    val trackingId: Int? = null
+)
+
 data class TrackingSession(
     val sessionId: String,
     val targetCategory: TrackingCategory,
@@ -163,7 +179,9 @@ data class MotionTrackingSettings(
     val offsetY: Float = 0f,
     val trackForward: Boolean = true,
     val trackBackward: Boolean = false,
-    val featureMode: MotionFeatureType = MotionFeatureType.ROTATION_SCALE
+    val featureMode: MotionFeatureType = MotionFeatureType.ROTATION_SCALE,
+    val bodyRegion: BodyTrackingFeature = BodyTrackingFeature.FULL_BODY,
+    val clipSourceStartUs: Long = 0L
 )
 
 data class MotionTrackingUiState(
@@ -176,10 +194,15 @@ data class MotionTrackingUiState(
     val activeSession: TrackingSession? = null,
     val targetRegion: NormalizedRect = NormalizedRect.DEFAULT_CENTER,
     val isRegionSelectorActive: Boolean = true,
+    val showMotionPath: Boolean = true,
     val selectedAttachment: AttachmentTarget = AttachmentTarget.TEXT,
     val settings: MotionTrackingSettings = MotionTrackingSettings(),
     val errorMessage: String? = null,
     val detectedFaceCount: Int = 0,
     val detectedBodyCount: Int = 0,
-    val detectedPointsCount: Int = 0
+    val detectedPointsCount: Int = 0,
+    val liveDetections: List<LiveDetection> = emptyList(),
+    val selectedLiveId: Int? = null,
+    val lockWidth: Float = 0.30f,
+    val lockHeight: Float = 0.30f
 )

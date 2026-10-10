@@ -7,6 +7,8 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import com.example.domain.model.ClipKeyframe
+import com.example.engine.ai.tracking.BodyPoseLandmarks
+import com.example.engine.ai.tracking.FeatureDetector
 import com.example.engine.ai.tracking.GrayImage
 import com.example.engine.ai.tracking.Homography
 import com.example.engine.ai.tracking.PlaneModel
@@ -50,22 +52,9 @@ class MotionTrackerEngine {
 
     companion object {
         private const val TAG = "MotionTrackerEngine"
-        private const val MLKIT_TIMEOUT_MS = 450L
-        private val BODY_LANDMARK_IDS = intArrayOf(
-            PoseLandmark.NOSE,
-            PoseLandmark.LEFT_SHOULDER,
-            PoseLandmark.RIGHT_SHOULDER,
-            PoseLandmark.LEFT_ELBOW,
-            PoseLandmark.RIGHT_ELBOW,
-            PoseLandmark.LEFT_WRIST,
-            PoseLandmark.RIGHT_WRIST,
-            PoseLandmark.LEFT_HIP,
-            PoseLandmark.RIGHT_HIP,
-            PoseLandmark.LEFT_KNEE,
-            PoseLandmark.RIGHT_KNEE,
-            PoseLandmark.LEFT_ANKLE,
-            PoseLandmark.RIGHT_ANKLE
-        )
+        private const val MLKIT_TIMEOUT_MS = 1200L
+        private const val LIVE_TIMEOUT_MS = 700L
+        private val BODY_LANDMARK_IDS = BodyPoseLandmarks.ALL
 
         suspend fun trackObjectMotion(
             context: Context? = null,
@@ -126,7 +115,8 @@ class MotionTrackerEngine {
         durationUs: Long,
         category: TrackingCategory = TrackingCategory.OBJECT,
         settings: MotionTrackingSettings = MotionTrackingSettings(),
-        onProgress: (Float, String, TrackingEngineState) -> Unit
+        onProgress: (Float, String, TrackingEngineState) -> Unit,
+        onPartial: ((List<MotionKeyframe>) -> Unit)? = null
     ): TrackingResult = withContext(Dispatchers.Default) {
         val cacheKey = MotionTrackingCache.makeKey(
             clipId = targetClipId,
@@ -135,7 +125,7 @@ class MotionTrackerEngine {
             region = initialBox,
             startUs = startUs,
             durationUs = durationUs,
-            mode = settings.featureMode.name
+            mode = "${settings.featureMode.name}:${settings.bodyRegion.name}"
         )
 
         MotionTrackingCache.get(cacheKey)?.let { cached ->
@@ -145,12 +135,15 @@ class MotionTrackerEngine {
         }
 
         val progress = TrackingSampler.ProgressGate()
+        val keyframes = mutableListOf<MotionKeyframe>()
         fun report(p: Float, msg: String, state: TrackingEngineState, force: Boolean = false) {
-            if (progress.shouldEmit(state, force)) onProgress(p, msg, state)
+            if (progress.shouldEmit(state, force)) {
+                onProgress(p, msg, state)
+                if (keyframes.size >= 2) onPartial?.invoke(keyframes.toList())
+            }
         }
 
         val retriever = MediaMetadataRetriever()
-        val keyframes = mutableListOf<MotionKeyframe>()
 
         try {
             setDataSourceSafe(retriever, context, videoUri)
@@ -202,6 +195,45 @@ class MotionTrackerEngine {
         result
     }
 
+    /**
+     * Fast playhead detection for the Motion Tracking overlay. STREAM/FAST detectors,
+     * scaled frame, short timeout — never dummy boxes.
+     */
+    suspend fun detectLive(
+        context: Context?,
+        videoUri: String,
+        timeUs: Long,
+        category: TrackingCategory,
+        region: NormalizedRect = NormalizedRect.DEFAULT_CENTER,
+        settings: MotionTrackingSettings = MotionTrackingSettings()
+    ): List<LiveDetection> = withContext(Dispatchers.Default) {
+        val retriever = MediaMetadataRetriever()
+        try {
+            setDataSourceSafe(retriever, context, videoUri)
+            val (w, h) = frameSize(retriever, TrackingSampler.DETECT_WIDTH)
+            val bmp = extractScaledFrame(retriever, timeUs, w, h, closestSync = true)
+                ?: return@withContext emptyList()
+            try {
+                when (category) {
+                    TrackingCategory.FACE -> detectLiveFaces(bmp)
+                    TrackingCategory.BODY -> detectLiveBodies(bmp, settings)
+                    TrackingCategory.OBJECT -> detectLiveObjects(bmp)
+                    TrackingCategory.MOTION -> detectLiveMotionPoints(bmp, region)
+                    else -> emptyList()
+                }
+            } finally {
+                if (!bmp.isRecycled) bmp.recycle()
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (t: Throwable) {
+            Log.w(TAG, "Live detect failed: ${t.message}")
+            emptyList()
+        } finally {
+            runCatching { retriever.release() }
+        }
+    }
+
     private suspend fun trackObjectInternal(
         retriever: MediaMetadataRetriever,
         initialBox: NormalizedRect,
@@ -211,10 +243,13 @@ class MotionTrackerEngine {
         keyframes: MutableList<MotionKeyframe>,
         report: (Float, String, TrackingEngineState, Boolean) -> Unit
     ) {
-        report(0.05f, "Locking object target...", TrackingEngineState.DETECTING, true)
+        report(0.05f, "Detecting object...", TrackingEngineState.DETECTING, true)
+        val lockBox = lockObjectBox(retriever, startUs, initialBox)
+        val planar = settings.featureMode == MotionFeatureType.PLANAR
+        val model = if (planar) PlaneModel.HOMOGRAPHY else PlaneModel.SIMILARITY
         if (trackWithPlaneModel(
-                retriever, initialBox, startUs, durationUs, settings,
-                PlaneModel.SIMILARITY, false, keyframes, report, "object"
+                retriever, lockBox, startUs, durationUs, settings,
+                model, planar, keyframes, report, "object"
             )
         ) return
 
@@ -382,7 +417,13 @@ class MotionTrackerEngine {
             report = report,
             label = "body",
             lostMessage = "Body pose not detected in video",
-            detect = { bitmap, _, last -> detectBody(bitmap, detector, last, initialBox) }
+            detect = { bitmap, _, last ->
+                detectBody(bitmap, detector, last, initialBox)?.let { found ->
+                    found.copy(
+                        landmarks = BodyPoseLandmarks.filterLandmarks(found.landmarks, settings.bodyRegion)
+                    )
+                }
+            }
         )
     }
 
@@ -456,7 +497,7 @@ class MotionTrackerEngine {
         var frameIndex = 1
         var currentUs = (lockTime + timeStepUs).coerceAtMost(endUs)
 
-        var tracker = planeTrackerFor(lockGray!!, currentBox)
+        var tracker = planeTrackerFor(lockGray!!, currentBox, settings)
         var converter = TrackFrameConverter(
             boxCorners(currentBox, lockGray!!.width, lockGray!!.height),
             lockGray!!.width,
@@ -517,7 +558,7 @@ class MotionTrackerEngine {
                             consecutiveLosses = 0
                             emitted = true
                             val seedGray = bitmapToGray(detectBmp)
-                            val reseeded = planeTrackerFor(seedGray, found.box)
+                            val reseeded = planeTrackerFor(seedGray, found.box, settings)
                             if (reseeded != null) {
                                 tracker = reseeded
                                 seedW = seedGray.width
@@ -606,9 +647,28 @@ class MotionTrackerEngine {
         }
     }
 
-    private fun planeTrackerFor(gray: GrayImage, box: NormalizedRect): PlaneTracker? {
-        val tracker = PlaneTracker(gray, boxCorners(box, gray.width, gray.height), PlaneModel.SIMILARITY)
+    private fun planeTrackerFor(
+        gray: GrayImage,
+        box: NormalizedRect,
+        settings: MotionTrackingSettings = MotionTrackingSettings()
+    ): PlaneTracker? {
+        val (maxFeat, minIn) = planeFeatureBudget(settings)
+        val tracker = PlaneTracker(
+            gray,
+            boxCorners(box, gray.width, gray.height),
+            PlaneModel.SIMILARITY,
+            maxFeatures = maxFeat,
+            minInliers = minIn
+        )
         return if (tracker.isReady) tracker else null
+    }
+
+    private fun planeFeatureBudget(settings: MotionTrackingSettings): Pair<Int, Int> = when (settings.featureMode) {
+        MotionFeatureType.POINT_TRACKING -> 16 to 3
+        MotionFeatureType.POSITION_ONLY -> 24 to 4
+        MotionFeatureType.MULTI_POINT, MotionFeatureType.MOTION_PATH -> 96 to 6
+        MotionFeatureType.PLANAR -> 140 to 8
+        else -> 80 to 5
     }
 
     private fun boxCorners(box: NormalizedRect, w: Int, h: Int): List<Point2> = listOf(
@@ -670,10 +730,17 @@ class MotionTrackerEngine {
         } catch (_: Throwable) {
             null
         }
+        val area = (fWidth * fHeight).coerceIn(0.01f, 0.6f)
+        val confidence = (
+            0.55f +
+                0.30f * (area / 0.25f).coerceIn(0f, 1f) +
+                (if (trackingId != null) 0.12f else 0f) +
+                (if (lms.size >= 3) 0.08f else 0f)
+            ).coerceIn(0.45f, 0.99f)
         return DetectedTarget(
             box = TrackingSampler.boxFromCenter(cx, cy, fWidth, fHeight),
             rotationDeg = primary.headEulerAngleZ,
-            confidence = 0.95f,
+            confidence = confidence,
             landmarks = lms,
             trackingId = trackingId
         )
@@ -683,9 +750,10 @@ class MotionTrackerEngine {
         frame: Bitmap,
         detector: com.google.mlkit.vision.pose.PoseDetector,
         last: DetectedTarget?,
-        hintBox: NormalizedRect?
+        hintBox: NormalizedRect?,
+        timeoutMs: Long = MLKIT_TIMEOUT_MS
     ): DetectedTarget? {
-        val pose = runDetector { detector.process(InputImage.fromBitmap(frame, 0)) } ?: return null
+        val pose = runDetector(timeoutMs) { detector.process(InputImage.fromBitmap(frame, 0)) } ?: return null
         val fw = frame.width.toFloat().coerceAtLeast(1f)
         val fh = frame.height.toFloat().coerceAtLeast(1f)
         val ordered = BODY_LANDMARK_IDS.map { id -> pose.getPoseLandmark(id) }
@@ -752,24 +820,172 @@ class MotionTrackerEngine {
         if (last != null && TrackingSampler.jumpDistance(box, last.box) > 0.55f && last.confidence > 0.5f) {
             return null
         }
+        val rawLandmarks = visiblePairs.map { it ?: (-1f to -1f) }
+        val confidence = (visibleCount / BodyPoseLandmarks.COUNT.toFloat()).coerceIn(0.4f, 0.99f)
         return DetectedTarget(
             box = box,
             rotationDeg = rotDeg,
-            confidence = 0.90f,
-            landmarks = visiblePairs.map { it ?: (-1f to -1f) },
+            confidence = confidence,
+            landmarks = rawLandmarks,
             anchorIndex = anchorIndex
         )
     }
 
-    private fun <T> runDetector(block: () -> com.google.android.gms.tasks.Task<T>): T? {
+    private fun <T> runDetector(
+        timeoutMs: Long = MLKIT_TIMEOUT_MS,
+        block: () -> com.google.android.gms.tasks.Task<T>
+    ): T? {
         return try {
-            Tasks.await(block(), MLKIT_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            Tasks.await(block(), timeoutMs, TimeUnit.MILLISECONDS)
         } catch (e: CancellationException) {
             throw e
         } catch (t: Throwable) {
             Log.w(TAG, "Detector inference failed: ${t.message}")
             null
         }
+    }
+
+    private fun lockObjectBox(
+        retriever: MediaMetadataRetriever,
+        startUs: Long,
+        hint: NormalizedRect
+    ): NormalizedRect {
+        val (w, h) = frameSize(retriever, TrackingSampler.DETECT_WIDTH)
+        val bmp = extractScaledFrame(retriever, startUs, w, h, closestSync = true) ?: return hint
+        return try {
+            val detections = detectLiveObjects(bmp, live = false)
+            if (detections.isEmpty()) return hint
+            val overlapping = detections.maxByOrNull { TrackingSampler.overlapRatio(it.box, hint) }
+            val bestOverlap = overlapping?.let { TrackingSampler.overlapRatio(it.box, hint) } ?: 0f
+            when {
+                overlapping != null && bestOverlap > 0.08f -> overlapping.box
+                detections.size == 1 -> detections.first().box
+                else -> detections.maxByOrNull { it.box.width * it.box.height }?.box ?: hint
+            }
+        } finally {
+            if (!bmp.isRecycled) bmp.recycle()
+        }
+    }
+
+    private fun detectLiveFaces(frame: Bitmap): List<LiveDetection> {
+        val faces = runDetector(LIVE_TIMEOUT_MS) {
+            MlKitDetectorPool.faceLiveDetector().process(InputImage.fromBitmap(frame, 0))
+        } ?: return emptyList()
+        val fw = frame.width.toFloat().coerceAtLeast(1f)
+        val fh = frame.height.toFloat().coerceAtLeast(1f)
+        return faces.mapIndexed { index, face ->
+            val box = face.boundingBox
+            val region = TrackingSampler.boxFromCenter(
+                (box.centerX().toFloat() / fw).coerceIn(0f, 1f),
+                (box.centerY().toFloat() / fh).coerceIn(0f, 1f),
+                (box.width().toFloat() / fw).coerceAtLeast(0.04f),
+                (box.height().toFloat() / fh).coerceAtLeast(0.04f)
+            )
+            val lms = mutableListOf<Pair<Float, Float>>()
+            face.getLandmark(FaceLandmark.LEFT_EYE)?.position?.let { lms.add(it.x / fw to it.y / fh) }
+            face.getLandmark(FaceLandmark.RIGHT_EYE)?.position?.let { lms.add(it.x / fw to it.y / fh) }
+            face.getLandmark(FaceLandmark.NOSE_BASE)?.position?.let { lms.add(it.x / fw to it.y / fh) }
+            face.getLandmark(FaceLandmark.MOUTH_BOTTOM)?.position?.let { lms.add(it.x / fw to it.y / fh) }
+            val trackingId = runCatching { face.trackingId }.getOrNull()?.takeIf { it >= 0 }
+            val area = region.width * region.height
+            LiveDetection(
+                id = trackingId ?: index,
+                category = TrackingCategory.FACE,
+                box = region,
+                label = "Face ${index + 1}",
+                confidence = (0.55f + 0.45f * (area / 0.25f).coerceIn(0f, 1f)).coerceIn(0.4f, 0.99f),
+                landmarks = lms,
+                trackingId = trackingId
+            )
+        }
+    }
+
+    private fun detectLiveBodies(frame: Bitmap, settings: MotionTrackingSettings): List<LiveDetection> {
+        val found = detectBody(
+            frame, MlKitDetectorPool.poseLiveDetector(), null, null, LIVE_TIMEOUT_MS
+        ) ?: return emptyList()
+        val landmarks = BodyPoseLandmarks.filterLandmarks(found.landmarks, settings.bodyRegion)
+        val visible = BodyPoseLandmarks.visibleCount(landmarks)
+        if (visible < 4) return emptyList()
+        return listOf(
+            LiveDetection(
+                id = 0,
+                category = TrackingCategory.BODY,
+                box = found.box,
+                label = "${settings.bodyRegion.title} · $visible pts",
+                confidence = found.confidence,
+                landmarks = landmarks
+            )
+        )
+    }
+
+    private fun detectLiveObjects(frame: Bitmap, live: Boolean = true): List<LiveDetection> {
+        val detector = if (live) MlKitDetectorPool.objectLiveDetector() else MlKitDetectorPool.objectDetector()
+        val objects = runDetector(if (live) LIVE_TIMEOUT_MS else MLKIT_TIMEOUT_MS) {
+            detector.process(InputImage.fromBitmap(frame, 0))
+        } ?: return emptyList()
+        val fw = frame.width.toFloat().coerceAtLeast(1f)
+        val fh = frame.height.toFloat().coerceAtLeast(1f)
+        return objects.mapIndexed { index, obj ->
+            val box = obj.boundingBox
+            val region = TrackingSampler.boxFromCenter(
+                (box.centerX().toFloat() / fw).coerceIn(0f, 1f),
+                (box.centerY().toFloat() / fh).coerceIn(0f, 1f),
+                (box.width().toFloat() / fw).coerceAtLeast(0.04f),
+                (box.height().toFloat() / fh).coerceAtLeast(0.04f)
+            )
+            val top = obj.labels.maxByOrNull { it.confidence }
+            val label = top?.text?.takeIf { it.isNotBlank() }?.replaceFirstChar { it.uppercase() }
+                ?: "Object ${index + 1}"
+            val trackingId = runCatching { obj.trackingId }.getOrNull()?.takeIf { it >= 0 }
+            LiveDetection(
+                id = trackingId ?: index,
+                category = TrackingCategory.OBJECT,
+                box = region,
+                label = label,
+                confidence = (top?.confidence ?: 0.6f).coerceIn(0.2f, 1f),
+                trackingId = trackingId
+            )
+        }
+    }
+
+    private fun detectLiveMotionPoints(frame: Bitmap, region: NormalizedRect): List<LiveDetection> {
+        val gray = bitmapToGray(frame)
+        val corners = boxCorners(region, gray.width, gray.height)
+        val points = FeatureDetector.detect(
+            gray,
+            maxCorners = 48,
+            mask = { x, y -> pointInPolygon(x, y, corners) }
+        )
+        if (points.size < 3) return emptyList()
+        val w = gray.width.toFloat().coerceAtLeast(1f)
+        val h = gray.height.toFloat().coerceAtLeast(1f)
+        val landmarks = points.map { (it.x / w).coerceIn(0f, 1f) to (it.y / h).coerceIn(0f, 1f) }
+        return listOf(
+            LiveDetection(
+                id = 0,
+                category = TrackingCategory.MOTION,
+                box = region,
+                label = "${points.size} feature points",
+                confidence = (points.size / 48f).coerceIn(0.25f, 0.99f),
+                landmarks = landmarks
+            )
+        )
+    }
+
+    private fun pointInPolygon(x: Float, y: Float, poly: List<Point2>): Boolean {
+        if (poly.size < 3) return false
+        var inside = false
+        var j = poly.lastIndex
+        for (i in poly.indices) {
+            val pi = poly[i]
+            val pj = poly[j]
+            val intersect = ((pi.y > y) != (pj.y > y)) &&
+                (x < (pj.x - pi.x) * (y - pi.y) / (pj.y - pi.y + 1e-6f) + pi.x)
+            if (intersect) inside = !inside
+            j = i
+        }
+        return inside
     }
 
     private suspend fun trackMotionPointsInternal(
@@ -782,9 +998,11 @@ class MotionTrackerEngine {
         report: (Float, String, TrackingEngineState, Boolean) -> Unit
     ) {
         val planar = settings.featureMode == MotionFeatureType.PLANAR
-        val effective = if (settings.featureMode == MotionFeatureType.POSITION_ONLY) {
-            settings.copy(followScale = false, followRotation = false)
-        } else settings
+        val effective = when (settings.featureMode) {
+            MotionFeatureType.POSITION_ONLY, MotionFeatureType.POINT_TRACKING ->
+                settings.copy(followScale = false, followRotation = false)
+            else -> settings
+        }
         val ok = trackWithPlaneModel(
             retriever, initialBox, startUs, durationUs, effective,
             if (planar) PlaneModel.HOMOGRAPHY else PlaneModel.SIMILARITY,
@@ -821,7 +1039,8 @@ class MotionTrackerEngine {
         val w = ref.width
         val h = ref.height
         val corners = boxCorners(initialBox, w, h)
-        var tracker = PlaneTracker(ref, corners, model)
+        val (maxFeat, minIn) = planeFeatureBudget(settings)
+        var tracker = PlaneTracker(ref, corners, model, maxFeatures = maxFeat, minInliers = minIn)
         if (!tracker.isReady) return false
 
         var converter = TrackFrameConverter(
@@ -872,7 +1091,10 @@ class MotionTrackerEngine {
                         TrackingSampler.boxFromCenter(it.centerX, it.centerY, initialBox.width * it.scaleX, initialBox.height * it.scaleY)
                     } ?: initialBox
                     if (TrackingSampler.shouldRedetect(0, consecutiveLosses, 0.1f) && gray != null) {
-                        val reseeded = PlaneTracker(gray, boxCorners(seedBox, w, h), model)
+                        val reseeded = PlaneTracker(
+                            gray, boxCorners(seedBox, w, h), model,
+                            maxFeatures = maxFeat, minInliers = minIn
+                        )
                         if (reseeded.isReady) {
                             tracker = reseeded
                             converter = TrackFrameConverter(

@@ -680,6 +680,7 @@ fun EditorScreen(
             naturalRotation = activeTrackClip?.naturalRotation ?: 0,
             canvasAspect = aspectRatio.ratio,
             onUpdateRegion = { viewModel.updateTrackingRegion(it) },
+            onSelectDetection = { viewModel.selectLiveDetection(it) },
             modifier = Modifier
               .fillMaxHeight(0.98f)
               .aspectRatio(aspectRatio.ratio, matchHeightConstraintsFirst = true)

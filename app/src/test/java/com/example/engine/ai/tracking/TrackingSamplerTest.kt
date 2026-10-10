@@ -79,3 +79,34 @@ class TrackingSamplerTest {
         assertTrue(sparse < naive24Fps)
     }
 }
+
+class BodyPoseLandmarksTest {
+
+    @Test
+    fun fullBodyKeepsAllThirtyThreePoints() {
+        assertEquals(33, BodyPoseLandmarks.COUNT)
+        assertEquals(33, BodyPoseLandmarks.ALL.size)
+        val raw = List(33) { i -> i / 33f to i / 40f }
+        val filtered = BodyPoseLandmarks.filterLandmarks(raw, com.example.engine.ai.BodyTrackingFeature.FULL_BODY)
+        assertEquals(33, filtered.size)
+        assertEquals(33, BodyPoseLandmarks.visibleCount(filtered))
+    }
+
+    @Test
+    fun armFilterHidesLegsAndKeepsWrists() {
+        val raw = List(33) { i -> i.toFloat() to i.toFloat() }
+        val arms = BodyPoseLandmarks.filterLandmarks(raw, com.example.engine.ai.BodyTrackingFeature.ARMS)
+        assertEquals(33, arms.size)
+        assertEquals(-1f, arms[0].first, 0f)
+        assertTrue(arms[15].first >= 0f)
+        assertTrue(arms[16].first >= 0f)
+        assertEquals(-1f, arms[27].first, 0f)
+        assertEquals(BodyPoseLandmarks.ARMS.size, BodyPoseLandmarks.visibleCount(arms))
+    }
+
+    @Test
+    fun idsForMatchesLimbSets() {
+        assertEquals(BodyPoseLandmarks.LEGS.toList(), BodyPoseLandmarks.idsFor(com.example.engine.ai.BodyTrackingFeature.LEGS).toList())
+        assertEquals(BodyPoseLandmarks.UPPER.toList(), BodyPoseLandmarks.idsFor(com.example.engine.ai.BodyTrackingFeature.UPPER_BODY).toList())
+    }
+}

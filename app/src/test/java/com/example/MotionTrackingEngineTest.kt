@@ -147,6 +147,33 @@ class MotionTrackingEngineTest {
   }
 
   @Test
+  fun testLandmarkInterpolationHoldsMissingAndLerpsVisible() {
+    val a = listOf(0.1f to 0.2f, -1f to -1f, 0.4f to 0.5f)
+    val b = listOf(0.3f to 0.4f, 0.8f to 0.9f, -1f to -1f)
+    val mid = MotionTrackingEvaluator.interpolateLandmarks(a, b, 0.5f)
+    assertEquals(3, mid.size)
+    assertEquals(0.2f, mid[0].first, 1e-4f)
+    assertEquals(0.3f, mid[0].second, 1e-4f)
+    assertEquals(0.8f, mid[1].first, 1e-4f)
+    assertEquals(0.4f, mid[2].first, 1e-4f)
+  }
+
+  @Test
+  fun evaluatePassesInterpolatedLandmarks() {
+    val result = TrackingResult(
+      targetId = "t", clipId = "c", startTimestampUs = 0L, endTimestampUs = 1_000_000L,
+      keyframes = listOf(
+        MotionKeyframe(0L, 0.2f, 0.2f, landmarkPoints = listOf(0.1f to 0.1f, 0.2f to 0.3f)),
+        MotionKeyframe(1_000_000L, 0.8f, 0.8f, landmarkPoints = listOf(0.3f to 0.5f, 0.4f to 0.7f))
+      )
+    )
+    val mid = MotionTrackingEvaluator(result).evaluate(500_000L)
+    assertEquals(2, mid.landmarkPoints.size)
+    assertEquals(0.2f, mid.landmarkPoints[0].first, 1e-4f)
+    assertEquals(0.3f, mid.landmarkPoints[0].second, 1e-4f)
+  }
+
+  @Test
   fun testCornerPinInterpolation() {
     val pinA = listOf(0.1f to 0.1f, 0.5f to 0.1f, 0.5f to 0.5f, 0.1f to 0.5f)
     val pinB = listOf(0.3f to 0.2f, 0.7f to 0.2f, 0.7f to 0.6f, 0.3f to 0.6f)
