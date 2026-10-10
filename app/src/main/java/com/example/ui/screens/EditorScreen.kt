@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
@@ -585,7 +586,12 @@ fun EditorScreen(
       val isFilterToolActive = activeTab == EditorToolbarTab.FILTERS ||
         activeTab == EditorToolbarTab.ADJUST ||
         activeTab == EditorToolbarTab.VIDEO_QUALITY
-      val maxToolPanelHeight = if (isTextToolActive || isFilterToolActive) maxHeight * 0.45f else maxHeight * 0.37f
+      val isTransitionToolActive = activeTab == EditorToolbarTab.TRANSITIONS
+      val maxToolPanelHeight = if (isTextToolActive || isFilterToolActive || isTransitionToolActive) {
+        maxHeight * 0.45f
+      } else {
+        maxHeight * 0.37f
+      }
       val isTransitionsOpen = activeTab == EditorToolbarTab.TRANSITIONS
       val isStickersOpen = activeTab == EditorToolbarTab.STICKERS
       val responsiveSpacerHeight = 0.dp
@@ -1141,7 +1147,8 @@ fun EditorScreen(
                 TransitionsPanel(
                   viewModel = viewModel,
                   onClose = { viewModel.setActiveToolbarTab(null) },
-                  onStartDragTransition = { draggedTransitionType = it }
+                  onStartDragTransition = { draggedTransitionType = it },
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight)
                 )
               }
               activeTab == EditorToolbarTab.STICKERS -> {
@@ -1793,6 +1800,20 @@ fun VideoPreviewSurface(
     }
   }
 
+  val transitionEvaluator = remember { com.example.engine.timeline.TimelineEvaluator() }
+  val transitionPose = remember(timeline, currentPosMs, activeClip?.id) {
+    val transition = transitionEvaluator.evaluate(timeline, currentPosMs).activeTransition
+    if (transition == null || activeClip == null) {
+      null
+    } else {
+      com.example.engine.composition.TransitionPreviewMotion.resolve(
+        transition.type,
+        transition.progress,
+        incoming = activeClip.id == transition.clipAfter.id
+      )
+    }
+  }
+
   // Keyframe calculations
   val clipTransform = remember(activeClip, currentPosMs) {
     if (activeClip != null) {
@@ -1899,13 +1920,29 @@ fun VideoPreviewSurface(
                 val baseTransX = (clipTransform?.posX ?: 0f) * size.width
                 val baseTransY = (clipTransform?.posY ?: 0f) * size.height
                 val baseAlpha = clipTransform?.opacity ?: 1f
+                val pose = transitionPose
 
-                scaleX = baseScaleX * effectMotion.scaleX
-                scaleY = baseScaleY * effectMotion.scaleY
-                rotationZ = baseRot + effectMotion.rotation
-                translationX = baseTransX + effectMotion.translationX * size.width
-                translationY = baseTransY + effectMotion.translationY * size.height
-                alpha = (baseAlpha * effectMotion.alpha).coerceIn(0f, 1f)
+                scaleX = baseScaleX * effectMotion.scaleX * (pose?.scale ?: 1f)
+                scaleY = baseScaleY * effectMotion.scaleY * (pose?.scale ?: 1f)
+                rotationZ = baseRot + effectMotion.rotation + (pose?.rotationDeg ?: 0f)
+                translationX = baseTransX + effectMotion.translationX * size.width + (pose?.translateX ?: 0f) * size.width
+                translationY = baseTransY + effectMotion.translationY * size.height + (pose?.translateY ?: 0f) * size.height
+                alpha = (baseAlpha * effectMotion.alpha * (pose?.opacity ?: 1f)).coerceIn(0f, 1f)
+              }
+              .drawWithContent {
+                val pose = transitionPose
+                if (pose?.clipStart != null && pose.clipEnd != null) {
+                  clipRect(
+                    left = pose.clipStart * size.width,
+                    top = 0f,
+                    right = pose.clipEnd * size.width,
+                    bottom = size.height
+                  ) {
+                    this@drawWithContent.drawContent()
+                  }
+                } else {
+                  drawContent()
+                }
               },
             contentAlignment = Alignment.Center
           ) {
@@ -1972,6 +2009,14 @@ fun VideoPreviewSurface(
                 currentPosMs = currentPosMs,
                 colorFilter = combinedColorFilter,
                 modifier = Modifier.fillMaxSize()
+              )
+            }
+            val flash = transitionPose?.flash ?: 0f
+            if (flash > 0.01f) {
+              Box(
+                modifier = Modifier
+                  .fillMaxSize()
+                  .background(Color.White.copy(alpha = (flash * 0.85f).coerceIn(0f, 1f)))
               )
             }
           }

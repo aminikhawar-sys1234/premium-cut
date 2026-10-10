@@ -27,13 +27,16 @@ object TransitionAppBridge {
     /** Mapping from Legacy / Domain [TransitionType] to [TransitionDefinition] */
     fun getDefinitionForType(type: TransitionType): TransitionDefinition {
         val defId = when (type) {
-            TransitionType.NONE, TransitionType.DISSOLVE, TransitionType.FADE -> BuiltinTransitions.CROSS_DISSOLVE_ID
+            // NONE never reaches the renderer; the id is only a total mapping.
+            TransitionType.NONE, TransitionType.DISSOLVE -> BuiltinTransitions.CROSS_DISSOLVE_ID
+            TransitionType.FADE -> BuiltinTransitions.FADE_ID
             TransitionType.ZOOM_IN -> BuiltinTransitions.ZOOM_ID
             TransitionType.ZOOM_OUT -> BuiltinTransitions.ZOOM_OUT_ID
             TransitionType.SLIDE_LEFT -> BuiltinTransitions.SLIDE_LEFT_ID
             TransitionType.SLIDE_RIGHT -> BuiltinTransitions.SLIDE_RIGHT_ID
             TransitionType.PUSH_UP -> BuiltinTransitions.PUSH_UP_ID
-            TransitionType.WIPE -> BuiltinTransitions.WIPE_ID
+            TransitionType.WIPE, TransitionType.WIPE_RIGHT -> BuiltinTransitions.WIPE_ID
+            TransitionType.RADIAL_WIPE -> BuiltinTransitions.RADIAL_WIPE_ID
             TransitionType.FLASH -> BuiltinTransitions.FLASH_ID
             TransitionType.GLITCH -> BuiltinTransitions.GLITCH_ID
             TransitionType.GLITCH_WIPE -> BuiltinTransitions.GLITCH_WIPE_ID
@@ -64,14 +67,6 @@ object TransitionAppBridge {
         val endMs = (cutPoint + halfDur).coerceAtMost(clipB.timelineStartMs + clipB.durationMs)
 
         val def = getDefinitionForType(transition.type)
-        val params = mutableMapOf<String, ParamValue>()
-
-        when (transition.type) {
-            TransitionType.DISSOLVE -> params["softness"] = ParamValue.NormalizedValue(0.1f)
-            TransitionType.ZOOM_IN -> params["zoomAmount"] = ParamValue.FloatValue(1.6f)
-            TransitionType.WIPE -> params["feather"] = ParamValue.NormalizedValue(0.05f)
-            else -> {}
-        }
 
         return TransitionInstance(
             instanceId = transition.id,
@@ -82,9 +77,27 @@ object TransitionAppBridge {
             endMs = endMs,
             alignment = TransitionAlignment.CENTERED,
             easing = easing,
-            parameters = params,
+            parameters = parametersFor(transition.type),
             enabled = true
         )
+    }
+
+    /**
+     * Shader overrides for a domain type. Wipe Right reuses the wipe shader with a
+     * reversed direction so it is a real right-edge wipe, not a second copy of glitch.
+     */
+    fun parametersFor(type: TransitionType): Map<String, ParamValue> = when (type) {
+        TransitionType.DISSOLVE -> mapOf("softness" to ParamValue.NormalizedValue(0.1f))
+        TransitionType.ZOOM_IN -> mapOf("zoomAmount" to ParamValue.FloatValue(1.6f))
+        TransitionType.WIPE -> mapOf(
+            "feather" to ParamValue.NormalizedValue(0.05f),
+            "direction" to ParamValue.Vec2Value(listOf(1f, 0f))
+        )
+        TransitionType.WIPE_RIGHT -> mapOf(
+            "feather" to ParamValue.NormalizedValue(0.05f),
+            "direction" to ParamValue.Vec2Value(listOf(-1f, 0f))
+        )
+        else -> emptyMap()
     }
 
     /** Create a new standalone TransitionEngine instance for a GL Context */

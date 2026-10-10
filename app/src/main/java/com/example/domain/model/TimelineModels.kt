@@ -1131,11 +1131,13 @@ enum class TransitionType(val displayName: String) {
   BLUR("Blur Zoom"),
   FLASH("White Flash"),
   GLITCH("Glitch Cut"),
-  WIPE("Wipe Curtain"),
+  WIPE("Wipe Left"),
   WHIP_PAN("Whip Pan"),
   ZOOM_BLUR("Zoom Blur"),
   GLITCH_WIPE("Glitch Wipe"),
-  LIGHT_LEAK("Light Leak")
+  LIGHT_LEAK("Light Leak"),
+  WIPE_RIGHT("Wipe Right"),
+  RADIAL_WIPE("Radial Wipe")
 }
 
 data class Transition(

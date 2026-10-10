@@ -185,7 +185,13 @@ void main() {
     float p = clamp(uProgress, 0.0, 1.0);
     float feather = max(u_feather, 0.001);
     float pp = p * (1.0 + 2.0 * feather) - feather;
-    float edge = smoothstep(pp - feather, pp + feather, vUv.x);
+    float axis = vUv.x;
+    if (abs(uDirection.y) > abs(uDirection.x)) {
+        axis = uDirection.y < 0.0 ? (1.0 - vUv.y) : vUv.y;
+    } else if (uDirection.x < 0.0) {
+        axis = 1.0 - vUv.x;
+    }
+    float edge = smoothstep(pp - feather, pp + feather, axis);
     vec4 a = texture(uTextureA, vUv);
     vec4 b = texture(uTextureB, vUv);
     vec4 c = mix(b, a, edge);
@@ -596,7 +602,9 @@ void main() {
         parameters = listOf(
             TransitionParameterDefinition("feather", "Feather", ParamType.NORMALIZED,
                 ParamValue.NormalizedValue(0.05f),
-                min = ParamValue.NormalizedValue(0.0f), max = ParamValue.NormalizedValue(0.2f))),
+                min = ParamValue.NormalizedValue(0.0f), max = ParamValue.NormalizedValue(0.2f)),
+            TransitionParameterDefinition("direction", "Direction", ParamType.VEC2,
+                ParamValue.Vec2Value(listOf(1f, 0f)))),
         shaders = mapOf("main" to ShaderSource("main", WIPE_FRAG)),
         graph = TransitionRenderGraphSpec.singlePass("main"),
         defaultDurationMs = 700,

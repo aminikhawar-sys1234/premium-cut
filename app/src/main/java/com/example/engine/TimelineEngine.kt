@@ -6,6 +6,7 @@ import com.example.engine.history.TimelineAction
 import com.example.engine.history.TimelineActionManager
 import com.example.engine.history.TimelineActionType
 import com.example.engine.timeline.ClipTrimMath
+import com.example.engine.timeline.TransitionDurationLimits
 import com.example.engine.timeline.ClipView
 import com.example.engine.timeline.TimelineSplitEngine
 import com.example.engine.timeline.clipView
@@ -4371,7 +4372,8 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
       val current = _timeline.value.transitions.toMutableList()
       current.removeAll { it.clipIndexBefore == clipIndexBefore }
       if (type != TransitionType.NONE) {
-        current.add(Transition(clipIndexBefore = clipIndexBefore, type = type, durationMs = durationMs))
+        val clamped = clampTransitionDuration(clipIndexBefore, durationMs)
+        current.add(Transition(clipIndexBefore = clipIndexBefore, type = type, durationMs = clamped))
       }
       _timeline.value = _timeline.value.copy(transitions = current)
       _selectedTransitionCutIndex.value = clipIndexBefore
@@ -4401,7 +4403,8 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
       val list = mutableListOf<Transition>()
       if (type != TransitionType.NONE) {
         for (i in 0 until count - 1) {
-          list.add(Transition(clipIndexBefore = i, type = type, durationMs = durationMs))
+          val clamped = clampTransitionDuration(i, durationMs)
+          list.add(Transition(clipIndexBefore = i, type = type, durationMs = clamped))
         }
       }
       _timeline.value = _timeline.value.copy(transitions = list)
@@ -4411,12 +4414,26 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   fun setTransitionDuration(clipIndexBefore: Int, durationMs: Long) {
     withStateLock {
       val existing = _timeline.value.transitions.find { it.clipIndexBefore == clipIndexBefore } ?: return
-      recordHistory()
+      val clamped = clampTransitionDuration(clipIndexBefore, durationMs)
+      if (existing.durationMs == clamped) return
+      recordHistoryCoalesced("transition-duration-$clipIndexBefore")
       val updated = _timeline.value.transitions.map {
-        if (it.clipIndexBefore == clipIndexBefore) it.copy(durationMs = durationMs) else it
+        if (it.clipIndexBefore == clipIndexBefore) it.copy(durationMs = clamped) else it
       }
       _timeline.value = _timeline.value.copy(transitions = updated)
     }
+  }
+
+  private fun clampTransitionDuration(clipIndexBefore: Int, durationMs: Long): Long {
+    val clips = _timeline.value.videoClips
+    if (clipIndexBefore < 0 || clipIndexBefore >= clips.size - 1) {
+      return durationMs.coerceIn(TransitionDurationLimits.MIN_MS, TransitionDurationLimits.UI_MAX_MS)
+    }
+    return TransitionDurationLimits.clamp(
+      durationMs,
+      clips[clipIndexBefore].durationMs,
+      clips[clipIndexBefore + 1].durationMs
+    )
   }
 
   fun addTransitionSoundEffect(cutIndex: Int, soundName: String = "Cinematic Whoosh") {
