@@ -9,8 +9,8 @@ import com.example.domain.model.VideoClip
 import com.example.domain.model.effectiveAdjustments
 
 /**
- * Builds the live-preview Media3 look for Filters tools.
- * Same ColorGradingGlEffect the export pipeline uses — clip filter wins, else timeline filter.
+ * Builds the live-preview Media3 look for Filters tools and Effects tools.
+ * Color grading matches export; catalog `vfx:` keys are appended via [PreviewVfxEffects].
  */
 object PreviewFilterEffects {
 
@@ -21,10 +21,11 @@ object PreviewFilterEffects {
     Media3EffectPipeline.buildRealtimePreviewEffects(
       adjustments = clip.effectiveAdjustments(timeline),
       filterSettings = effectiveFilter(clip, timeline)
-    )
+    ) + PreviewVfxEffects.effectsFor(clip)
 
   fun signature(clip: VideoClip?, timeline: Timeline): String =
-    signature(clip.effectiveAdjustments(timeline), effectiveFilter(clip, timeline))
+    signature(clip.effectiveAdjustments(timeline), effectiveFilter(clip, timeline)) +
+      "|" + PreviewVfxEffects.signature(clip)
 
   fun signature(adjustments: VideoAdjustments, filter: FilterSettings): String {
     return buildString {

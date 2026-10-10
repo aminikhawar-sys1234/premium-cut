@@ -496,18 +496,18 @@ fun VolumeToolPanel(
 @Composable
 fun EffectsToolPanel(
   viewModel: StudioViewModel,
-  modifier: Modifier = Modifier
+  modifier: Modifier = Modifier,
+  category: com.example.engine.effects.registry.EffectCategory =
+    com.example.engine.effects.registry.EffectsAssetRegistry.populatedCategories()
+      .firstOrNull()
+      ?: com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS
 ) {
   com.example.ui.components.effects.EffectsCategoryPanel(
-    category = com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS,
+    category = category,
     viewModel = viewModel,
     onClose = { viewModel.setActiveToolbarTab(null) },
-    onApply = { effect ->
-      viewModel.applyCatalogEffect(effect, com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS)
-    },
-    onIntensity = { effect, amount ->
-      viewModel.applyCatalogEffect(effect, com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS, amount)
-    },
+    onApply = { effect -> viewModel.applyCatalogEffect(effect, category) },
+    onIntensity = { effect, amount -> viewModel.applyCatalogEffect(effect, category, amount) },
     modifier = modifier
   )
 }

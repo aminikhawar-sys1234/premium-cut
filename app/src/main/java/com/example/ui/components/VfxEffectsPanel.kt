@@ -21,12 +21,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.engine.media.VideoThumbnailManager
 import com.example.engine.vfx.VfxEffectsHost
 import com.example.ui.StudioViewModel
+import com.example.ui.components.effects.EffectLiveSwatch
 import com.example.ui.theme.SkyBlue
 import com.example.ui.theme.StudioSurface
 import com.example.ui.theme.StudioSurfaceVariant
@@ -48,11 +51,32 @@ fun VfxEffectsPanel(
   modifier: Modifier = Modifier,
   onClose: () -> Unit = {}
 ) {
+  val context = LocalContext.current
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
   val clip = remember(timeline) { viewModel.getSelectedVideoClip() }
   val clipId = clip?.id
   val json = clip?.vfxStackJson
   val stack = remember(json) { VfxEffectsHost.decode(json) }
+  val previewUri = clip?.uri.orEmpty()
+  val previewStartMs = clip?.sourceStartMs ?: 0L
+  var baseThumbnail by remember(previewUri, previewStartMs) {
+    val key = VideoThumbnailManager.makeKey(previewUri, previewStartMs, 96, 96)
+    mutableStateOf(VideoThumbnailManager.getCachedThumbnail(key))
+  }
+  LaunchedEffect(previewUri, previewStartMs) {
+    if (previewUri.isNotBlank() && baseThumbnail == null) {
+      runCatching {
+        VideoThumbnailManager.requestThumbnail(
+          context = context,
+          uri = previewUri,
+          sourceTimeMs = previewStartMs,
+          targetWidth = 96,
+          targetHeight = 96,
+          isVideo = true
+        ) { bmp -> baseThumbnail = bmp }
+      }
+    }
+  }
 
   var showCatalog by remember(clipId) { mutableStateOf(false) }
   var category by remember { mutableStateOf<EffectCategory?>(null) }
@@ -107,7 +131,7 @@ fun VfxEffectsPanel(
         }
         active?.let { c ->
           VfxEffectsHost.byCategory(c).forEach { def ->
-            Column(
+            Row(
               Modifier
                 .fillMaxWidth()
                 .padding(bottom = 3.dp)
@@ -119,11 +143,20 @@ fun VfxEffectsPanel(
                   showCatalog = false
                 }
                 .padding(horizontal = 10.dp, vertical = 8.dp)
-                .testTag("vfx_catalog_${def.id}")
+                .testTag("vfx_catalog_${def.id}"),
+              verticalAlignment = Alignment.CenterVertically
             ) {
-              Text(def.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
-              if (def.description.isNotBlank()) {
-                Text(def.description, color = Color.White.copy(alpha = 0.55f), fontSize = 10.sp, maxLines = 2)
+              EffectLiveSwatch(
+                shaderKey = "vfx:${def.id}",
+                baseBitmap = baseThumbnail,
+                modifier = Modifier.size(40.dp).clip(RoundedCornerShape(6.dp))
+              )
+              Spacer(Modifier.width(10.dp))
+              Column(Modifier.weight(1f)) {
+                Text(def.name, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium)
+                if (def.description.isNotBlank()) {
+                  Text(def.description, color = Color.White.copy(alpha = 0.55f), fontSize = 10.sp, maxLines = 2)
+                }
               }
             }
           }
