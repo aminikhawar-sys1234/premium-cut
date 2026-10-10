@@ -138,15 +138,20 @@ class ProductionEffectsTest {
 
   @Test
   fun liveThumbnailsProcessTheSourceFrameNotADummyScene() {
-    val src = IntArray(16 * 16) { i ->
-      val x = i % 16
-      val y = i / 16
-      (0xFF shl 24) or ((x * 16) shl 16) or ((y * 16) shl 8) or 80
+    val w = 32
+    val h = 24
+    val src = IntArray(w * h) { i ->
+      val x = i % w
+      val y = i / w
+      val r = (x * 9 + if ((x + y) % 3 == 0) 90 else 10) and 0xFF
+      val g = (y * 11 + if (x % 2 == 0) 160 else 30) and 0xFF
+      val b = ((x xor y) * 13 + 40) and 0xFF
+      (0xFF shl 24) or (r shl 16) or (g shl 8) or b
     }
-    val unprocessed = EffectThumbnailRaster.apply(null, src, 16, 16)
+    val unprocessed = EffectThumbnailRaster.apply(null, src, w, h)
     assertEquals(src.toList(), unprocessed.toList())
     ProductionEffectCatalog.effects.forEach { effect ->
-      val out = EffectThumbnailRaster.apply(effect.shaderKey, src, 16, 16)
+      val out = EffectThumbnailRaster.apply(effect.shaderKey, src, w, h)
       val changed = out.indices.count { out[it] != src[it] }
       assertTrue("${effect.id} live thumb changed $changed pixels", changed > 2)
     }
