@@ -2047,6 +2047,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           clips += TextClip(
             id = UUID.randomUUID().toString(), text = clip.displayText,
             timelineStartMs = startMs, durationMs = durMs, words = wordTimings,
+            subtitleStyle = "Classic",
           )
           ids += clip.words.mapNotNull { it.speakerId }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
         }
@@ -2168,7 +2169,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     text = clip.displayText,
                     timelineStartMs = startMs,
                     durationMs = durMs,
-                    words = wordTimings
+                    words = wordTimings,
+                    subtitleStyle = "Classic"
                   )
                 }
                 val currentList = timelineEngine.timeline.value.textClips.toMutableList()
@@ -2222,7 +2224,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         text = text,
         timelineStartMs = startMs,
         durationMs = durationMs,
-        words = wordTimings
+        words = wordTimings,
+        subtitleStyle = "Classic"
       )
     }
     val current = timelineEngine.timeline.value.textClips.toMutableList()
