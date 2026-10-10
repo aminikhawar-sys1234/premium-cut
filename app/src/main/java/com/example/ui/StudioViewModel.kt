@@ -774,7 +774,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       var lastUs = Long.MIN_VALUE
       var lastClip = ""
       var lastCat = TrackingCategory.ATTACH
-      while (kotlinx.coroutines.isActive) {
+      while (isActive) {
         if (_activeToolbarTab.value != EditorToolbarTab.MOTION_TRACKING) break
         val state = _motionTrackingState.value
         if (state.isTracking) {

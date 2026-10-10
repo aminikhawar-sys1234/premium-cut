@@ -1083,7 +1083,8 @@ fun EditorScreen(
                   )
                   TextToolCategory.ADD_TEXT -> AddTextPanel(
                     viewModel = viewModel,
-                    onClose = { activeTextToolModal = null }
+                    onClose = { activeTextToolModal = null },
+                    onOpenPainting = { showDrawingDialog = true }
                   )
                   TextToolCategory.TEXT_TEMPLATES -> TextTemplatesBrowserPanel(
                     viewModel = viewModel,
@@ -1199,7 +1200,11 @@ fun EditorScreen(
               activeTab == EditorToolbarTab.TEXT -> {
                 AddTextPanel(
                   viewModel = viewModel,
-                  onClose = { viewModel.setActiveToolbarTab(null) }
+                  onClose = { viewModel.setActiveToolbarTab(null) },
+                  onOpenPainting = {
+                    viewModel.setActiveToolbarTab(null)
+                    showDrawingDialog = true
+                  }
                 )
               }
               activeTab == EditorToolbarTab.ELEMENTS -> com.example.ui.components.elements.ElementsToolPanel(
