@@ -41,7 +41,7 @@ fun TextTemplatesBrowserPanel(
   onApplyTemplate: (RegisteredTextTemplate) -> Unit = {},
   modifier: Modifier = Modifier
 ) {
-  val installedTemplates = remember { TextAssetRegistry.getTemplates() }
+  val installedTemplates = TextAssetRegistry.getTemplates()
 
   val panelBackground = Brush.verticalGradient(
     colors = listOf(

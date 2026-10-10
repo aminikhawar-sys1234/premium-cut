@@ -96,15 +96,16 @@ object TextLayerRenderer {
       )
     }
 
-    // 2. Standard Preset In/Out/Loop animations when no keyframes are defined
-    val animType = clip.animationType.lowercase().trim()
+    // 2. Standard Preset In/Out/Loop animations when no keyframes are defined.
+    // animationType wins; animationIn is the fallback so template/caption styles actually play.
+    val animType = TextMotionCatalog.resolveEntrance(clip.animationType, clip.animationIn).lowercase().trim()
     if (animType.isEmpty() || animType == "none" || animType == "static") {
-      animAlpha = clip.opacity
-      animScale = clip.scale
+      animAlpha = 1f
+      animScale = 1f
       visibleText = clip.text
     } else if (progress >= 1.0f && !animType.contains("pulse") && !animType.contains("glow") && !animType.contains("neon") && !animType.contains("shake")) {
-      animAlpha = clip.opacity
-      animScale = clip.scale
+      animAlpha = 1f
+      animScale = 1f
       visibleText = clip.text
     } else {
       when (animType) {
@@ -348,6 +349,42 @@ object TextLayerRenderer {
       if (it == -1 && resolvedWords.isNotEmpty() && relTime >= clip.durationMs) {
         resolvedWords.lastIndex
       } else it
+    }
+
+    if (!TextMotionCatalog.isNone(clip.animationOut) && clip.durationMs > 0L) {
+      val outWindow = clip.animDurationMs.coerceAtLeast(100L)
+      val remaining = (clip.durationMs - relTime).coerceAtLeast(0L)
+      if (remaining < outWindow) {
+        val p = (1f - remaining.toFloat() / outWindow).coerceIn(0f, 1f)
+        val out = clip.animationOut.lowercase().trim()
+        when {
+          out.contains("zoom") -> {
+            animScale *= (1f - 0.45f * p)
+            animAlpha *= (1f - p)
+          }
+          out.contains("slide up") -> {
+            animPosY -= p * 0.18f
+            animAlpha *= (1f - p)
+          }
+          out.contains("slide down") -> {
+            animPosY += p * 0.18f
+            animAlpha *= (1f - p)
+          }
+          out.contains("slide left") -> {
+            animPosX -= p * 0.22f
+            animAlpha *= (1f - p)
+          }
+          out.contains("slide right") -> {
+            animPosX += p * 0.22f
+            animAlpha *= (1f - p)
+          }
+          out.contains("pop") -> {
+            animScale *= (1f + 0.15f * p)
+            animAlpha *= (1f - p)
+          }
+          else -> animAlpha *= (1f - p)
+        }
+      }
     }
 
     return EvaluatedTextState(

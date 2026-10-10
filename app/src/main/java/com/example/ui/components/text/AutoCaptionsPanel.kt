@@ -56,7 +56,7 @@ fun AutoCaptionsPanel(
   var selectedOutputLanguage by remember { mutableStateOf("English") }
 
   // Installed templates from extensible registry — initially EMPTY (zero fake/mock items)
-  val installedTemplates = remember { TextAssetRegistry.getTemplates() }
+  val installedTemplates = TextAssetRegistry.getTemplates()
   var selectedTemplateId by remember { mutableStateOf<String?>(null) }
 
   var isGenerating by remember { mutableStateOf(false) }
