@@ -632,23 +632,10 @@ class AudioExportProcessor(
         val speed = track.speed.coerceIn(0.25f, 4.0f)
         val rateRatio = (srcRate.toDouble() / targetSampleRate.toDouble()) * speed
 
-        val linearGain = track.volume * 10f.pow(track.gainDb / 20f)
-        val fadeInFrames = ((track.fadeInMs / 1000.0) * targetSampleRate).toInt()
-        val fadeOutFrames = ((track.fadeOutMs / 1000.0) * targetSampleRate).toInt()
-
         for (frame in startFrame until endFrame) {
             val relativeFrame = frame - startFrame
             val srcIndex = (relativeFrame * rateRatio).toInt()
-
-            var fadeVol = 1.0f
-            if (fadeInFrames > 0 && relativeFrame < fadeInFrames) {
-                fadeVol *= (relativeFrame.toFloat() / fadeInFrames)
-            }
-            if (fadeOutFrames > 0 && (durationFrames - relativeFrame) < fadeOutFrames) {
-                fadeVol *= ((durationFrames - relativeFrame).toFloat() / fadeOutFrames).coerceIn(0f, 1f)
-            }
-
-            val gain = linearGain * fadeVol
+            val gain = exportMixLinearGain(track, relativeFrame, durationFrames, targetSampleRate)
 
             for (ch in 0 until targetChannels) {
                 // Source index 0 is the clip in-point (decodePcmFromMedia returns exactly the used
@@ -809,6 +796,39 @@ fun audioSourceWindow(track: AudioTrackDescriptor): Pair<Long, Long> {
 
 /** Extra source material decoded past the used window (codec priming / rounding). */
 private const val AUDIO_WINDOW_MARGIN_MS = 250L
+
+/**
+ * Per-sample mix gain for one track.
+ *
+ * Volume keyframes replace the static clip volume (they are the envelope the timeline draws).
+ * Fade in/out is applied on top, linearly, matching the preview player. [AudioTrackDescriptor.gainDb]
+ * is a separate trim. An empty keyframe list keeps the old `volume * fade` result.
+ */
+internal fun exportMixLinearGain(
+    track: AudioTrackDescriptor,
+    relativeFrame: Int,
+    durationFrames: Int,
+    sampleRate: Int
+): Float {
+    if (track.isMuted) return 0f
+    val rate = sampleRate.coerceAtLeast(1)
+    val relativeMs = (relativeFrame.coerceAtLeast(0).toLong() * 1000L) / rate
+    val envelope = com.example.engine.KeyframeInterpolator.interpolateVolume(
+        track.keyframes,
+        relativeMs,
+        track.volume
+    )
+    var fade = 1f
+    val fadeInFrames = ((track.fadeInMs / 1000.0) * rate).toInt()
+    val fadeOutFrames = ((track.fadeOutMs / 1000.0) * rate).toInt()
+    if (fadeInFrames > 0 && relativeFrame < fadeInFrames) {
+        fade *= relativeFrame.toFloat() / fadeInFrames
+    }
+    if (fadeOutFrames > 0 && (durationFrames - relativeFrame) < fadeOutFrames) {
+        fade *= ((durationFrames - relativeFrame).toFloat() / fadeOutFrames).coerceIn(0f, 1f)
+    }
+    return envelope * 10f.pow(track.gainDb / 20f) * fade
+}
 
 /**
  * Grows a PCM byte stream without boxing every sample. The previous

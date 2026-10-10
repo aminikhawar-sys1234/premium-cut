@@ -5,6 +5,7 @@ import com.example.domain.model.Timeline
 import com.example.domain.model.TrackSettings
 import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
+import com.example.engine.composition.canvasPaintAlpha
 import com.example.engine.composition.gpu.NativeLayer
 import com.example.engine.timeline.TimelineEvaluator
 import org.junit.Assert.assertEquals
@@ -86,6 +87,15 @@ class RenderExportPipelineAuditTest {
       trackSettings = mapOf(TrackType.AUDIO to TrackSettings(TrackType.AUDIO, isMuted = true))
     )
     assertTrue(TimelineEvaluator().evaluate(muted, 500L).activeAudios.isEmpty())
+  }
+
+  @Test
+  fun canvasPaintAlphaScalesKeyframeOpacityInsteadOfReplacingIt() {
+    assertEquals(0, canvasPaintAlpha(0f))
+    assertEquals(255, canvasPaintAlpha(1f))
+    assertEquals(0, canvasPaintAlpha(0f, transitionScale = 1f))
+    assertEquals(127, canvasPaintAlpha(1f, transitionScale = 0.5f))
+    assertEquals(63, canvasPaintAlpha(0.5f, effectAlpha = 0.5f))
   }
 
   @Test
