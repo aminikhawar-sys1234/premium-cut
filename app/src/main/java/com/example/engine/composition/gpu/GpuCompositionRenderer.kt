@@ -311,12 +311,12 @@ class GpuCompositionRenderer(private val context: Context) {
 
     val nativeLayers = mutableListOf<NativeLayer>()
 
-    val fxColorMatrix = if (frame.activeEffects.isNotEmpty()) {
-      VideoEffectRenderer.calculateEffectColorMatrix(
-        frame.activeEffects.map { it.clip },
-        frame.timelinePosMs
-      )
-    } else null
+    // Clip-local looks stay on their target. A thermal grade on the main clip must not
+    // recolor a PIP, and keyframed intensity (not the clip's static slider) is what is drawn.
+    val fxColorMatrix = VideoEffectRenderer.calculateEffectColorMatrix(
+      effectClipsFor(frame, frame.activeClip?.id),
+      frame.timelinePosMs
+    )
 
     // 1. Process Main Base Video Clip
     // When both sides of an active transition are supplied (export path), render it with the
@@ -478,7 +478,10 @@ class GpuCompositionRenderer(private val context: Context) {
           viewportWidth = viewportWidth,
           viewportHeight = viewportHeight,
           chromaKey = chromaKey,
-          effectColorMatrix = fxColorMatrix,
+          effectColorMatrix = VideoEffectRenderer.calculateEffectColorMatrix(
+            effectClipsFor(frame, overlay.clip.id),
+            frame.timelinePosMs
+          ),
           timelinePosMs = frame.timelinePosMs
         )
 
@@ -777,12 +780,13 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uEffectParamHandle >= 0) GLES20.glUniform1f(uEffectParamHandle, 0f)
 
     val sortedLayers = layers.filter { it.isVisible && it.textureId > 0 }.sortedBy { it.zOrder }
+    val uPremultiplyHandle = GLES20.glGetUniformLocation(program2D, "uPremultiply")
 
-    for ((idx, layer) in sortedLayers.withIndex()) {
-      if (idx == 0 && (layer.type == NativeLayerType.BASE_VIDEO || layer.type == NativeLayerType.VIDEO)) {
-        GLES20.glDisable(GLES20.GL_BLEND)
-      } else {
-        GLES20.glEnable(GLES20.GL_BLEND)
+    for (layer in sortedLayers) {
+      // Always blend. Disabling blend on the first video layer wrote its RGB even when the
+      // texture alpha was a fade, so a transparent clip still painted at full strength.
+      GLES20.glEnable(GLES20.GL_BLEND)
+      run {
         when (layer.blendMode) {
           NativeBlendMode.ADDITIVE -> GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
           NativeBlendMode.MULTIPLY -> GLES20.glBlendFunc(GLES20.GL_DST_COLOR, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -796,6 +800,11 @@ class GpuCompositionRenderer(private val context: Context) {
             }
           }
         }
+      }
+      if (uPremultiplyHandle >= 0) {
+        val premul = layer.blendMode == NativeBlendMode.PREMULTIPLIED ||
+          layer.type == NativeLayerType.TEXT || layer.type == NativeLayerType.IMAGE_STICKER
+        GLES20.glUniform1f(uPremultiplyHandle, if (premul) 1f else 0f)
       }
 
       val mMatrix = FloatArray(16)
@@ -828,6 +837,15 @@ class GpuCompositionRenderer(private val context: Context) {
 
     GLES20.glDisable(GLES20.GL_BLEND)
   }
+
+  /**
+   * Effects that should hit [targetClipId]: project-wide adjustment layers (no target) plus
+   * looks aimed at that clip. Intensity is the keyframed value from the composed frame.
+   */
+  private fun effectClipsFor(frame: ComposedFrame, targetClipId: String?): List<com.example.domain.model.EffectClip> =
+    frame.activeEffects
+      .filter { it.clip.targetClipId == null || it.clip.targetClipId == targetClipId }
+      .map { it.clip.copy(intensity = it.intensity) }
 
   private fun processMainVideoTo2D(
     frame: ComposedFrame,
@@ -961,7 +979,7 @@ class GpuCompositionRenderer(private val context: Context) {
     }
 
     if (frame.activeEffects.isNotEmpty()) {
-      val motion = VideoEffectRenderer.calculateMotionTransform(frame.activeEffects.map { it.clip }, frame.timelinePosMs)
+      val motion = VideoEffectRenderer.calculateMotionTransform(effectClipsFor(frame, clip?.id), frame.timelinePosMs)
       Matrix.scaleM(mvpMatrix, 0, motion.scaleX, motion.scaleY, 1f)
       Matrix.rotateM(mvpMatrix, 0, -motion.rotation, 0f, 0f, 1f)
       Matrix.translateM(mvpMatrix, 0, motion.translationX * 2f, -motion.translationY * 2f, 0f)
@@ -1582,6 +1600,8 @@ class GpuCompositionRenderer(private val context: Context) {
     GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
     GLES20.glUniformMatrix4fv(uTexMatrixHandle, 1, false, texMatrix, 0)
     GLES20.glUniform1f(uOpacityHandle, opacity)
+    val uPremultiplyHandle = GLES20.glGetUniformLocation(program, "uPremultiply")
+    if (uPremultiplyHandle >= 0) GLES20.glUniform1f(uPremultiplyHandle, 0f)
     if (uBlurHandle >= 0) GLES20.glUniform1f(uBlurHandle, blur)
     if (uEffectParamHandle >= 0) GLES20.glUniform1f(uEffectParamHandle, effectParam)
     val uMotionVecHandle = GLES20.glGetUniformLocation(program, "uMotionVec")

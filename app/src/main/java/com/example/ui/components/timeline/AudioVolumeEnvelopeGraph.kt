@@ -175,7 +175,7 @@ fun AudioVolumeEnvelopeGraph(
             onClick = {
               val relTime = ((currentPlayheadMs ?: 0L) - audioClip.timelineStartMs)
                 .coerceIn(0L, audioClip.durationMs)
-              val currentVol = KeyframeInterpolator.interpolateVolume(audioClip, relTime)
+              val currentVol = KeyframeInterpolator.interpolateVolume(audioClip.keyframes, relTime, audioClip.volume)
               onAddKeyframe(relTime, currentVol)
             },
             modifier = Modifier

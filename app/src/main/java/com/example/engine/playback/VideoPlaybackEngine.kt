@@ -38,6 +38,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.pow
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -301,8 +302,9 @@ class VideoPlaybackEngine(
         }
         try {
           p.playbackParameters = androidx.media3.common.PlaybackParameters(overlay.speed.coerceAtLeast(0.01f))
-          // Track level mute / solo gate, same mix rule as the export.
-          p.volume = PreviewMixPolicy.clipGain(overlay, currentTimeline, TrackType.OVERLAY)
+          // Track mute / solo plus the volume envelope, same rule as the export mix.
+          val rel = (posMs - overlay.timelineStartMs).coerceAtLeast(0L)
+          p.volume = PreviewMixPolicy.clipGainAt(overlay, currentTimeline, TrackType.OVERLAY, rel)
           val active = posMs >= overlay.timelineStartMs && posMs < overlay.timelineStartMs + overlay.durationMs
           val source = overlay.timelineToSourceMs(posMs)
           if (active && engineController.timelineSyncManager.isPlaying) {
@@ -380,7 +382,12 @@ class VideoPlaybackEngine(
         try {
           p.playbackParameters = androidx.media3.common.PlaybackParameters(audio.speed.coerceAtLeast(0.01f))
           val rel = (posMs - audio.timelineStartMs).coerceAtLeast(0L)
-          var calculatedVol = audio.volume.coerceIn(0f, 2f)
+          // Envelope replaces the static slider; gainDb is the same trim the export mix applies.
+          var calculatedVol = com.example.engine.KeyframeInterpolator.interpolateVolume(
+            audio.keyframes, rel, audio.volume
+          )
+          calculatedVol *= 10f.pow(audio.gainDb / 20f)
+          calculatedVol = calculatedVol.coerceIn(0f, 2f)
           if (audio.fadeInMs > 0L && rel < audio.fadeInMs) {
             calculatedVol *= (rel.toFloat() / audio.fadeInMs.toFloat()).coerceIn(0f, 1f)
           }
