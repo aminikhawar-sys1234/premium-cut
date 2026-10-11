@@ -19,8 +19,9 @@ import com.example.domain.model.effectiveAdjustments
  * instance that plays source audio.
  *
  * Value changes (brightness, a different preset, denoise amount, …) update
- * [ColorGradingGlEffect] uniforms in place. The graph is rebuilt only when a node is
- * added or removed (grading on/off, LUT id, catalog VFX).
+ * [ColorGradingGlEffect] uniforms in place. The preview graph always keeps a
+ * resident grading node so turning a look on or off never calls setVideoEffects.
+ * The graph is rebuilt only when LUT id or catalog VFX nodes change.
  */
 @OptIn(UnstableApi::class)
 object PreviewEffectApplyPolicy {
@@ -35,13 +36,14 @@ object PreviewEffectApplyPolicy {
     needsGrading(clip.effectiveAdjustments(timeline), PreviewFilterEffects.effectiveFilter(clip, timeline))
 
   /**
-   * Structural Media3 graph identity. Slider / intensity / colour values are intentionally
-   * omitted — those are published through [ColorGradingGlEffect.publishLive].
+   * Structural Media3 graph identity. The grading node is always present (`G`).
+   * Slider / intensity / colour / filter-preset values are omitted — those are
+   * published through [ColorGradingGlEffect.publishLive].
    */
   fun graphSignature(clip: VideoClip?, timeline: Timeline): String {
     val lut = PreviewFilterEffects.lutLook(clip)
     return buildString {
-      append(if (needsGrading(clip, timeline)) 'G' else '-')
+      append('G')
       append('|')
       append(lut?.first.orEmpty())
       append('|')

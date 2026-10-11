@@ -197,7 +197,9 @@ class VideoFiltersTest {
     val timeline = Timeline(videoClips = listOf(clip))
 
     val noneEffects = PreviewFilterEffects.effectsFor(clip.copy(filter = FilterSettings()), timeline)
-    assertTrue("Original look must not inject a ColorGrading pass", noneEffects.none { it is ColorGradingGlEffect })
+    val noneGrading = noneEffects.filterIsInstance<ColorGradingGlEffect>()
+    assertEquals("Original look keeps a resident identity ColorGrading pass", 1, noneGrading.size)
+    assertTrue(noneGrading.single().isIdentityLook())
 
     val fourK = PreviewFilterEffects.effectsFor(clip, timeline)
     assertTrue(

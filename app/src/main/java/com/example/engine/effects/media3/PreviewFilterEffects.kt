@@ -15,9 +15,10 @@ import com.example.engine.color.ColorEngineHost
 /**
  * Builds the live-preview Media3 look for Filters / Adjust / Video Quality, LUT and catalog VFX.
  *
- * Color and spatial parameters share [ColorGradingGlEffect]. Slider ticks publish a
- * [ColorGradingSnapshot] onto the already-bound effect; [media3GraphSignature] stays
- * stable so [androidx.media3.exoplayer.ExoPlayer.setVideoEffects] is not called again
+ * Color and spatial parameters share one resident [ColorGradingGlEffect]. Slider
+ * ticks and preset changes publish a [ColorGradingSnapshot] onto that effect;
+ * [media3GraphSignature] stays stable so
+ * [androidx.media3.exoplayer.ExoPlayer.setVideoEffects] is not called again
  * (that rebuild dropped the TextureView, produced black frames and stopped source audio).
  *
  * Thumbnails and still images still use [PreviewDisplayFilter] / ColorFilterGenerator.

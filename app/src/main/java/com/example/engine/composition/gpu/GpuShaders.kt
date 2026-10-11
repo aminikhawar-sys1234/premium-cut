@@ -170,6 +170,12 @@ object GpuShaders {
           color = texture2D(uTexture, clampedCoord);
         }
 
+        // Video / OES frames often arrive with A=0. Keep chroma-key free to
+        // rewrite alpha; otherwise force opaque so filters cannot export black.
+        if (uPremultiply < 0.5 && uChromaEnabled == 0) {
+          color.a = 1.0;
+        }
+
         // Clarity / Super Clarity: mid-tone weighted local contrast (wide-radius unsharp mask)
         if (uClarity > 0.01) {
           vec2 cr = uTexelSize * 3.0;
@@ -334,7 +340,9 @@ object GpuShaders {
         
         // 7. Color Matrix Filter
         if (uUseColorMatrix == 1) {
+          float srcA = color.a;
           color = (uColorMatrix * color) + uColorOffset;
+          color.a = srcA;
         }
         
         // 8. Vignette

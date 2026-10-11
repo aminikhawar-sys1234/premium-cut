@@ -32,7 +32,11 @@ class Media3EffectPipelineTest {
       adjustments = VideoAdjustments(),
       filterSettings = FilterSettings(type = FilterType.NONE)
     )
-    assertTrue("Default adjustments without filter should be no-op", defaultEffect.isNoOp(1920, 1080))
+    assertFalse(
+      "Media3 must keep the resident grading program so publishLive can take effect",
+      defaultEffect.isNoOp(1920, 1080)
+    )
+    assertTrue("Default adjustments without filter are an identity look", defaultEffect.isIdentityLook())
   }
 
   @Test
@@ -279,7 +283,9 @@ class Media3EffectPipelineTest {
     )
     assertNotNull(PreviewDisplayFilter.matrixFor(clip, timeline))
     val reset = PreviewFilterEffects.effectsFor(clip.copy(filter = FilterSettings()), Timeline())
-    assertTrue(reset.none { it is ColorGradingGlEffect })
+    val resetGrading = reset.filterIsInstance<ColorGradingGlEffect>()
+    assertEquals(1, resetGrading.size)
+    assertTrue(resetGrading.single().isIdentityLook())
     assertNull(PreviewDisplayFilter.matrixFor(clip.copy(filter = FilterSettings()), Timeline()))
   }
 

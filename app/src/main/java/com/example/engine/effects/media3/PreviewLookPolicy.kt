@@ -9,7 +9,8 @@ import kotlin.math.abs
 
 /**
  * Latest look the Filters / Adjust / Video Quality sliders have published.
- * The TextureView paints this immediately; the timeline is updated later (latest-wins).
+ * The resident ColorGrading shader reads this immediately; the timeline is
+ * updated later (latest-wins).
  */
 data class LivePreviewLook(
   val clipId: String?,

@@ -472,8 +472,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   /**
-   * Publishes the latest Filters / Adjust / Video Quality values to the live TextureView
-   * immediately and persists them latest-wins. Does not rebuild ExoPlayer or seek.
+   * Publishes the latest Filters / Adjust / Video Quality values onto the
+   * resident preview grading shader and persists them latest-wins. Does not
+   * rebuild ExoPlayer, destroy the decoder, or seek.
    */
   fun publishLiveLook(clipId: String?, adjustments: VideoAdjustments, filter: FilterSettings) {
     val look = LivePreviewLook(clipId, adjustments, filter)

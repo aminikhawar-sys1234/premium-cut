@@ -38,8 +38,8 @@ class PreviewLookAndRestoreTest {
     val none = clip.copy(filter = FilterSettings())
     val bw = clip.copy(filter = FilterSettings(type = FilterType.BLACK_AND_WHITE, intensity = 0.8f))
 
-    assertNotEquals(
-      "Turning a look on must add the Media3 grading node once",
+    assertEquals(
+      "Turning a look on must reuse the resident Media3 grading node",
       PreviewFilterEffects.media3GraphSignature(none, timeline),
       PreviewFilterEffects.media3GraphSignature(clip, timeline)
     )
@@ -49,7 +49,9 @@ class PreviewLookAndRestoreTest {
       PreviewFilterEffects.media3GraphSignature(bw, timeline)
     )
     assertTrue(PreviewFilterEffects.effectsFor(clip, timeline).any { it is ColorGradingGlEffect })
-    assertTrue(PreviewFilterEffects.effectsFor(none, timeline).none { it is ColorGradingGlEffect })
+    val noneEffects = PreviewFilterEffects.effectsFor(none, timeline).filterIsInstance<ColorGradingGlEffect>()
+    assertEquals(1, noneEffects.size)
+    assertTrue(noneEffects.single().isIdentityLook())
     assertNotNull(PreviewDisplayFilter.matrixFor(clip, timeline))
     assertNull(PreviewDisplayFilter.matrixFor(none, timeline))
     assertNotEquals(
@@ -96,7 +98,9 @@ class PreviewLookAndRestoreTest {
     val timeline = Timeline(videoClips = listOf(clip))
     val effects = PreviewFilterEffects.effectsFor(clip, timeline)
     assertTrue(effects.any { it is ColorGradingGlEffect })
-    assertFalse((effects.single { it is ColorGradingGlEffect } as ColorGradingGlEffect).isNoOp(1920, 1080))
+    val grading = effects.single { it is ColorGradingGlEffect } as ColorGradingGlEffect
+    assertFalse(grading.isNoOp(1920, 1080))
+    assertFalse(grading.isIdentityLook())
     assertNotEquals(
       PreviewFilterEffects.media3Signature(clip, timeline),
       PreviewFilterEffects.media3Signature(clip.copy(adjustments = VideoAdjustments()), timeline)

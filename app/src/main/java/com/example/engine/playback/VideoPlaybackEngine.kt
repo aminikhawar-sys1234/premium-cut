@@ -213,14 +213,26 @@ class VideoPlaybackEngine(
    */
   /**
    * Updates the in-memory timeline look without reloading decoders or seeking.
-   * Color-matrix sliders paint the TextureView separately; spatial / LUT / VFX
-   * Media3 work is latest-wins coalesced so slider ticks cannot ANR.
+   * Filter / adjust / quality values publish onto the resident ColorGrading
+   * node. LUT / VFX graph changes are latest-wins coalesced so slider ticks
+   * cannot ANR or call setVideoEffects.
    */
   fun replaceTimelineLooks(timeline: Timeline) {
     currentTimeline = timeline
     _activeClip.value = findClipAt(currentPosMs)
     publishLiveGrading(_activeClip.value)
-    scheduleSpatialLook()
+    val graphSig = PreviewFilterEffects.media3GraphSignature(_activeClip.value, currentTimeline)
+    when {
+      boundMainGrading == null -> applyActiveLookToPlayers(force = true)
+      PreviewEffectApplyPolicy.shouldRebuildGraph(lastMedia3GraphSignature, graphSig, force = false) ->
+        scheduleSpatialLook()
+      else -> requestPausedFrameRefresh()
+    }
+  }
+
+  private fun requestPausedFrameRefresh() {
+    if (engineController.timelineSyncManager.isPlaying) return
+    presentCurrentFrame(rebindSurface = false)
   }
 
   private fun scheduleSpatialLook(preferClipId: String? = null) {
@@ -252,7 +264,9 @@ class VideoPlaybackEngine(
     lastPreviewFilterSignature = PreviewFilterEffects.signature(clip, currentTimeline)
     publishLiveGrading(clip)
 
-    val graphChanged = PreviewEffectApplyPolicy.shouldRebuildGraph(lastMedia3GraphSignature, graphSig, force)
+    val missingResidentGrading = boundMainGrading == null
+    val graphChanged = PreviewEffectApplyPolicy.shouldRebuildGraph(lastMedia3GraphSignature, graphSig, force) ||
+      missingResidentGrading
     if (!graphChanged) {
       lastMedia3Signature = valueSig
       applyOverlayLooks(force)
@@ -458,7 +472,7 @@ class VideoPlaybackEngine(
         PreviewFilterEffects.effectiveFilter(overlay, currentTimeline)
       )
       boundOverlayGrading[overlay.id]?.publishLive(snapshot)
-      if (!force && lastOverlayGraphSignatures[overlay.id] == graphSig) {
+      if (!force && lastOverlayGraphSignatures[overlay.id] == graphSig && boundOverlayGrading[overlay.id] != null) {
         lastOverlayFilterSignatures[overlay.id] = valueSig
         continue
       }
