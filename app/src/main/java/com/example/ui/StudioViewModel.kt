@@ -1336,6 +1336,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         durationMs = clipDurationMs,
         posX = 0f,
         posY = 0f,
+        scale = 1f,
+        rotation = 0f,
         keyframes = emptyList(),
         trackBindJson = bindJson
       )
