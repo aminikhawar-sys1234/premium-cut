@@ -126,6 +126,15 @@ object TrackingCoordinateSpace {
         )
         return (overlayWidth / 2f) * (1f + ndcX) to (overlayHeight / 2f) * (1f + ndcY)
     }
+
+    /**
+     * GPU export translation for a layer whose pose was already composed by
+     * [OverlayTrackCodec] / [com.example.engine.KeyframeInterpolator].
+     * Preview and the canvas compositor use [composedPosX]/[composedPosY] once;
+     * adding cropOffset/user rotation again would double-apply the residual.
+     */
+    fun exportTranslationNdc(composedPosX: Float, composedPosY: Float): Pair<Float, Float> =
+        composedPosX to -composedPosY
 }
 
 object OverlayTrackCodec {
@@ -333,6 +342,36 @@ object OverlayTrackCodec {
     fun applyToMask(mask: MaskSettings, clipMotionTrackJson: String?, sourceTimeUs: Long): MaskSettings {
         val encodedTrack = decode(mask.trackBindJson)?.encodedTrack ?: clipMotionTrackJson
         return MotionTrackCodec.applyToMask(mask, encodedTrack, sourceTimeUs)
+    }
+
+    /**
+     * Replaces the embedded [TrackingResult] on an existing binding while keeping
+     * the user's residual offset / scale / rotation. Used after a full-clip analyze
+     * so a layer attached from a live lock follows the completed path.
+     */
+    fun rebindHost(
+        encoded: String?,
+        result: TrackingResult,
+        host: VideoClip
+    ): String? {
+        val binding = decode(encoded) ?: return encoded
+        val sameHost = binding.hostClipId == host.id ||
+            (binding.hostUri.isNotBlank() && binding.hostUri == host.uri)
+        if (!sameHost) return encoded
+        return encode(
+            fromHost(
+                result = result,
+                host = host,
+                followPosition = binding.followPosition,
+                followScale = binding.followScale,
+                followRotation = binding.followRotation,
+                offsetX = binding.offsetX,
+                offsetY = binding.offsetY,
+                userScale = binding.userScale,
+                userRotation = binding.userRotation,
+                canvasAspect = binding.canvasAspect
+            )
+        )
     }
 
     private fun parse(encoded: String): OverlayTrackBinding? = try {

@@ -599,12 +599,20 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     } else if (previous == EditorToolbarTab.MOTION_TRACKING || previous == EditorToolbarTab.AR_EFFECTS) {
       stopLiveMotionDetection()
     }
+    if (previous == EditorToolbarTab.STICKERS &&
+      tab != EditorToolbarTab.STICKERS &&
+      _motionTrackingState.value.pendingAttachment == AttachmentTarget.STICKER
+    ) {
+      _motionTrackingState.update { it.copy(pendingAttachment = null) }
+    }
   }
 
   // Motion Tracking Engine & UI State
   val motionTrackerEngine = MotionTrackerEngine()
   private val _motionTrackingState = MutableStateFlow(MotionTrackingUiState())
   val motionTrackingState: StateFlow<MotionTrackingUiState> = _motionTrackingState.asStateFlow()
+  private val _pendingTrackedOverlayPick = MutableStateFlow(false)
+  val pendingTrackedOverlayPick: StateFlow<Boolean> = _pendingTrackedOverlayPick.asStateFlow()
   private var trackingJob: Job? = null
   private var liveDetectJob: Job? = null
   private var detectorsWarmed = false
@@ -612,6 +620,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun resetMotionTracking() {
     trackingJob?.cancel()
     trackingJob = null
+    _pendingTrackedOverlayPick.value = false
     val clip = getSelectedVideoClip()
     if (clip != null) {
       MotionTrackingCache.invalidateClip(clip.id)
@@ -751,6 +760,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
         if (result.keyframes.isNotEmpty()) {
           timelineEngine.setClipMotionTrack(activeClip.id, MotionTrackCodec.encode(result))
+          refreshBoundLayerTracks(activeClip, result)
         }
 
         val session = result.keyframes.lastOrNull()?.let { last ->
@@ -1126,20 +1136,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
               keyframes = emptyList()
             )
           )
-          _motionTrackingState.update { it.copy(statusMessage = "Bound selected sticker to tracked target") }
+          _motionTrackingState.update {
+            it.copy(pendingAttachment = null, statusMessage = "Bound selected sticker to tracked target")
+          }
         } else {
-          val newSticker = timelineEngine.addStickerClip(emojiOrAsset = "✨")
-          timelineEngine.updateStickerClip(
-            newSticker.copy(
-              timelineStartMs = layerStartMs,
-              durationMs = clipDurationMs,
-              posX = 0f,
-              posY = 0f,
-              keyframes = emptyList(),
-              trackBindJson = bindJson
-            )
-          )
-          _motionTrackingState.update { it.copy(statusMessage = "Attached sticker to tracking path") }
+          requestTrackedStickerLibrary()
         }
       }
       AttachmentTarget.OVERLAY -> {
@@ -1150,7 +1151,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           is SelectedTrackElement.Video ->
             timelineEngine.timeline.value.overlayClips.find { it.id == selected.clipId }
           else -> null
-        } ?: timelineEngine.timeline.value.overlayClips.lastOrNull()
+        }
         if (overlay != null) {
           timelineEngine.updateOverlayClip(
             overlay.copy(
@@ -1160,9 +1161,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
               keyframes = emptyList()
             )
           )
-          _motionTrackingState.update { it.copy(statusMessage = "Attached overlay layer to tracking path") }
+          _motionTrackingState.update {
+            it.copy(pendingAttachment = null, statusMessage = "Attached overlay layer to tracking path")
+          }
         } else {
-          _motionTrackingState.update { it.copy(statusMessage = "Add an overlay clip on the timeline, then attach") }
+          requestTrackedOverlayPicker()
         }
       }
       AttachmentTarget.EFFECT_BLUR -> {
@@ -1193,6 +1196,189 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         timelineEngine.updateClipKeyframes(activeClip.id, emptyList())
         _motionTrackingState.update { it.copy(statusMessage = "Attached transform to tracked target") }
       }
+    }
+  }
+
+  fun consumeTrackedOverlayPickRequest() {
+    _pendingTrackedOverlayPick.value = false
+  }
+
+  fun cancelPendingTrackedAttachment() {
+    _pendingTrackedOverlayPick.value = false
+    _motionTrackingState.update { it.copy(pendingAttachment = null) }
+  }
+
+  private fun requestTrackedOverlayPicker() {
+    _motionTrackingState.update {
+      it.copy(
+        pendingAttachment = AttachmentTarget.OVERLAY,
+        statusMessage = "Select an image overlay",
+        errorMessage = null
+      )
+    }
+    _pendingTrackedOverlayPick.value = true
+  }
+
+  private fun requestTrackedStickerLibrary() {
+    _motionTrackingState.update {
+      it.copy(
+        pendingAttachment = AttachmentTarget.STICKER,
+        statusMessage = "Select a sticker",
+        errorMessage = null
+      )
+    }
+    setActiveToolbarTab(EditorToolbarTab.STICKERS)
+  }
+
+  /**
+   * Adds a gallery-picked image/video as a tracked overlay. Returns false when there is
+   * no tracking data or the URI is empty — the caller must not create a placeholder clip.
+   */
+  fun addTrackedOverlayFromPersistedMedia(
+    uri: String,
+    name: String,
+    isVideo: Boolean,
+    durationMs: Long,
+    width: Int,
+    height: Int,
+    rotationDegrees: Int,
+    frameRate: Float,
+    mimeType: String,
+    hasAudio: Boolean
+  ): Boolean {
+    if (uri.isBlank()) {
+      cancelPendingTrackedAttachment()
+      return false
+    }
+    val activeClip = getSelectedVideoClip()
+    val result = activeClip?.let { resolveAttachResult(it) }
+    if (activeClip == null || result == null || result.keyframes.isEmpty()) {
+      cancelPendingTrackedAttachment()
+      _motionTrackingState.update {
+        it.copy(
+          errorMessage = "Detect a face, body, or object first, then attach.",
+          statusMessage = "Detect a face, body, or object first, then attach."
+        )
+      }
+      return false
+    }
+    persistClipMotionTrack(activeClip, result)
+    val settings = _motionTrackingState.value.settings
+    val layerStartMs = activeClip.sourceToTimelineMs(result.startTimestampUs / 1000L)
+    val layerEndMs = activeClip.sourceToTimelineMs(result.endTimestampUs / 1000L)
+    val trackDurationMs = (layerEndMs - layerStartMs).coerceAtLeast(1000L)
+    val layerDuration = if (isVideo && durationMs > 0L) {
+      minOf(durationMs, trackDurationMs).coerceAtLeast(1000L)
+    } else {
+      trackDurationMs
+    }
+    val bindJson = encodeOverlayBinding(
+      result, activeClip, settings.followPosition, settings.followScale, settings.followRotation
+    )
+    timelineEngine.addOverlayClip(
+      uri = uri,
+      name = name,
+      isVideo = isVideo,
+      startTimeMs = layerStartMs,
+      durationMs = layerDuration,
+      scale = 0.45f,
+      posX = 0f,
+      posY = 0f,
+      width = width,
+      height = height,
+      rotationDegrees = rotationDegrees,
+      frameRate = frameRate,
+      mimeType = mimeType,
+      hasAudio = hasAudio
+    )
+    val createdId = (timelineEngine.selectedElement.value as? SelectedTrackElement.Overlay)?.clipId
+    val created = timelineEngine.timeline.value.overlayClips.find { it.id == createdId }
+    if (created != null) {
+      timelineEngine.updateOverlayClip(
+        created.copy(trackBindJson = bindJson, keyframes = emptyList())
+      )
+    }
+    _pendingTrackedOverlayPick.value = false
+    _motionTrackingState.update {
+      it.copy(
+        pendingAttachment = null,
+        activeResult = result,
+        statusMessage = "Attached overlay to tracking path",
+        errorMessage = null
+      )
+    }
+    return true
+  }
+
+  /**
+   * Binds a sticker just added from the library to the pending track.
+   * Returns false when Overlay/Sticker attach is not waiting so the library keeps its normal add.
+   */
+  fun bindPendingTrackedSticker(sticker: StickerClip): Boolean {
+    if (_motionTrackingState.value.pendingAttachment != AttachmentTarget.STICKER) return false
+    val activeClip = getSelectedVideoClip()
+    val result = activeClip?.let { resolveAttachResult(it) }
+    if (activeClip == null || result == null || result.keyframes.isEmpty()) {
+      cancelPendingTrackedAttachment()
+      return false
+    }
+    persistClipMotionTrack(activeClip, result)
+    val settings = _motionTrackingState.value.settings
+    val layerStartMs = activeClip.sourceToTimelineMs(result.startTimestampUs / 1000L)
+    val layerEndMs = activeClip.sourceToTimelineMs(result.endTimestampUs / 1000L)
+    val clipDurationMs = (layerEndMs - layerStartMs).coerceAtLeast(1000L)
+    val bindJson = encodeOverlayBinding(
+      result, activeClip, settings.followPosition, settings.followScale, settings.followRotation
+    )
+    timelineEngine.updateStickerClip(
+      sticker.copy(
+        timelineStartMs = layerStartMs,
+        durationMs = clipDurationMs,
+        posX = 0f,
+        posY = 0f,
+        keyframes = emptyList(),
+        trackBindJson = bindJson
+      )
+    )
+    _motionTrackingState.update {
+      it.copy(
+        pendingAttachment = null,
+        activeResult = result,
+        statusMessage = "Attached sticker to tracking path",
+        errorMessage = null
+      )
+    }
+    setActiveToolbarTab(EditorToolbarTab.MOTION_TRACKING)
+    return true
+  }
+
+  private fun refreshBoundLayerTracks(host: VideoClip, result: TrackingResult) {
+    if (result.keyframes.isEmpty()) return
+    val tl = timelineEngine.timeline.value
+    tl.textClips.forEach { clip ->
+      val next = OverlayTrackCodec.rebindHost(clip.trackBindJson, result, host)
+      if (next != clip.trackBindJson) timelineEngine.updateTextClip(clip.copy(trackBindJson = next))
+    }
+    tl.stickerClips.forEach { clip ->
+      val next = OverlayTrackCodec.rebindHost(clip.trackBindJson, result, host)
+      if (next != clip.trackBindJson) timelineEngine.updateStickerClip(clip.copy(trackBindJson = next))
+    }
+    tl.overlayClips.forEach { clip ->
+      val next = OverlayTrackCodec.rebindHost(clip.trackBindJson, result, host)
+      if (next != clip.trackBindJson) timelineEngine.updateOverlayClip(clip.copy(trackBindJson = next))
+    }
+    tl.effectClips.forEach { clip ->
+      val next = OverlayTrackCodec.rebindHost(clip.trackBindJson, result, host)
+      if (next != clip.trackBindJson) timelineEngine.updateEffectClip(clip.copy(trackBindJson = next))
+    }
+    val liveHost = timelineEngine.timeline.value.videoClips.find { it.id == host.id } ?: host
+    val hostBind = OverlayTrackCodec.rebindHost(liveHost.trackBindJson, result, liveHost)
+    if (hostBind != liveHost.trackBindJson) {
+      timelineEngine.setClipTrackBind(liveHost.id, hostBind)
+    }
+    val maskBind = OverlayTrackCodec.rebindHost(liveHost.mask.trackBindJson, result, liveHost)
+    if (maskBind != liveHost.mask.trackBindJson) {
+      timelineEngine.setClipMask(liveHost.id, liveHost.mask.copy(trackBindJson = maskBind))
     }
   }
 

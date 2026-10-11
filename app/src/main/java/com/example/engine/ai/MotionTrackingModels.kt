@@ -204,7 +204,9 @@ data class MotionTrackingUiState(
     val liveDetections: List<LiveDetection> = emptyList(),
     val selectedLiveId: Int? = null,
     val lockWidth: Float = 0.30f,
-    val lockHeight: Float = 0.30f
+    val lockHeight: Float = 0.30f,
+    /** When set, Overlay opens the gallery picker and Sticker opens the sticker library. */
+    val pendingAttachment: AttachmentTarget? = null
 ) {
     val hasPreviewTrack: Boolean
         get() = (activeResult != null && !activeResult.isEmpty) || liveDetections.isNotEmpty()

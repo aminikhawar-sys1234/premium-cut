@@ -542,7 +542,7 @@ class GpuCompositionRenderer(private val context: Context) {
           val flipX = if (overlay.clip.flipHorizontal) -overlay.clip.cropScale else overlay.clip.cropScale
           val flipY = if (overlay.clip.flipVertical) -overlay.clip.cropScale else overlay.clip.cropScale
 
-          val totalRot = ((ovNaturalRot.toFloat() + overlay.clip.rotationDegrees.toFloat() + overlay.rotation) % 360f + 360f) % 360f
+          val totalRot = ((ovNaturalRot.toFloat() + overlay.rotation) % 360f + 360f) % 360f
           val isTransposed = (totalRot == 90f || totalRot == 270f)
 
           val baseScaleX = ovScreenFitX * overlay.scaleX * 0.5f * flipX
@@ -553,7 +553,11 @@ class GpuCompositionRenderer(private val context: Context) {
 
           val ovMatrix = FloatArray(16)
           Matrix.setIdentityM(ovMatrix, 0)
-          Matrix.translateM(ovMatrix, 0, overlay.clip.cropOffsetX + overlay.posX, -(overlay.clip.cropOffsetY + overlay.posY), 0f)
+          val (ovTx, ovTy) = com.example.engine.ai.TrackingCoordinateSpace.exportTranslationNdc(
+            overlay.posX,
+            overlay.posY
+          )
+          Matrix.translateM(ovMatrix, 0, ovTx, ovTy, 0f)
           Matrix.rotateM(ovMatrix, 0, com.example.engine.export.ExportOrientationPolicy.glRotationDegrees(totalRot), 0f, 0f, 1f)
           Matrix.scaleM(ovMatrix, 0, localScaleX, localScaleY, 1f)
 
