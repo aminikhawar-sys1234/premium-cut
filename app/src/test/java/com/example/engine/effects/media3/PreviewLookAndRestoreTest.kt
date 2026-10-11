@@ -52,13 +52,34 @@ class PreviewLookAndRestoreTest {
   }
 
   @Test
-  fun adjustmentsStillProduceMedia3ColorGrading() {
+  fun colorSlidersPaintDisplayMatrixAndDoNotChangeMedia3Signature() {
     val clip = VideoClip(
       id = "v1",
       name = "v1",
       uri = "file:///v1.mp4",
       durationMs = 4000L,
-      adjustments = VideoAdjustments(brightness = 0.25f, vignette = 0.4f)
+      adjustments = VideoAdjustments(brightness = 0.25f, highlights = 0.3f, whites = 0.2f)
+    )
+    val timeline = Timeline(videoClips = listOf(clip))
+    val effects = PreviewFilterEffects.effectsFor(clip, timeline)
+    assertTrue(effects.none { it is ColorGradingGlEffect })
+    assertEquals(
+      PreviewFilterEffects.media3Signature(clip, timeline),
+      PreviewFilterEffects.media3Signature(clip.copy(adjustments = VideoAdjustments()), timeline)
+    )
+    val matrix = PreviewDisplayFilter.matrixFor(clip, timeline)
+    assertNotNull(matrix)
+    assertFalse(ColorFilterGenerator.isIdentityMatrix(matrix!!))
+  }
+
+  @Test
+  fun spatialAdjustmentsStillProduceMedia3ColorGrading() {
+    val clip = VideoClip(
+      id = "v1",
+      name = "v1",
+      uri = "file:///v1.mp4",
+      durationMs = 4000L,
+      adjustments = VideoAdjustments(vignette = 0.4f, sharpness = 0.5f, clarity = 0.3f)
     )
     val timeline = Timeline(videoClips = listOf(clip))
     val effects = PreviewFilterEffects.effectsFor(clip, timeline)
@@ -68,6 +89,24 @@ class PreviewLookAndRestoreTest {
       PreviewFilterEffects.media3Signature(clip, timeline),
       PreviewFilterEffects.media3Signature(clip.copy(adjustments = VideoAdjustments()), timeline)
     )
+    assertTrue(PreviewLookPolicy.hasSpatialLook(clip.adjustments!!))
+  }
+
+  @Test
+  fun lookOnlyTimelineChangeIgnoresFilterAndAdjustmentEdits() {
+    val base = VideoClip(id = "v1", name = "v1", uri = "file:///v1.mp4", durationMs = 4000L)
+    val prev = Timeline(videoClips = listOf(base))
+    val lookNext = Timeline(
+      videoClips = listOf(
+        base.copy(
+          filter = FilterSettings(type = FilterType.CINEMATIC, intensity = 0.8f),
+          adjustments = VideoAdjustments(brightness = 0.2f, sharpness = 0.4f)
+        )
+      )
+    )
+    assertTrue(PreviewLookPolicy.isLookOnlyChange(prev, lookNext))
+    val trimNext = Timeline(videoClips = listOf(base.copy(durationMs = 2000L)))
+    assertFalse(PreviewLookPolicy.isLookOnlyChange(prev, trimNext))
   }
 
   @Test
@@ -153,6 +192,35 @@ class PreviewLookAndRestoreTest {
     assertEquals(FilterType.NONE, tl.videoClips[0].filter?.type)
     assertEquals(FilterType.WARM, tl.videoClips[1].filter?.type)
     assertEquals(FilterType.NONE, tl.filter.type)
+  }
+
+  @Test
+  fun videoQualityColorControlsReachTheDisplayMatrix() {
+    val quality = VideoAdjustments(autoEnhance = 0.7f, hdrBoost = 0.5f, colorFix = 0.4f, colorCorrect = 0.3f)
+    val clip = VideoClip(id = "v1", name = "v1", uri = "u", durationMs = 3000L, adjustments = quality)
+    val timeline = Timeline(videoClips = listOf(clip))
+    val matrix = PreviewDisplayFilter.matrixFor(clip, timeline)
+    assertNotNull(matrix)
+    assertFalse(ColorFilterGenerator.isIdentityMatrix(matrix!!))
+    assertEquals(
+      PreviewFilterEffects.media3Signature(clip, timeline),
+      PreviewFilterEffects.media3Signature(clip.copy(adjustments = VideoAdjustments()), timeline)
+    )
+  }
+
+  @Test
+  fun applyLookToTimelineWritesClipLocalValues() {
+    val clip = VideoClip(id = "v1", name = "v1", uri = "u", durationMs = 3000L)
+    val timeline = Timeline(videoClips = listOf(clip))
+    val look = LivePreviewLook(
+      clipId = "v1",
+      adjustments = VideoAdjustments(brightness = 0.4f),
+      filter = FilterSettings(type = FilterType.WARM, intensity = 0.6f)
+    )
+    val next = PreviewLookPolicy.applyLookToTimeline(timeline, look)
+    assertEquals(0.4f, next.videoClips.single().adjustments?.brightness ?: 0f, 0.001f)
+    assertEquals(FilterType.WARM, next.videoClips.single().filter?.type)
+    assertTrue(PreviewLookPolicy.isLookOnlyChange(timeline, next))
   }
 
   @Test

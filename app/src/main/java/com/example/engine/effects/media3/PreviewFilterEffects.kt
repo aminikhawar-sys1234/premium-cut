@@ -13,12 +13,16 @@ import com.example.domain.model.effectiveAdjustments
 import com.example.engine.color.ColorEngineHost
 
 /**
- * Builds the live-preview Media3 look for Adjust / Video Quality, LUT and catalog VFX.
+ * Builds the live-preview Media3 look for spatial Adjust / Video Quality, LUT and catalog VFX.
  *
- * Artistic [FilterSettings] (Cinematic, 4K, B&W, …) are applied to the live TextureView
- * through [PreviewDisplayFilter] using the same [com.example.engine.composition.ColorFilterGenerator]
- * matrices as export. They are intentionally omitted from [effectsFor] so a filter tap
- * cannot rebuild ExoPlayer's video graph (frozen frame / silent audio).
+ * Color-matrix work (brightness, highlights, whites, artistic filters, Auto Enhance, HDR, …)
+ * is painted onto the live TextureView through [PreviewDisplayFilter] using the same
+ * [com.example.engine.composition.ColorFilterGenerator] matrices as export. Those parameters
+ * are intentionally omitted from [effectsFor] so a slider tick cannot rebuild ExoPlayer's
+ * video graph (ANR / frozen frame / silent audio).
+ *
+ * Neighbor-pixel operations (vignette, grain, sharpness, clarity, denoise, anti-flicker)
+ * still go through Media3, but callers must coalesce them with [PreviewLookPolicy.LOOK_DEBOUNCE_MS].
  */
 @OptIn(UnstableApi::class)
 object PreviewFilterEffects {
@@ -39,22 +43,21 @@ object PreviewFilterEffects {
     lutIntensity: Float = 1f
   ): List<Effect> =
     Media3EffectPipeline.buildRealtimePreviewEffects(
-      adjustments = clip.effectiveAdjustments(timeline),
-      // Artistic filters are painted onto the TextureView; Media3 only grades / LUTs / VFX.
+      adjustments = PreviewLookPolicy.spatialAdjustments(clip.effectiveAdjustments(timeline)),
+      // Color-matrix filters / sliders are painted onto the TextureView.
       filterSettings = FilterSettings(),
       customLut = lutBitmap,
       customLutIntensity = lutIntensity
     ) + PreviewVfxEffects.effectsFor(clip)
 
   /**
-   * Signature of the ExoPlayer effect list only. Filter type/intensity must not be included:
-   * a Filters-tools tap would otherwise call setVideoEffects with an identical list and
-   * still rebuild the video graph.
+   * Signature of the ExoPlayer effect list only. Artistic filters and color-matrix sliders
+   * must not be included: a brightness tick would otherwise call setVideoEffects and ANR.
    */
   fun media3Signature(clip: VideoClip?, timeline: Timeline): String {
     val lut = lutLook(clip)
     return signature(
-      clip.effectiveAdjustments(timeline),
+      PreviewLookPolicy.spatialAdjustments(clip.effectiveAdjustments(timeline)),
       FilterSettings(),
       lutId = lut?.first,
       lutIntensity = lut?.second ?: 0f
