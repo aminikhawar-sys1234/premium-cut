@@ -54,7 +54,9 @@ class GlFramebuffer {
 
     val status = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER)
     if (status != GLES20.GL_FRAMEBUFFER_COMPLETE) {
-      Log.e(TAG, "Framebuffer incomplete, status: $status")
+      val message = "Framebuffer incomplete, status: $status size=${width}x${height}"
+      Log.e(TAG, message)
+      throw IllegalStateException(message)
     }
 
     GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)

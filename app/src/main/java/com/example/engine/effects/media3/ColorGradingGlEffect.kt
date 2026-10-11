@@ -96,7 +96,7 @@ class ColorGradingGlEffect(
       if (filterSettings.enabled && filterSettings.type != FilterType.NONE && filterSettings.intensity > 0.01f) {
         val colorMatrix = ColorFilterGenerator.getFilterMatrix(filterSettings.type, filterSettings.intensity)
         if (colorMatrix != null) {
-          val (m4, off) = convertColorMatrixToGl(colorMatrix)
+          val (m4, off) = convertColorMatrixToGl(PreviewEffectApplyPolicy.forceOpaqueAlpha(colorMatrix))
           mat4x4 = m4
           offset = off
         }
@@ -329,9 +329,17 @@ void main() {
   }
 
   color.rgb = clamp(color.rgb, 0.0, 1.0);
+  // Media3 / decoder intermediate textures often carry A=0. Leaving that
+  // alpha in the graded output makes TextureView composite the frame as
+  // fully transparent (black preview) while Compose overlays stay visible.
+  color.a = 1.0;
   gl_FragColor = color;
 }
 """
+
+    @Volatile
+    var debugFrameCount: Long = 0
+      internal set
 
     internal fun bindUniforms(
       program: GlProgram,
@@ -371,12 +379,27 @@ void main() {
       program.setIntUniform("uUseColorMatrix", useMatrix)
       program.setFloatsUniform("uColorMatrix", matrix)
       program.setFloatsUniform("uColorOffset", offset)
+
+      val frame = ++debugFrameCount
+      if (frame == 1L || frame % 120L == 0L) {
+        android.util.Log.d(
+          "ColorGradingGlEffect",
+          "frame=$frame ${width}x${height} ptsUs=$presentationTimeUs useMatrix=$useMatrix " +
+            "bright=${snapshot.brightness} contrast=${snapshot.contrast} sat=${snapshot.saturation} " +
+            "temp=${snapshot.temperature} tint=${snapshot.tint}"
+        )
+      }
     }
   }
 
-  override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean {
-    return (liveSnapshot ?: constructorSnapshot()).isNoOp()
-  }
+  /**
+   * Always false. Media3 drops [GlEffect] programs whose [isNoOp] is true, which
+   * disconnected [publishLive] from the GPU (filters updated Kotlin state only).
+   * Identity vs active look is [isIdentityLook].
+   */
+  override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean = false
+
+  fun isIdentityLook(): Boolean = (liveSnapshot ?: constructorSnapshot()).isNoOp()
 
   override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
     return CustomShaderGlShaderProgram(
@@ -438,6 +461,99 @@ data class ColorGradingSnapshot(
       colorFix < 0.01f &&
       denoise < 0.01f
     return isDefaultAdjustments && colorMatrix4x4 == null
+  }
+
+  /**
+   * CPU replica of the preview fragment shader for a single sample (no spatial
+   * taps). Used to prove a look actually changes pixels, including when the
+   * incoming video alpha is 0.
+   */
+  fun evaluatePreviewPixel(r: Float, g: Float, b: Float, a: Float = 0f): FloatArray {
+    var cr = r
+    var cg = g
+    var cb = b
+    val totalBright = brightness + exposure * 0.5f
+    cr += totalBright
+    cg += totalBright
+    cb += totalBright
+    if (abs(contrast - 1f) > 0.001f) {
+      cr = (cr - 0.5f) * contrast + 0.5f
+      cg = (cg - 0.5f) * contrast + 0.5f
+      cb = (cb - 0.5f) * contrast + 0.5f
+    }
+    if (abs(saturation - 1f) > 0.001f) {
+      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
+      cr = lum + (cr - lum) * saturation
+      cg = lum + (cg - lum) * saturation
+      cb = lum + (cb - lum) * saturation
+    }
+    if (abs(temperature) > 0.001f || abs(tint) > 0.001f) {
+      cr += temperature * 0.12f
+      cg += tint * 0.08f
+      cb -= temperature * 0.12f
+    }
+    if (abs(highlights) > 0.001f || abs(shadows) > 0.001f) {
+      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
+      val shadowWeight = 1f - smoothstep(0f, 0.6f, lum)
+      val highlightWeight = smoothstep(0.4f, 1f, lum)
+      val add = shadows * shadowWeight * 0.2f + highlights * highlightWeight * 0.2f
+      cr += add
+      cg += add
+      cb += add
+    }
+    if (abs(whites) > 0.001f || abs(blacks) > 0.001f) {
+      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
+      val whiteW = smoothstep(0.65f, 1f, lum)
+      val blackW = 1f - smoothstep(0f, 0.35f, lum)
+      val add = whites * whiteW * 0.18f + blacks * blackW * 0.18f
+      cr += add
+      cg += add
+      cb += add
+    }
+    if (autoEnhance > 0.01f) {
+      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
+      cr = lum + (cr - lum) * (1f + autoEnhance * 0.20f)
+      cg = lum + (cg - lum) * (1f + autoEnhance * 0.20f)
+      cb = lum + (cb - lum) * (1f + autoEnhance * 0.20f)
+      cr = (cr - 0.5f) * (1f + autoEnhance * 0.15f) + 0.5f + autoEnhance * 0.04f
+      cg = (cg - 0.5f) * (1f + autoEnhance * 0.15f) + 0.5f + autoEnhance * 0.04f
+      cb = (cb - 0.5f) * (1f + autoEnhance * 0.15f) + 0.5f + autoEnhance * 0.04f
+    }
+    if (hdrBoost > 0.01f) {
+      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
+      cr = lum + (cr - lum) * (1f + hdrBoost * 0.25f)
+      cg = lum + (cg - lum) * (1f + hdrBoost * 0.25f)
+      cb = lum + (cb - lum) * (1f + hdrBoost * 0.25f)
+      cr = (cr - 0.5f) * (1f + hdrBoost * 0.22f) + 0.5f + hdrBoost * 0.02f
+      cg = (cg - 0.5f) * (1f + hdrBoost * 0.22f) + 0.5f + hdrBoost * 0.02f
+      cb = (cb - 0.5f) * (1f + hdrBoost * 0.22f) + 0.5f + hdrBoost * 0.02f
+    }
+    if (colorFix > 0.01f) {
+      cr *= 1f - colorFix * 0.04f
+      cg *= 1f - colorFix * 0.03f
+      cb *= 1f + colorFix * 0.06f
+    }
+    if (fade > 0.01f) {
+      cr = cr + (0.5f - cr) * fade * 0.55f
+      cg = cg + (0.5f - cg) * fade * 0.55f
+      cb = cb + (0.5f - cb) * fade * 0.55f
+    }
+    val matrix = colorMatrix4x4
+    val offset = colorOffset
+    if (matrix != null && offset != null) {
+      val nr = matrix[0] * cr + matrix[4] * cg + matrix[8] * cb + matrix[12] * a + offset[0]
+      val ng = matrix[1] * cr + matrix[5] * cg + matrix[9] * cb + matrix[13] * a + offset[1]
+      val nb = matrix[2] * cr + matrix[6] * cg + matrix[10] * cb + matrix[14] * a + offset[2]
+      cr = nr
+      cg = ng
+      cb = nb
+    }
+    return floatArrayOf(cr.coerceIn(0f, 1f), cg.coerceIn(0f, 1f), cb.coerceIn(0f, 1f), 1f)
+  }
+
+  private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
+    val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
+    return t * t * (3f - 2f * t)
   }
 
   companion object {

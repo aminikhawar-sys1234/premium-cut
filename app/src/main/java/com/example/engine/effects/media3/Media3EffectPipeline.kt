@@ -90,11 +90,10 @@ object Media3EffectPipeline {
   ): List<Effect> {
     val effects = mutableListOf<Effect>()
 
-    // 1. OpenGL Color Grading Shader (Brightness, Contrast, Saturation, Temp, Tint, Matrix Filter)
-    val colorGrading = createColorGradingEffect(adjustments, filterSettings)
-    if (colorGrading != null && !colorGrading.isNoOp(1920, 1080)) {
-      effects.add(colorGrading)
-    }
+    // Resident OpenGL color-grading node. Identity uniforms are a copy+opaque
+    // pass so filter / adjust / quality ticks can publishLive without calling
+    // setVideoEffects (that rebuild dropped the TextureView and source audio).
+    effects.add(ColorGradingGlEffect.fromTimeline(adjustments, filterSettings))
 
     // 2. Custom 3D / 2D LUT Shader
     if (customLut != null && customLutIntensity > 0.01f) {
@@ -154,7 +153,7 @@ object Media3EffectPipeline {
 
     // 3. OpenGL Color Grading Shader (Brightness, Contrast, Saturation, Temp, Tint, Matrix Filter)
     val colorGrading = createColorGradingEffect(timeline.adjustments, timeline.filter)
-    if (colorGrading != null && !colorGrading.isNoOp(exportWidth, exportHeight)) {
+    if (colorGrading != null && !colorGrading.isIdentityLook()) {
       effects.add(colorGrading)
     }
 
@@ -204,7 +203,7 @@ object Media3EffectPipeline {
     // 3. Combined Color Grading: Clip filter or Timeline filter + adjustments
     val effectiveFilter = clip.filter ?: timeline.filter
     val colorGrading = createColorGradingEffect(clip.adjustments ?: timeline.adjustments, effectiveFilter)
-    if (colorGrading != null && !colorGrading.isNoOp(exportWidth, exportHeight)) {
+    if (colorGrading != null && !colorGrading.isIdentityLook()) {
       effects.add(colorGrading)
     }
 
@@ -219,7 +218,7 @@ object Media3EffectPipeline {
     filterSettings: FilterSettings
   ): ColorGradingGlEffect? {
     val effect = ColorGradingGlEffect.fromTimeline(adjustments, filterSettings)
-    return if (effect.isNoOp(1920, 1080)) null else effect
+    return if (effect.isIdentityLook()) null else effect
   }
 
   /**
