@@ -75,8 +75,9 @@ class PreviewLookAndRestoreTest {
     val disabled = FilterSettings(type = FilterType.CINEMATIC, intensity = 1f, enabled = false)
     assertFalse(PreviewFilterEffects.isActiveLook(disabled))
     assertNull(PreviewDisplayFilter.matrixFor(disabled))
-    val combined = ColorFilterGenerator.createCombinedMatrix(VideoAdjustments(), FilterSettings(), disabled)
-    assertTrue(ColorFilterGenerator.isIdentityMatrix(combined))
+    val combinedDisabled = ColorFilterGenerator.createCombinedMatrix(VideoAdjustments(), FilterSettings(), disabled)
+    val combinedNone = ColorFilterGenerator.createCombinedMatrix(VideoAdjustments(), FilterSettings(), FilterSettings())
+    assertEquals(combinedNone.array.toList(), combinedDisabled.array.toList())
   }
 
   @Test

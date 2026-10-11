@@ -1,7 +1,9 @@
 package com.example.engine.effects.media3
 
 import android.graphics.Bitmap
+import androidx.annotation.OptIn
 import androidx.media3.common.Effect
+import androidx.media3.common.util.UnstableApi
 import com.example.domain.model.FilterSettings
 import com.example.domain.model.FilterType
 import com.example.domain.model.Timeline
@@ -18,6 +20,7 @@ import com.example.engine.color.ColorEngineHost
  * matrices as export. They are intentionally omitted from [effectsFor] so a filter tap
  * cannot rebuild ExoPlayer's video graph (frozen frame / silent audio).
  */
+@OptIn(UnstableApi::class)
 object PreviewFilterEffects {
 
   fun effectiveFilter(clip: VideoClip?, timeline: Timeline): FilterSettings =

@@ -4,6 +4,7 @@ import com.example.data.local.TimelineSerializer
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
