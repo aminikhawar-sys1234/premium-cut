@@ -64,7 +64,9 @@ import com.example.engine.media.VideoThumbnailManager
 import com.example.ui.components.text.*
 import com.example.ui.components.effects.*
 import com.example.engine.effects.registry.*
+import com.example.engine.effects.media3.LivePreviewLook
 import com.example.engine.effects.media3.PreviewDisplayFilter
+import com.example.engine.effects.media3.PreviewLookPolicy
 import com.example.ui.components.navigation.*
 import coil.compose.AsyncImage
 import android.view.ViewGroup
@@ -113,6 +115,7 @@ fun EditorScreen(
   val projectName by viewModel.activeProjectName.collectAsState()
   val aspectRatio by viewModel.activeAspectRatio.collectAsState()
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
+  val livePreviewLook by viewModel.livePreviewLook.collectAsState()
   val currentPosMs by viewModel.timelineEngine.currentPositionMs.collectAsState()
   val isPlaying by viewModel.timelineEngine.isPlaying.collectAsState()
   // Overlay clips whose video player exists, so PIP layers switch from placeholder to video
@@ -669,6 +672,7 @@ fun EditorScreen(
           player = viewModel.playbackEngine.player,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
+          liveLook = livePreviewLook,
           isPrimarySurface = true,
           onToggleFullscreen = { isFullscreenPreview = true },
           onAddMedia = safeLaunchMediaPicker,
@@ -1491,6 +1495,7 @@ fun EditorScreen(
           player = viewModel.playbackEngine.player,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
+          liveLook = livePreviewLook,
           isPrimarySurface = false,
           onToggleFullscreen = { isFullscreenPreview = false },
           onAddMedia = safeLaunchMediaPicker,
@@ -1724,6 +1729,7 @@ fun VideoPreviewSurface(
   onGetOverlayPlayer: ((String) -> ExoPlayer?)? = null,
   /** Overlay clips whose ExoPlayer exists (observable so the video layer appears with the player). */
   overlayPlayerIds: Set<String> = emptySet(),
+  liveLook: LivePreviewLook? = null,
   /** The inline preview owns the player surface; a fullscreen dialog surface is secondary. */
   isPrimarySurface: Boolean = true,
   onToggleFullscreen: (() -> Unit)? = null,
@@ -1823,12 +1829,24 @@ fun VideoPreviewSurface(
     } else null
   }
 
+  val liveApplies = PreviewLookPolicy.appliesTo(liveLook, activeClip?.id)
+  val previewAdjustments = if (liveApplies && liveLook != null) {
+    liveLook.adjustments
+  } else {
+    activeClip?.adjustments ?: timeline.adjustments
+  }
+  val previewFilter = if (liveApplies && liveLook != null) {
+    liveLook.filter
+  } else {
+    activeClip?.filter ?: timeline.filter
+  }
+
   // Color Matrix for video adjustments, filter presets, and active color effects matching export pipeline
-  val androidCombinedMatrix = remember(timeline.adjustments, activeClip?.adjustments, timeline.filter, activeClip?.filter, activeEffects, currentPosMs) {
+  val androidCombinedMatrix = remember(previewAdjustments, previewFilter, timeline.filter, activeEffects, currentPosMs) {
     val baseMatrix = com.example.engine.composition.ColorFilterGenerator.createCombinedMatrix(
-      activeClip?.adjustments ?: timeline.adjustments,
+      previewAdjustments,
       timeline.filter,
-      activeClip?.filter
+      previewFilter
     )
     val resultMatrix = android.graphics.ColorMatrix(baseMatrix)
     if (activeEffects.isNotEmpty()) {
@@ -1953,8 +1971,8 @@ fun VideoPreviewSurface(
             if (activeClip.isVideo && isRealPlayable && player != null && !isMainVideoTrackHidden) {
               val clipRot = if (activeClip.naturalRotation != 0) activeClip.naturalRotation else activeClip.rotationDegrees
               val (clipW, clipH) = AspectRatio.resolveEffectiveDimensions(activeClip.width, activeClip.height, clipRot)
-              val videoFilterMatrix = remember(activeClip.filter, timeline.filter) {
-                PreviewDisplayFilter.matrixFor(activeClip, timeline)
+              val videoFilterMatrix = remember(previewAdjustments, previewFilter) {
+                PreviewDisplayFilter.matrixFor(previewAdjustments, previewFilter)
               }
               AndroidView(
                 factory = { ctx ->
@@ -2113,6 +2131,8 @@ fun VideoPreviewSurface(
           onEditText = onEditText,
           getOverlayPlayer = onGetOverlayPlayer,
           overlayPlayerIds = overlayPlayerIds,
+          timeline = timeline,
+          liveLook = liveLook,
           modifier = Modifier.fillMaxSize()
         )
 

@@ -113,7 +113,10 @@ fun FilterToolsPanel(
   viewModel: StudioViewModel,
   modifier: Modifier = Modifier,
   initialTab: FilterToolsTab = FilterToolsTab.FILTERS,
-  onClose: () -> Unit = { viewModel.setActiveToolbarTab(null) }
+  onClose: () -> Unit = {
+    viewModel.flushLiveLook()
+    viewModel.setActiveToolbarTab(null)
+  }
 ) {
   val context = LocalContext.current
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
@@ -154,17 +157,17 @@ fun FilterToolsPanel(
   var currentAdjustments by remember(activeAdjustments, selectedClip?.id) { mutableStateOf(activeAdjustments) }
   val applyAdjustments: (VideoAdjustments) -> Unit = { adj ->
     currentAdjustments = adj
-    if (!viewModel.timelineEngine.updateClipAdjustments(adj, selectedClip?.id)) {
-      viewModel.timelineEngine.updateAdjustments(adj)
-    }
-    viewModel.refreshCurrentFrame(preferClipId = selectedClip?.id)
+    viewModel.publishLiveLook(selectedClip?.id, adj, currentFilter)
   }
 
   val applyLook: (FilterSettings) -> Unit = { look ->
     currentFilter = look
-    viewModel.timelineEngine.updateFilter(look, selectedClip?.id)
     viewModel.revealClipForLookPreview(selectedClip)
-    viewModel.refreshCurrentFrame(preferClipId = selectedClip?.id)
+    viewModel.publishLiveLook(selectedClip?.id, currentAdjustments, look)
+  }
+
+  DisposableEffect(selectedClip?.id) {
+    onDispose { viewModel.flushLiveLook() }
   }
 
   var activeTab by remember { mutableStateOf(initialTab) }

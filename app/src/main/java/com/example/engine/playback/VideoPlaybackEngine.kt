@@ -135,6 +135,7 @@ class VideoPlaybackEngine(
   @Volatile private var applyingEffects = false
   private var lastPresentAtElapsedMs = 0L
   private var lastPresentPosMs = -1L
+  private var spatialLookJob: Job? = null
 
   init {
     PreviewVideoSurfaceRegistry.onPlayerSurfaceBound = { bound ->
@@ -193,6 +194,30 @@ class VideoPlaybackEngine(
    * or when the paused frame must be redrawn). [preferClipId] uses that main-track clip's look when
    * the playhead is still on a different clip (filter tap before seek).
    */
+  /**
+   * Updates the in-memory timeline look without reloading decoders or seeking.
+   * Color-matrix sliders paint the TextureView separately; spatial / LUT / VFX
+   * Media3 work is latest-wins coalesced so slider ticks cannot ANR.
+   */
+  fun replaceTimelineLooks(timeline: Timeline) {
+    currentTimeline = timeline
+    _activeClip.value = findClipAt(currentPosMs)
+    scheduleSpatialLook()
+  }
+
+  private fun scheduleSpatialLook(preferClipId: String? = null) {
+    spatialLookJob?.cancel()
+    spatialLookJob = scope.launch {
+      delay(com.example.engine.effects.media3.PreviewLookPolicy.LOOK_DEBOUNCE_MS)
+      if (!isActive) return@launch
+      val before = lastMedia3Signature
+      applyActiveLookToPlayers(force = false, preferClipId = preferClipId)
+      if (lastMedia3Signature != before && !engineController.timelineSyncManager.isPlaying) {
+        presentCurrentFrame(rebindSurface = false)
+      }
+    }
+  }
+
   fun applyActiveLookToPlayers(force: Boolean = false, preferClipId: String? = null) {
     val preferred = preferClipId?.let { id -> currentTimeline.videoClips.find { it.id == id } }
     val clip = preferred ?: _activeClip.value
@@ -531,7 +556,6 @@ class VideoPlaybackEngine(
     currentPosMs = currentPosMs.coerceIn(0L, timeline.totalDurationMs.coerceAtLeast(0L))
     _currentPositionMs.value = currentPosMs
     _activeClip.value = findClipAt(currentPosMs)
-    // Bind the look before the controller seeks so a paused preview shows the new filter.
     applyActiveLookToPlayers()
     engineController.updateTimeline(timeline)
     syncOverlayPlayers(currentPosMs)
@@ -683,6 +707,7 @@ class VideoPlaybackEngine(
     if (PreviewVideoSurfaceRegistry.onPlayerSurfaceBound != null) {
       PreviewVideoSurfaceRegistry.onPlayerSurfaceBound = null
     }
+    spatialLookJob?.cancel()
     trimPollJob?.cancel()
     scope.cancel()
     overlayPlayers.values.forEach { try { it.stop(); it.release() } catch (_: Exception) {} }

@@ -54,6 +54,8 @@ import com.example.engine.ai.tracking.TrackingSampler
 import com.example.engine.ai.cutout.BgRemoveCodec
 import com.example.engine.ai.cutout.BgRemoveParams
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
+import com.example.engine.effects.media3.LivePreviewLook
+import com.example.engine.effects.media3.PreviewLookPolicy
 
 enum class ProjectSaveStatus {
   SAVED,
@@ -285,6 +287,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   // Playback & auto-save jobs
   private var autoSaveJob: Job? = null
+  private var persistLookJob: Job? = null
+
+  private val _livePreviewLook = MutableStateFlow<LivePreviewLook?>(null)
+  val livePreviewLook: StateFlow<LivePreviewLook?> = _livePreviewLook.asStateFlow()
 
   /**
    * Wires timeline/playback collectors. Invoked from the last `init` block of this class: the collectors run
@@ -296,17 +302,26 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     // Sync Timeline changes with Playback Engine, mark unsaved, and persist recovery snapshot
     viewModelScope.launch {
+      var previousTimeline: Timeline? = null
       timelineEngine.timeline.collectLatest { timeline ->
+        val lookOnly = previousTimeline?.let { PreviewLookPolicy.isLookOnlyChange(it, timeline) } == true
+        previousTimeline = timeline
         com.example.engine.color.ColorEngineHost.syncFromTimeline(timeline.videoClips)
-        val mediaClips = timeline.videoClips + timeline.overlayClips
-        hydrateFaceReshape(mediaClips)
-        hydrateBodyReshape(mediaClips)
-        hydrateArOverlays(timeline.videoClips)
-        hydrateBgRemoval(timeline)
-        hydrateMotionTracking()
+        if (!lookOnly) {
+          val mediaClips = timeline.videoClips + timeline.overlayClips
+          hydrateFaceReshape(mediaClips)
+          hydrateBodyReshape(mediaClips)
+          hydrateArOverlays(timeline.videoClips)
+          hydrateBgRemoval(timeline)
+          hydrateMotionTracking()
+        }
         if (_currentScreen.value == AppScreen.EDITOR || _currentScreen.value == AppScreen.EXPORT) {
           try {
-            playbackEngine.updateTimeline(timeline)
+            if (lookOnly) {
+              playbackEngine.replaceTimelineLooks(timeline)
+            } else {
+              playbackEngine.updateTimeline(timeline)
+            }
           } catch (t: Throwable) {
             android.util.Log.w("StudioViewModel", "Playback update deferred", t)
           }
@@ -457,20 +472,65 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   /**
-   * Re-renders the current preview frame with the latest Filters / Color Grade look.
-   * Syncs the playback engine immediately (do not wait for the timeline collector) so a
-   * filter tap shows on the live video in the same gesture, then seeks when paused so
-   * Media3 redraws the held frame with the new effects.
+   * Publishes the latest Filters / Adjust / Video Quality values to the live TextureView
+   * immediately and persists them latest-wins. Does not rebuild ExoPlayer or seek.
+   */
+  fun publishLiveLook(clipId: String?, adjustments: VideoAdjustments, filter: FilterSettings) {
+    val look = LivePreviewLook(clipId, adjustments, filter)
+    _livePreviewLook.value = look
+    if (playbackEngineDelegate.isInitialized()) {
+      try {
+        playbackEngine.replaceTimelineLooks(
+          PreviewLookPolicy.applyLookToTimeline(timelineEngine.timeline.value, look)
+        )
+      } catch (t: Throwable) {
+        android.util.Log.w("StudioViewModel", "Live look preview update failed", t)
+      }
+    }
+    persistLookJob?.cancel()
+    persistLookJob = viewModelScope.launch {
+      delay(PreviewLookPolicy.LOOK_DEBOUNCE_MS)
+      commitLiveLook()
+    }
+  }
+
+  fun flushLiveLook() {
+    persistLookJob?.cancel()
+    persistLookJob = null
+    commitLiveLook()
+  }
+
+  private fun commitLiveLook() {
+    val look = _livePreviewLook.value ?: return
+    try {
+      val tl = timelineEngine.timeline.value
+      val clip = look.clipId?.let { id ->
+        tl.videoClips.find { it.id == id } ?: tl.overlayClips.find { it.id == id }
+      }
+      val currentAdj = clip?.adjustments ?: tl.adjustments
+      val currentFilter = clip?.filter ?: tl.filter
+      if (currentAdj != look.adjustments) {
+        if (!timelineEngine.updateClipAdjustments(look.adjustments, look.clipId)) {
+          timelineEngine.updateAdjustments(look.adjustments)
+        }
+      }
+      if (currentFilter != look.filter) {
+        timelineEngine.updateFilter(look.filter, look.clipId)
+      }
+    } catch (t: Throwable) {
+      android.util.Log.w("StudioViewModel", "Live look persist failed", t)
+    }
+  }
+
+  /**
+   * Re-applies LUT / VFX Media3 looks without reloading the decoder or seeking.
+   * Color-matrix sliders must use [publishLiveLook] instead of this path.
    */
   fun refreshCurrentFrame(preferClipId: String? = null) {
     try {
-      playbackEngine.updateTimeline(timelineEngine.timeline.value)
-      // Do not force a Media3 rebind: a Filters-tools tap only changes the TextureView
-      // ColorMatrix. Forcing setVideoEffects here rebuilt the video graph and froze/muted playback.
+      if (!playbackEngineDelegate.isInitialized()) return
+      playbackEngine.replaceTimelineLooks(timelineEngine.timeline.value)
       playbackEngine.applyActiveLookToPlayers(force = false, preferClipId = preferClipId)
-      if (!timelineEngine.isPlaying.value) {
-        playbackEngine.presentCurrentFrame()
-      }
     } catch (t: Throwable) {
       android.util.Log.w("StudioViewModel", "Preview look refresh failed", t)
     }
@@ -3064,6 +3124,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   override fun onCleared() {
     super.onCleared()
+    persistLookJob?.cancel()
     autoSaveJob?.cancel()
     com.ahstudio.face.deformation.FaceWarpRegistry.clear()
     com.example.engine.effects.BodyWarpRegistry.clear()

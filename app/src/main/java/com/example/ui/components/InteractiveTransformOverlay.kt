@@ -42,7 +42,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.FrameLayout
 import android.view.ViewGroup
 import com.example.engine.media.MediaRelinkManager
+import com.example.engine.effects.media3.LivePreviewLook
 import com.example.engine.effects.media3.PreviewDisplayFilter
+import com.example.engine.effects.media3.PreviewLookPolicy
+import com.example.domain.model.Timeline
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -213,6 +216,8 @@ fun InteractiveTransformOverlay(
    * added PIP video kept showing the image placeholder until something else recomposed.
    */
   overlayPlayerIds: Set<String> = emptySet(),
+  timeline: Timeline = Timeline(),
+  liveLook: LivePreviewLook? = null,
   modifier: Modifier = Modifier
 ) {
   val context = LocalContext.current
@@ -342,14 +347,23 @@ fun InteractiveTransformOverlay(
             )
           }
       ) {
-        val overlayColorFilter = remember(overlay.filter) {
-          val f = overlay.filter
-          if (f == null || f.type == com.example.domain.model.FilterType.NONE) {
-            null
-          } else {
-            com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(f.type, f.intensity)?.let { m ->
-              androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(m.array))
-            }
+        val overlayLookApplies = PreviewLookPolicy.appliesTo(liveLook, overlay.id)
+        val overlayAdjustments = if (overlayLookApplies && liveLook != null) {
+          liveLook.adjustments
+        } else {
+          overlay.adjustments ?: timeline.adjustments
+        }
+        val overlayFilter = if (overlayLookApplies && liveLook != null) {
+          liveLook.filter
+        } else {
+          overlay.filter ?: timeline.filter
+        }
+        val overlayDisplayMatrix = remember(overlayAdjustments, overlayFilter) {
+          PreviewDisplayFilter.matrixFor(overlayAdjustments, overlayFilter)
+        }
+        val overlayColorFilter = remember(overlayDisplayMatrix) {
+          overlayDisplayMatrix?.let { m ->
+            androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(m.array))
           }
         }
 
@@ -367,14 +381,12 @@ fun InteractiveTransformOverlay(
                   ViewGroup.LayoutParams.MATCH_PARENT
                 )
                 com.example.ui.components.player.PreviewVideoSurfaceRegistry.bind(overlayPlayer, this)
-                overlay.filter?.let { PreviewDisplayFilter.apply(this, PreviewDisplayFilter.matrixFor(it)) }
-                  ?: PreviewDisplayFilter.clear(this)
+                PreviewDisplayFilter.apply(this, overlayDisplayMatrix)
               }
             },
             update = { tv ->
               com.example.ui.components.player.PreviewVideoSurfaceRegistry.bind(overlayPlayer, tv)
-              overlay.filter?.let { PreviewDisplayFilter.apply(tv, PreviewDisplayFilter.matrixFor(it)) }
-                ?: PreviewDisplayFilter.clear(tv)
+              PreviewDisplayFilter.apply(tv, overlayDisplayMatrix)
             },
             onReset = { /* Keep texture view intact */ },
             onRelease = { tv ->
