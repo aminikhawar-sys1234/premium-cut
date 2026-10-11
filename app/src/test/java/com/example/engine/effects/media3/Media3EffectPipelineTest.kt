@@ -273,9 +273,14 @@ class Media3EffectPipelineTest {
     )
     val timeline = Timeline(videoClips = listOf(clip))
     val effects = PreviewFilterEffects.effectsFor(clip, timeline)
-    assertTrue(effects.any { it is ColorGradingGlEffect && !it.isNoOp(1920, 1080) })
+    assertTrue(
+      "Artistic filters are painted on the TextureView, not injected into ExoPlayer",
+      effects.none { it is ColorGradingGlEffect }
+    )
+    assertNotNull(PreviewDisplayFilter.matrixFor(clip, timeline))
     val reset = PreviewFilterEffects.effectsFor(clip.copy(filter = FilterSettings()), Timeline())
     assertTrue(reset.none { it is ColorGradingGlEffect })
+    assertNull(PreviewDisplayFilter.matrixFor(clip.copy(filter = FilterSettings()), Timeline()))
   }
 
   @Test

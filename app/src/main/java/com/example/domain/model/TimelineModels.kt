@@ -1208,7 +1208,9 @@ enum class FilterType(val displayName: String, val category: String = "Pro Enhan
 
 data class FilterSettings(
   val type: FilterType = FilterType.NONE,
-  val intensity: Float = 1.0f // 0f to 1f
+  val intensity: Float = 1.0f, // 0f to 1f
+  /** When false the look is stored but not applied. Default true keeps legacy projects unchanged. */
+  val enabled: Boolean = true
 )
 
 data class ChromaKeySettings(

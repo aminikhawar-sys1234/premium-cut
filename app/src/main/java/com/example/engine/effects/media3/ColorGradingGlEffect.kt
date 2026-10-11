@@ -57,7 +57,7 @@ class ColorGradingGlEffect(
       var mat4x4: FloatArray? = null
       var offset: FloatArray? = null
 
-      if (filterSettings.type != FilterType.NONE && filterSettings.intensity > 0.01f) {
+      if (filterSettings.enabled && filterSettings.type != FilterType.NONE && filterSettings.intensity > 0.01f) {
         val colorMatrix = ColorFilterGenerator.getFilterMatrix(filterSettings.type, filterSettings.intensity)
         if (colorMatrix != null) {
           val (m4, off) = convertColorMatrixToGl(colorMatrix)

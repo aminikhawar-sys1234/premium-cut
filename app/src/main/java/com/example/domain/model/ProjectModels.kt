@@ -11,7 +11,9 @@ data class ProjectSettings(
   val fps: FrameRate = FrameRate.FPS_30,
   val sampleRateHz: Int = 48000,
   val canvasBackgroundColor: Long = 0xFF000000,
-  val totalDurationMs: Long = 0L
+  val totalDurationMs: Long = 0L,
+  /** Last playhead position. Default 0 keeps projects saved before this field readable. */
+  val playheadMs: Long = 0L
 )
 
 /**

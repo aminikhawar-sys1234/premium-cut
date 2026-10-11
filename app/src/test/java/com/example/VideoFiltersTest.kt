@@ -200,8 +200,19 @@ class VideoFiltersTest {
     assertTrue("Original look must not inject a ColorGrading pass", noneEffects.none { it is ColorGradingGlEffect })
 
     val fourK = PreviewFilterEffects.effectsFor(clip, timeline)
-    assertTrue("4K must produce a real ColorGradingGlEffect for ExoPlayer", fourK.any { it is ColorGradingGlEffect })
-    assertFalse((fourK.single { it is ColorGradingGlEffect } as ColorGradingGlEffect).isNoOp(1920, 1080))
+    assertTrue(
+      "Artistic filters stay off the ExoPlayer graph so a filter tap cannot rebuild the decoder",
+      fourK.none { it is ColorGradingGlEffect }
+    )
+    assertEquals(
+      PreviewFilterEffects.media3Signature(clip, timeline),
+      PreviewFilterEffects.media3Signature(clip.copy(filter = FilterSettings(type = FilterType.BLACK_AND_WHITE)), timeline)
+    )
+    assertNotNull(
+      "4K must still produce a real ColorFilterGenerator matrix for the live TextureView and export",
+      com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(FilterType.FOUR_K, 1.0f)
+    )
+    assertNotNull(com.example.engine.effects.media3.PreviewDisplayFilter.matrixFor(clip, timeline))
 
     val cinematic = FilterSettings(type = FilterType.CINEMATIC, intensity = 0.75f)
     val bw = FilterSettings(type = FilterType.BLACK_AND_WHITE, intensity = 1.0f)

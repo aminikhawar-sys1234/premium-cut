@@ -337,7 +337,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             fps = _activeFps.value,
             sampleRateHz = _activeSampleRate.value,
             canvasBackgroundColor = _activeCanvasColor.value,
-            totalDurationMs = timeline.totalDurationMs
+            totalDurationMs = timeline.totalDurationMs,
+            playheadMs = timelineEngine.currentPositionMs.value
           )
           try {
             repository.saveCrashRecoverySession(
@@ -433,7 +434,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       // Initialize the media pipeline immediately when the editor is opened.
       try {
         playbackEngine.updateTimeline(timelineEngine.timeline.value)
-        playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+        playbackEngine.prepareForEditorEntry()
       } catch (t: Throwable) {
         android.util.Log.w("StudioViewModel", "Editor entry playback initialization error", t)
       }
@@ -464,9 +465,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun refreshCurrentFrame(preferClipId: String? = null) {
     try {
       playbackEngine.updateTimeline(timelineEngine.timeline.value)
-      playbackEngine.applyActiveLookToPlayers(force = true, preferClipId = preferClipId)
+      // Do not force a Media3 rebind: a Filters-tools tap only changes the TextureView
+      // ColorMatrix. Forcing setVideoEffects here rebuilt the video graph and froze/muted playback.
+      playbackEngine.applyActiveLookToPlayers(force = false, preferClipId = preferClipId)
       if (!timelineEngine.isPlaying.value) {
-        playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+        playbackEngine.presentCurrentFrame()
       }
     } catch (t: Throwable) {
       android.util.Log.w("StudioViewModel", "Preview look refresh failed", t)
@@ -1504,6 +1507,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       aspectRatio = _activeAspectRatio.value,
       canvasBackgroundColor = _activeCanvasColor.value
     ))
+    val restoredPlayhead = (pkg?.settings?.playheadMs ?: 0L)
+      .coerceIn(0L, loadedTimeline.totalDurationMs.coerceAtLeast(0L))
+    if (restoredPlayhead > 0L) {
+      timelineEngine.setPosition(restoredPlayhead, snap = false)
+    }
     _isCanvasConfiguredByMedia.value = loadedTimeline.videoClips.isNotEmpty()
     _saveState.value = ProjectSaveState(ProjectSaveStatus.SAVED, project.lastEditedTime)
     navigateTo(AppScreen.EDITOR)
@@ -1587,7 +1595,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             isDraft = false,
             sampleRate = _activeSampleRate.value,
             canvasColor = _activeCanvasColor.value,
-            hasMissingMedia = missingList.isNotEmpty()
+            hasMissingMedia = missingList.isNotEmpty(),
+            playheadMs = timelineEngine.currentPositionMs.value
           )
         }
         _saveState.value = ProjectSaveState(ProjectSaveStatus.SAVED, System.currentTimeMillis())
@@ -1625,6 +1634,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           aspectRatio = pkg.settings.aspectRatio,
           canvasBackgroundColor = pkg.settings.canvasBackgroundColor
         ))
+        val recoveredPlayhead = pkg.settings.playheadMs.coerceIn(0L, pkg.timeline.totalDurationMs.coerceAtLeast(0L))
+        if (recoveredPlayhead > 0L) {
+          timelineEngine.setPosition(recoveredPlayhead, snap = false)
+        }
       } else {
         val recoveredTimeline = TimelineSerializer.fromJson(session.timelineJson)
         timelineEngine.setTimelineFps(_activeFps.value.fps)

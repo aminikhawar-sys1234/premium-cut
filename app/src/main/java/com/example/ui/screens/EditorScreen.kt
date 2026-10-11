@@ -64,6 +64,7 @@ import com.example.engine.media.VideoThumbnailManager
 import com.example.ui.components.text.*
 import com.example.ui.components.effects.*
 import com.example.engine.effects.registry.*
+import com.example.engine.effects.media3.PreviewDisplayFilter
 import com.example.ui.components.navigation.*
 import coil.compose.AsyncImage
 import android.view.ViewGroup
@@ -1952,6 +1953,9 @@ fun VideoPreviewSurface(
             if (activeClip.isVideo && isRealPlayable && player != null && !isMainVideoTrackHidden) {
               val clipRot = if (activeClip.naturalRotation != 0) activeClip.naturalRotation else activeClip.rotationDegrees
               val (clipW, clipH) = AspectRatio.resolveEffectiveDimensions(activeClip.width, activeClip.height, clipRot)
+              val videoFilterMatrix = remember(activeClip.filter, timeline.filter) {
+                PreviewDisplayFilter.matrixFor(activeClip, timeline)
+              }
               AndroidView(
                 factory = { ctx ->
                   android.view.TextureView(ctx).apply {
@@ -1977,6 +1981,7 @@ fun VideoPreviewSurface(
                       applyTextureViewAspectFit(this, clipW, clipH)
                     }
                     applyTextureViewAspectFit(this, clipW, clipH)
+                    PreviewDisplayFilter.apply(this, videoFilterMatrix)
                   }
                 },
                 update = { tv ->
@@ -1985,6 +1990,7 @@ fun VideoPreviewSurface(
                   // without any surface, frozen on its last frame).
                   PreviewVideoSurfaceRegistry.attach(player, tv, isPrimarySurface)
                   applyTextureViewAspectFit(tv, clipW, clipH)
+                  PreviewDisplayFilter.apply(tv, videoFilterMatrix)
                 },
                 onReset = { /* Preserve texture view across recompositions */ },
                 onRelease = { tv ->

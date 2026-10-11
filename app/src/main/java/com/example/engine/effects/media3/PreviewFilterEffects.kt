@@ -1,7 +1,9 @@
 package com.example.engine.effects.media3
 
 import android.graphics.Bitmap
+import androidx.annotation.OptIn
 import androidx.media3.common.Effect
+import androidx.media3.common.util.UnstableApi
 import com.example.domain.model.FilterSettings
 import com.example.domain.model.FilterType
 import com.example.domain.model.Timeline
@@ -11,10 +13,14 @@ import com.example.domain.model.effectiveAdjustments
 import com.example.engine.color.ColorEngineHost
 
 /**
- * Builds the live-preview Media3 look for Filters tools and Effects tools.
- * Color grading matches export; catalog `vfx:` keys are appended via [PreviewVfxEffects].
- * LUT looks stored in [VideoClip.colorGradeJson] are applied via [LutGlEffect].
+ * Builds the live-preview Media3 look for Adjust / Video Quality, LUT and catalog VFX.
+ *
+ * Artistic [FilterSettings] (Cinematic, 4K, B&W, …) are applied to the live TextureView
+ * through [PreviewDisplayFilter] using the same [com.example.engine.composition.ColorFilterGenerator]
+ * matrices as export. They are intentionally omitted from [effectsFor] so a filter tap
+ * cannot rebuild ExoPlayer's video graph (frozen frame / silent audio).
  */
+@OptIn(UnstableApi::class)
 object PreviewFilterEffects {
 
   fun effectiveFilter(clip: VideoClip?, timeline: Timeline): FilterSettings =
@@ -34,10 +40,26 @@ object PreviewFilterEffects {
   ): List<Effect> =
     Media3EffectPipeline.buildRealtimePreviewEffects(
       adjustments = clip.effectiveAdjustments(timeline),
-      filterSettings = effectiveFilter(clip, timeline),
+      // Artistic filters are painted onto the TextureView; Media3 only grades / LUTs / VFX.
+      filterSettings = FilterSettings(),
       customLut = lutBitmap,
       customLutIntensity = lutIntensity
     ) + PreviewVfxEffects.effectsFor(clip)
+
+  /**
+   * Signature of the ExoPlayer effect list only. Filter type/intensity must not be included:
+   * a Filters-tools tap would otherwise call setVideoEffects with an identical list and
+   * still rebuild the video graph.
+   */
+  fun media3Signature(clip: VideoClip?, timeline: Timeline): String {
+    val lut = lutLook(clip)
+    return signature(
+      clip.effectiveAdjustments(timeline),
+      FilterSettings(),
+      lutId = lut?.first,
+      lutIntensity = lut?.second ?: 0f
+    ) + "|" + PreviewVfxEffects.signature(clip)
+  }
 
   fun signature(clip: VideoClip?, timeline: Timeline): String {
     val lut = lutLook(clip)
@@ -111,5 +133,5 @@ object PreviewFilterEffects {
   }
 
   fun isActiveLook(filter: FilterSettings): Boolean =
-    filter.type != FilterType.NONE && filter.intensity > 0.01f
+    filter.enabled && filter.type != FilterType.NONE && filter.intensity > 0.01f
 }
