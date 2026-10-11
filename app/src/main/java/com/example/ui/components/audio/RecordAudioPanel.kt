@@ -31,6 +31,7 @@ import androidx.core.content.ContextCompat
 import com.example.domain.model.AudioClip
 import com.example.domain.model.AudioEffectsSettings
 import com.example.domain.model.VoiceEffect
+import com.example.engine.audio.AudioMediaDuration
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StudioDark
@@ -65,11 +66,22 @@ fun RecordAudioPanel(
   var micVolumeGain by remember { mutableStateOf(1.0f) }
   var recordWithPlayback by remember { mutableStateOf(false) }
 
+  fun applyRecordMonitor() {
+    if (recordWithPlayback) {
+      if (!viewModel.timelineEngine.isPlaying.value) {
+        viewModel.timelineEngine.play()
+      }
+    } else if (viewModel.timelineEngine.isPlaying.value) {
+      viewModel.timelineEngine.pause()
+    }
+  }
+
   // Mic permission launcher
   val micPermissionLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.RequestPermission()
   ) { isGranted ->
     if (isGranted) {
+      applyRecordMonitor()
       viewModel.audioEngine.startVoiceRecording {}
     } else {
       Toast.makeText(context, "Microphone permission is required to record audio", Toast.LENGTH_SHORT).show()
@@ -90,11 +102,16 @@ fun RecordAudioPanel(
     if (isRecording) {
       val file = viewModel.audioEngine.stopVoiceRecording()
       recordedFile = file
-      hasRecordedAudio = true
-      Toast.makeText(context, "Recording completed!", Toast.LENGTH_SHORT).show()
+      hasRecordedAudio = file != null
+      if (file == null) {
+        Toast.makeText(context, "Recording failed: no audio was captured", Toast.LENGTH_SHORT).show()
+      } else {
+        Toast.makeText(context, "Recording completed!", Toast.LENGTH_SHORT).show()
+      }
     } else {
       recordedFile = null
       hasRecordedAudio = false
+      applyRecordMonitor()
       viewModel.audioEngine.startVoiceRecording {}
     }
   }
@@ -178,10 +195,19 @@ fun RecordAudioPanel(
             val file = if (isRecording) {
               viewModel.audioEngine.stopVoiceRecording()
             } else {
-              recordedFile ?: viewModel.audioEngine.stopVoiceRecording()
+              recordedFile
+            }
+            if (file == null || !file.exists() || file.length() == 0L) {
+              Toast.makeText(context, "Recording failed: no audio was captured", Toast.LENGTH_SHORT).show()
+              return@IconButton
             }
 
-            val finalDuration = recordDurationMs.coerceAtLeast(1500L)
+            val measuredDuration = AudioMediaDuration.durationMs(context, file.absolutePath)
+              ?: recordDurationMs.takeIf { it > 0L }
+            if (measuredDuration == null || measuredDuration <= 0L) {
+              Toast.makeText(context, "Recording failed: duration could not be read", Toast.LENGTH_SHORT).show()
+              return@IconButton
+            }
             val waveform = viewModel.audioEngine.extractWaveformFromFile(file)
 
             // Setup effect settings
@@ -197,13 +223,17 @@ fun RecordAudioPanel(
               title = "Voiceover: ${activeVoiceEffect?.name ?: "Clean Voice"}",
               uri = file.absolutePath,
               timelineStartMs = viewModel.timelineEngine.currentPositionMs.value,
-              durationMs = finalDuration,
+              durationMs = measuredDuration,
               sourceStartMs = 0L,
-              sourceEndMs = finalDuration,
+              sourceEndMs = measuredDuration,
+              sourceTotalDurationMs = measuredDuration,
               volume = micVolumeGain,
               waveformData = waveform,
               audioEffects = effectSettings,
-              isVoiceOver = true
+              isVoiceOver = true,
+              trackIndex = com.example.engine.timeline.TimelineTrackManager.allocateAudioTrackIndex(
+                viewModel.timelineEngine.timeline.value
+              )
             )
 
             viewModel.timelineEngine.addAudioClipObject(newClip)
@@ -405,6 +435,7 @@ fun RecordAudioPanel(
         isActive = recordWithPlayback,
         onClick = {
           recordWithPlayback = !recordWithPlayback
+          if (isRecording) applyRecordMonitor()
           Toast.makeText(
             context,
             if (recordWithPlayback) "Timeline audio monitor ON during recording" else "Timeline audio MUTED during recording",

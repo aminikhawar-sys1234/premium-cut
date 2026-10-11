@@ -5466,15 +5466,30 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
 
     recordHistory()
     val audioId = "audio_extracted_${UUID.randomUUID().toString().take(8)}"
+    val neededSourceMs = (clip.durationMs * clip.speed.coerceAtLeast(0.01f)).toLong()
+    val sourceEnd = if (clip.sourceEndMs > clip.sourceStartMs) {
+      maxOf(clip.sourceEndMs, clip.sourceStartMs + neededSourceMs)
+    } else {
+      clip.sourceStartMs + neededSourceMs
+    }
     val extractedAudioClip = com.example.domain.model.AudioClip(
       id = audioId,
       uri = clip.uri,
       title = "Extracted Audio (${clip.name})",
       timelineStartMs = clip.timelineStartMs,
       durationMs = clip.durationMs,
+      sourceStartMs = clip.sourceStartMs,
+      sourceEndMs = sourceEnd,
+      sourceTotalDurationMs = clip.sourceTotalDurationMs,
       volume = clip.volume,
+      speed = clip.speed,
       fadeInMs = 0L,
-      fadeOutMs = 0L
+      fadeOutMs = 0L,
+      isReversed = clip.isReversed,
+      audioEffects = clip.audioEffects,
+      keyframes = clip.keyframes,
+      speedCurve = clip.speedCurve,
+      trackIndex = com.example.engine.timeline.TimelineTrackManager.allocateAudioTrackIndex(_timeline.value)
     )
 
     val updatedVideos = _timeline.value.videoClips.map {

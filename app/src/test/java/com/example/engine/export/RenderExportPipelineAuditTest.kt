@@ -63,6 +63,13 @@ class RenderExportPipelineAuditTest {
       trackSettings = mapOf(TrackType.AUDIO to TrackSettings(TrackType.AUDIO, isMuted = true))
     )
     assertFalse(processor.hasActiveAudio(muted))
+
+    val hiddenClip = Timeline(
+      audioClips = listOf(
+        AudioClip(title = "hidden", uri = "content://media/song.m4a", durationMs = 1000L, volume = 1f, isHidden = true)
+      )
+    )
+    assertFalse(processor.hasActiveAudio(hiddenClip))
   }
 
   @Test

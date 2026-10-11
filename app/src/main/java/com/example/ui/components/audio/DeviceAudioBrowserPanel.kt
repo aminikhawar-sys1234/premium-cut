@@ -32,7 +32,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.engine.audio.DeviceAudioLibrary
 import com.example.engine.audio.DeviceAudioTrack
-import com.example.engine.media.MediaMetadataHelper
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StudioDark
@@ -69,12 +68,18 @@ fun DeviceAudioBrowserPanel(
   LaunchedEffect(Unit) { reload() }
 
   fun addTrack(titleText: String, uri: String, durationMs: Long) {
+    if (durationMs <= 0L) {
+      Toast.makeText(context, "Could not read audio duration", Toast.LENGTH_SHORT).show()
+      return
+    }
     scope.launch {
       viewModel.audioEngine.stopAudio()
       val waveform = withContext(Dispatchers.IO) {
-        val path = Uri.parse(uri).path
-        val file = if (path != null) File(path) else null
-        if (file != null && file.exists()) viewModel.audioEngine.extractWaveformFromFile(file) else emptyList()
+        com.example.engine.audio.AudioWaveformManager.extractWaveformRealtime(
+          context = context,
+          uriString = uri,
+          durationMs = durationMs
+        )
       }
       viewModel.timelineEngine.addAudioClip(
         title = titleText,
@@ -99,16 +104,19 @@ fun DeviceAudioBrowserPanel(
             dest.outputStream().use { output -> input.copyTo(output) }
           }
         }
-        val metadata = MediaMetadataHelper.extractMetadata(context, dest.absolutePath)
-        val duration = if (metadata.durationMs > 0L) metadata.durationMs else 0L
-        if (duration <= 0L) {
+        if (!dest.exists() || dest.length() == 0L) {
+          Toast.makeText(context, "Imported audio file is empty", Toast.LENGTH_SHORT).show()
+          return@launch
+        }
+        val measured = com.example.engine.audio.AudioMediaDuration.durationMs(context, dest.absolutePath)
+        if (measured == null || measured <= 0L) {
           Toast.makeText(context, "Could not read audio duration", Toast.LENGTH_SHORT).show()
           return@launch
         }
         addTrack(
           titleText = dest.nameWithoutExtension,
           uri = dest.absolutePath,
-          durationMs = duration
+          durationMs = measured
         )
       } catch (t: Throwable) {
         Toast.makeText(context, "Import failed: ${t.message}", Toast.LENGTH_SHORT).show()

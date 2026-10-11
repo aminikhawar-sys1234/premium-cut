@@ -26,11 +26,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.engine.audio.AudioMediaDuration
+import com.example.engine.audio.synthesizeSpeechToFile
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StudioDark
 import com.example.ui.theme.StudioSurface
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
@@ -419,27 +423,35 @@ fun TextToAudioFullPanel(
               Toast.makeText(context, "Please enter some text first", Toast.LENGTH_SHORT).show()
               return@Button
             }
+            val engine = ttsEngine
+            if (!ttsReady || engine == null) {
+              Toast.makeText(context, "Speech engine is still initializing", Toast.LENGTH_SHORT).show()
+              return@Button
+            }
 
             isGenerating = true
             coroutineScope.launch {
               try {
-                val wordCount = inputText.trim().split(Regex("\\s+")).size.coerceAtLeast(1)
-                val estimatedDurationMs = ((wordCount / (2.5f * speedVal)) * 1000L).toLong().coerceIn(2000L, 60000L)
-
                 val outputFile = File(context.filesDir, "tts_voice_${System.currentTimeMillis()}.wav")
-                ttsEngine?.let { engine ->
-                  engine.language = selectedVoice.locale
-                  engine.setPitch(pitchVal)
-                  engine.setSpeechRate(speedVal)
-                  engine.synthesizeToFile(inputText, null, outputFile, "tts_${System.currentTimeMillis()}")
+                engine.language = selectedVoice.locale
+                engine.setPitch(pitchVal)
+                engine.setSpeechRate(speedVal)
+                val synthesized = synthesizeSpeechToFile(engine, inputText, outputFile)
+                if (!synthesized) {
+                  throw IllegalStateException("Speech synthesis did not produce an audio file")
                 }
 
-                // Generate waveform
-                val waveform = com.example.engine.audio.SoundEffectsCatalog.generateWaveform(selectedVoice.name, 36)
+                val durationMs = withContext(Dispatchers.IO) {
+                  AudioMediaDuration.durationMs(context, outputFile.absolutePath)
+                } ?: throw IllegalStateException("Synthesized speech duration could not be read")
+
+                val waveform = withContext(Dispatchers.IO) {
+                  viewModel.audioEngine.extractWaveformFromFile(outputFile)
+                }
 
                 viewModel.timelineEngine.addAudioClip(
                   title = "Voice: ${selectedVoice.name}",
-                  durationMs = estimatedDurationMs,
+                  durationMs = durationMs,
                   uri = outputFile.absolutePath,
                   waveformData = waveform
                 )
@@ -453,6 +465,7 @@ fun TextToAudioFullPanel(
               }
             }
           },
+          enabled = !isGenerating && ttsReady,
           modifier = Modifier
             .fillMaxWidth()
             .height(46.dp),
