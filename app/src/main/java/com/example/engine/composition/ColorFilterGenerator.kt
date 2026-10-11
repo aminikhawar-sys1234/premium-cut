@@ -150,7 +150,11 @@ object ColorFilterGenerator {
       else -> filterSettings
     }
 
-    val filterMatrix = getFilterMatrix(activeFilter.type, activeFilter.intensity)
+    val filterMatrix = if (activeFilter.enabled) {
+      getFilterMatrix(activeFilter.type, activeFilter.intensity)
+    } else {
+      null
+    }
 
     if (filterMatrix != null) {
       result.postConcat(filterMatrix)

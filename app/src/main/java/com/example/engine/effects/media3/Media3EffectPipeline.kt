@@ -42,10 +42,18 @@ object Media3EffectPipeline {
   /**
    * Applies the generated list of Media3 effects to ExoPlayer in real-time.
    */
-  /** @return true when ExoPlayer accepted the new effect list. */
+  /**
+   * Pushes [effects] onto ExoPlayer without dropping audio or the current play/pause state.
+   * `setVideoEffects` rebuilds the video graph; callers must re-bind the TextureView afterwards.
+   * @return true when ExoPlayer accepted the new effect list.
+   */
   fun applyRealtimeEffects(exoPlayer: ExoPlayer, effects: List<Effect>): Boolean {
     return try {
+      val playWhenReady = exoPlayer.playWhenReady
+      val volume = exoPlayer.volume
       exoPlayer.setVideoEffects(effects)
+      if (exoPlayer.volume != volume) exoPlayer.volume = volume
+      if (exoPlayer.playWhenReady != playWhenReady) exoPlayer.playWhenReady = playWhenReady
       true
     } catch (e: Exception) {
       android.util.Log.w("Media3EffectPipeline", "Failed to apply real-time video effects to ExoPlayer", e)

@@ -234,4 +234,36 @@ class PlaybackControllerTimelineStateTest {
     assertNotNull(state.activeClip)
     state.timeline.videoClips.forEach { assertTrue(it.sourceStartMs <= it.sourceEndMs) }
   }
+
+  @Test
+  fun filterOnlyTimelineUpdateWhilePlayingDoesNotStopClockOrMute() {
+    val clip = VideoClip(
+      id = "clip_1",
+      name = "vid1.mp4",
+      uri = "content://media/vid1.mp4",
+      durationMs = 8000L,
+      timelineStartMs = 0L,
+      sourceStartMs = 0L,
+      sourceEndMs = 8000L,
+      isVideo = true,
+      volume = 0.8f,
+      isMuted = false
+    )
+    playbackController.updateTimeline(Timeline(videoClips = listOf(clip)))
+    playbackController.playTimeline(1500L)
+    playbackController.updateTimelinePosition(1800L)
+
+    val filtered = clip.copy(filter = com.example.domain.model.FilterSettings(
+      type = com.example.domain.model.FilterType.CINEMATIC,
+      intensity = 0.9f
+    ))
+    playbackController.updateTimeline(Timeline(videoClips = listOf(filtered)))
+
+    val state = playbackController.timelineState.value
+    assertTrue("Filter apply must not pause the master clock", state.isPlaying)
+    assertEquals(1800L, state.positionMs)
+    assertEquals(0.8f, state.activeClip?.volume)
+    assertFalse(state.activeClip?.isMuted == true)
+    assertEquals(com.example.domain.model.FilterType.CINEMATIC, state.activeClip?.filter?.type)
+  }
 }

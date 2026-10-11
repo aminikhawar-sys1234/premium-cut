@@ -42,6 +42,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.FrameLayout
 import android.view.ViewGroup
 import com.example.engine.media.MediaRelinkManager
+import com.example.engine.effects.media3.PreviewDisplayFilter
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -366,10 +367,14 @@ fun InteractiveTransformOverlay(
                   ViewGroup.LayoutParams.MATCH_PARENT
                 )
                 com.example.ui.components.player.PreviewVideoSurfaceRegistry.bind(overlayPlayer, this)
+                overlay.filter?.let { PreviewDisplayFilter.apply(this, PreviewDisplayFilter.matrixFor(it)) }
+                  ?: PreviewDisplayFilter.clear(this)
               }
             },
             update = { tv ->
               com.example.ui.components.player.PreviewVideoSurfaceRegistry.bind(overlayPlayer, tv)
+              overlay.filter?.let { PreviewDisplayFilter.apply(tv, PreviewDisplayFilter.matrixFor(it)) }
+                ?: PreviewDisplayFilter.clear(tv)
             },
             onReset = { /* Keep texture view intact */ },
             onRelease = { tv ->

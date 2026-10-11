@@ -65,4 +65,31 @@ class TimelineSerializerSafetyTest {
     assertEquals(1.25f, c.speed, 0.001f)
     assertTrue(restored.totalDurationMs == timeline.totalDurationMs)
   }
+
+  @Test
+  fun roundTrip_preservesClipFilterAndPlayhead() {
+    val clip = VideoClip(
+      id = "v1", uri = "file:///v1.mp4", name = "v1",
+      durationMs = 8_000L, timelineStartMs = 0L,
+      filter = com.example.domain.model.FilterSettings(
+        type = com.example.domain.model.FilterType.CINEMATIC,
+        intensity = 0.65f,
+        enabled = true
+      )
+    )
+    val settings = com.example.domain.model.ProjectSettings(playheadMs = 2_400L)
+    val timeline = Timeline(videoClips = listOf(clip))
+    val pkg = TimelineSerializer.buildProjectPackage(
+      projectId = "p1", projectName = "P", settings = settings, timeline = timeline, isDraft = false
+    )
+    val json = TimelineSerializer.toPackageJson(pkg)
+    val restoredPkg = TimelineSerializer.fromPackageJson(json)
+    assertNotNull(restoredPkg)
+    val restored = restoredPkg!!.timeline.videoClips.single()
+    assertEquals(com.example.domain.model.FilterType.CINEMATIC, restored.filter?.type)
+    assertEquals(0.65f, restored.filter?.intensity ?: 0f, 0.001f)
+    assertEquals(true, restored.filter?.enabled)
+    assertEquals(2_400L, restoredPkg.settings.playheadMs)
+    assertFalse(json.contains("textureId") || json.contains("egl") || json.contains("framebuffer"))
+  }
 }

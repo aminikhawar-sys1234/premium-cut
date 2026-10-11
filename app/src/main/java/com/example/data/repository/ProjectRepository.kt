@@ -67,7 +67,8 @@ class ProjectRepository(private val database: AppDatabase) {
     sampleRate: Int = 48000,
     canvasColor: Long = 0xFF000000,
     hasMissingMedia: Boolean = false,
-    extraMetadataJson: String = "{}"
+    extraMetadataJson: String = "{}",
+    playheadMs: Long = 0L
   ): ProjectEntity {
     val projectSettings = ProjectSettings(
       aspectRatio = AspectRatio.values().find { it.label == aspectRatio } ?: AspectRatio.RATIO_9_16,
@@ -75,7 +76,8 @@ class ProjectRepository(private val database: AppDatabase) {
       fps = FrameRate.values().find { it.fps == fps } ?: FrameRate.FPS_30,
       sampleRateHz = sampleRate,
       canvasBackgroundColor = canvasColor,
-      totalDurationMs = durationMs
+      totalDurationMs = durationMs,
+      playheadMs = playheadMs.coerceAtLeast(0L)
     )
     val projectPackage = TimelineSerializer.buildProjectPackage(
       projectId = id,

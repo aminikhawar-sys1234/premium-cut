@@ -41,6 +41,14 @@ object PreviewVideoSurfaceRegistry {
   private val boundPriority = java.util.WeakHashMap<ExoPlayer, Int>()
   private val primaryView = java.util.WeakHashMap<ExoPlayer, WeakReference<TextureView>>()
 
+  /**
+   * Invoked on the main thread after a TextureView is (re)bound to a player.
+   * Used to present the paused frame: ExoPlayer does not redraw after setVideoTextureView
+   * while paused, which left reopened projects on a black preview.
+   */
+  @Volatile
+  var onPlayerSurfaceBound: ((ExoPlayer) -> Unit)? = null
+
   private fun onMain(block: () -> Unit) {
     if (Looper.myLooper() == Looper.getMainLooper()) block()
     else mainHandler.post(block)
@@ -96,6 +104,24 @@ object PreviewVideoSurfaceRegistry {
         boundPriority[player] = priority
       } catch (_: Throwable) {
         // A released player throws here: ignore, its surface is gone anyway.
+        return
+      }
+    }
+    onPlayerSurfaceBound?.invoke(player)
+  }
+
+  /**
+   * Re-attaches the currently bound TextureView. `setVideoEffects` rebuilds the video graph
+   * and silently drops the output surface; calling this restores live frames without creating
+   * a new TextureView.
+   */
+  fun rebindCurrent(player: ExoPlayer) {
+    onMain {
+      val view = synchronized(lock) { boundView[player]?.get() } ?: return@onMain
+      if (!view.isAvailable) return@onMain
+      try {
+        player.setVideoTextureView(view)
+      } catch (_: Throwable) {
       }
     }
   }

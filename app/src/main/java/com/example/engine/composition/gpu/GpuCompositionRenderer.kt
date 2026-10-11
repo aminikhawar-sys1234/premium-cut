@@ -1666,7 +1666,11 @@ class GpuCompositionRenderer(private val context: Context) {
     val uColorOffsetHandle = GLES20.glGetUniformLocation(program, "uColorOffset")
     val uUseColorMatrixHandle = GLES20.glGetUniformLocation(program, "uUseColorMatrix")
 
-    val filterMatrix = com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(filter.type, filter.intensity)
+    val filterMatrix = if (filter.enabled) {
+      com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(filter.type, filter.intensity)
+    } else {
+      null
+    }
     val finalMatrix = when {
       filterMatrix != null && effectColorMatrix != null -> {
         val combined = android.graphics.ColorMatrix(filterMatrix)

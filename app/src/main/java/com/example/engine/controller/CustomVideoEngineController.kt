@@ -280,6 +280,18 @@ class CustomVideoEngineController(
 
   private fun handlePlayerError(error: PlaybackException) {
     Log.e(TAG, "Player exception: ${error.errorCodeName}: ${error.message}", error)
+    val processingFailure = error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED ||
+      error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSOR_INIT_FAILED
+    if (processingFailure) {
+      // Shader / GPU look failed: keep the loaded clip and last valid picture.
+      // VideoPlaybackEngine rolls the effect list back; clearing the URI here would
+      // reload the decoder and produce a black preview.
+      _engineState.value = _engineState.value.copy(
+        error = error.message ?: error.errorCodeName,
+        decoderState = decoderManager.decoderState
+      )
+      return
+    }
     decoderManager.handleCodecError(error)
     loadedClipId = null
     loadedUri = null
