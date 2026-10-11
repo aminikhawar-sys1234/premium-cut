@@ -15,6 +15,7 @@ import com.example.engine.composition.TransitionPreviewMotion
 import com.example.engine.composition.ComposedOverlay
 import com.example.engine.composition.ComposedSticker
 import com.example.engine.composition.ComposedText
+import com.example.engine.composition.StickerDisplayMetrics
 import com.example.engine.composition.StickerLayerRenderer
 import com.example.engine.composition.VideoEffectRenderer
 import com.example.engine.text.Text3DGlRenderer
@@ -609,10 +610,19 @@ class GpuCompositionRenderer(private val context: Context) {
       val cached = getOrCreateStickerTexture(sticker.clip, viewportWidth, viewportHeight)
       if (cached != null && cached.texId > 0) {
         cached.lastFrameUsed = currentFrameCounter
-        val aspect = viewportWidth.toFloat() / max(1, viewportHeight)
-        val stickerAspect = cached.width.toFloat() / max(1, cached.height)
-        val scaleY = ((cached.height.toFloat() / viewportHeight) * 2f * sticker.scale).coerceAtLeast(0.01f)
-        val scaleX = (scaleY * stickerAspect / aspect).coerceAtLeast(0.01f)
+        val isGraphicSticker = sticker.clip.badgeType == null && sticker.clip.elementId == null
+        val scaleX: Float
+        val scaleY: Float
+        if (isGraphicSticker) {
+          val ndc = StickerDisplayMetrics.ndcScale(viewportWidth, viewportHeight, sticker.scale)
+          scaleX = ndc.first
+          scaleY = ndc.second
+        } else {
+          val aspect = viewportWidth.toFloat() / max(1, viewportHeight)
+          val stickerAspect = cached.width.toFloat() / max(1, cached.height)
+          scaleY = ((cached.height.toFloat() / viewportHeight) * 2f * sticker.scale).coerceAtLeast(0.01f)
+          scaleX = (scaleY * stickerAspect / aspect).coerceAtLeast(0.01f)
+        }
 
         val stkMatrix = FloatArray(16)
         Matrix.setIdentityM(stkMatrix, 0)
@@ -1407,26 +1417,29 @@ class GpuCompositionRenderer(private val context: Context) {
     }
 
     val isBadge = clip.badgeType != null
-    val targetWidth = if (isBadge) {
-      (160f * (viewportWidth.toFloat() / 600f)).toInt().coerceIn(128, 384)
+    val isElement = clip.elementId != null
+    val targetWidth: Int
+    val targetHeight: Int
+    if (isBadge) {
+      targetWidth = (160f * (viewportWidth.toFloat() / 600f)).toInt().coerceIn(128, 384)
+      targetHeight = (targetWidth * 0.42f).toInt().coerceIn(54, 160)
+    } else if (isElement) {
+      targetWidth = (80f * (viewportWidth.toFloat() / 600f)).toInt().coerceIn(64, 256)
+      targetHeight = targetWidth
     } else {
-      (80f * (viewportWidth.toFloat() / 600f)).toInt().coerceIn(64, 256)
-    }
-    val targetHeight = if (isBadge) {
-      (targetWidth * 0.42f).toInt().coerceIn(54, 160)
-    } else {
-      targetWidth
+      val sprite = StickerDisplayMetrics.spriteTextureSizePx(viewportWidth, viewportHeight)
+      targetWidth = sprite
+      targetHeight = sprite
     }
 
     val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-
-    StickerLayerRenderer.draw(
+    StickerLayerRenderer.drawSprite(
       canvas = canvas,
-      clip = StickerLayerRenderer.forLocalSprite(clip),
-      currentPosMs = clip.timelineStartMs,
+      clip = clip,
       width = targetWidth,
-      height = targetHeight
+      height = targetHeight,
+      opacity = 1f
     )
 
     val oldTexId = cached?.texId ?: 0

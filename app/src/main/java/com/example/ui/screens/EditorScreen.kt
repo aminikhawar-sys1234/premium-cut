@@ -794,10 +794,9 @@ fun EditorScreen(
             .testTag("video_preview")
         )
 
-        // Motion tracking box / path stays on the preview after the panel closes.
-        val showMotionTrackingOverlay =
-          activeTab == EditorToolbarTab.MOTION_TRACKING || trackingUiState.hasPreviewTrack
-        if (showMotionTrackingOverlay) {
+        // Diagnostic trails/boxes only while the Motion Tracking panel is open.
+        // Tracked stickers/text keep rendering through InteractiveTransformOverlay.
+        if (trackingUiState.shouldShowDiagnostics(activeTab == EditorToolbarTab.MOTION_TRACKING)) {
           val activeTrackClip = viewModel.getSelectedVideoClip()
           com.example.ui.components.tracking.MotionTrackingPreviewOverlay(
             uiState = trackingUiState,
@@ -1615,7 +1614,7 @@ fun EditorScreen(
           modifier = Modifier.fillMaxSize()
         )
 
-        if (activeTab == EditorToolbarTab.MOTION_TRACKING || trackingUiState.hasPreviewTrack) {
+        if (trackingUiState.shouldShowDiagnostics(activeTab == EditorToolbarTab.MOTION_TRACKING)) {
           val activeTrackClip = viewModel.getSelectedVideoClip()
           com.example.ui.components.tracking.MotionTrackingPreviewOverlay(
             uiState = trackingUiState,

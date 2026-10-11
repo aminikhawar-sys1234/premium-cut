@@ -213,4 +213,10 @@ data class MotionTrackingUiState(
 
     val canAttachLayer: Boolean
         get() = (activeResult != null && !activeResult.isEmpty) || liveDetections.isNotEmpty()
+
+    /**
+     * Diagnostic trails, boxes, and markers. Closing the panel hides them without
+     * clearing [activeResult] so tracked overlays keep following the saved path.
+     */
+    fun shouldShowDiagnostics(panelOpen: Boolean): Boolean = panelOpen
 }

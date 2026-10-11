@@ -140,6 +140,10 @@ class MotionTrackingAttachTest {
         )
         assertTrue(tracked.hasPreviewTrack)
         assertTrue(tracked.canAttachLayer)
+        assertTrue(tracked.shouldShowDiagnostics(panelOpen = true))
+        assertTrue(!tracked.shouldShowDiagnostics(panelOpen = false))
+        assertTrue(live.shouldShowDiagnostics(panelOpen = true))
+        assertTrue(!live.shouldShowDiagnostics(panelOpen = false))
     }
 
     @Test

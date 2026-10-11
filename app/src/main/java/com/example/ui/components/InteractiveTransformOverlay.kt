@@ -57,7 +57,9 @@ import com.example.domain.model.TextClip
 import com.example.domain.model.VideoClip
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.SelectedTrackElement
+import com.example.engine.composition.StickerDisplayMetrics
 import com.example.engine.composition.StickerLayerRenderer
+import com.example.engine.composition.StickerUserTransform
 import com.example.engine.text.TextLayerRenderer
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import com.example.ui.theme.AmberAccent
@@ -482,27 +484,28 @@ fun InteractiveTransformOverlay(
       val currentSticker by rememberUpdatedState(sticker)
       val isBadge = sticker.badgeType != null
       val isElement = sticker.elementId != null
+      val defaultBoxPx = StickerDisplayMetrics.baseSizePx(parentWidthPx, parentHeightPx)
       val baseWidthDp = when {
-        isBadge -> 150.dp
+        isBadge -> with(density) { (defaultBoxPx * 1.4f).toDp() }
         isElement -> when (sticker.elementCategory) {
-          "tables" -> 140.dp
-          "charts" -> 130.dp
-          "frames" -> 120.dp
-          "graphics" -> 100.dp
-          else -> 90.dp
+          "tables" -> with(density) { (defaultBoxPx * 1.35f).toDp() }
+          "charts" -> with(density) { (defaultBoxPx * 1.25f).toDp() }
+          "frames" -> with(density) { (defaultBoxPx * 1.2f).toDp() }
+          "graphics" -> with(density) { defaultBoxPx.toDp() }
+          else -> with(density) { (defaultBoxPx * 0.95f).toDp() }
         }
-        else -> 80.dp
+        else -> with(density) { defaultBoxPx.toDp() }
       }
       val baseHeightDp = when {
-        isBadge -> 64.dp
+        isBadge -> with(density) { (defaultBoxPx * 0.58f).toDp() }
         isElement -> when (sticker.elementCategory) {
-          "tables" -> 90.dp
-          "charts" -> 95.dp
-          "frames" -> 120.dp
-          "graphics" -> 100.dp
-          else -> 90.dp
+          "tables" -> with(density) { (defaultBoxPx * 0.9f).toDp() }
+          "charts" -> with(density) { (defaultBoxPx * 0.95f).toDp() }
+          "frames" -> with(density) { (defaultBoxPx * 1.2f).toDp() }
+          "graphics" -> with(density) { defaultBoxPx.toDp() }
+          else -> with(density) { (defaultBoxPx * 0.95f).toDp() }
         }
-        else -> 80.dp
+        else -> with(density) { defaultBoxPx.toDp() }
       }
       val baseWidthPx = with(density) { baseWidthDp.toPx() }
       val baseHeightPx = with(density) { baseHeightDp.toPx() }
@@ -540,44 +543,24 @@ fun InteractiveTransformOverlay(
               },
               onMoveDelta = { deltaNormX, deltaNormY ->
                 if (currentSticker.isLocked) return@detectElementTouchGestures
-                val clip = currentSticker
-                val rel = currentPosMs - clip.timelineStartMs
-                val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
-                if (activeKf != null) {
-                  val updatedKeyframes = clip.keyframes.map { kfItem ->
-                    if (kfItem.id == activeKf.id) {
-                      kfItem.copy(
-                        posX = (kfItem.posX + deltaNormX).coerceIn(-1.8f, 1.8f),
-                        posY = (kfItem.posY + deltaNormY).coerceIn(-1.8f, 1.8f)
-                      )
-                    } else kfItem
-                  }
-                  currentOnUpdateSticker(clip.copy(keyframes = updatedKeyframes))
-                } else {
-                  val newX = (clip.posX + deltaNormX).coerceIn(-1.8f, 1.8f)
-                  val newY = (clip.posY + deltaNormY).coerceIn(-1.8f, 1.8f)
-                  currentOnUpdateSticker(clip.copy(posX = newX, posY = newY))
-                }
+                currentOnUpdateSticker(
+                  StickerUserTransform.applyPositionDelta(
+                    currentSticker,
+                    deltaNormX,
+                    deltaNormY,
+                    currentPosMs
+                  )
+                )
               },
               onTwoFingerTransform = if (sticker.isLocked) null else { scaleFactor, rotDelta ->
-                val clip = currentSticker
-                val rel = currentPosMs - clip.timelineStartMs
-                val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
-                if (activeKf != null) {
-                  val updatedKeyframes = clip.keyframes.map { kfItem ->
-                    if (kfItem.id == activeKf.id) {
-                      val newScaleX = (kfItem.scaleX * scaleFactor).coerceIn(0.15f, 8.0f)
-                      val newScaleY = (kfItem.scaleY * scaleFactor).coerceIn(0.15f, 8.0f)
-                      val newRot = (kfItem.rotation + rotDelta) % 360f
-                      kfItem.copy(scaleX = newScaleX, scaleY = newScaleY, rotation = newRot)
-                    } else kfItem
-                  }
-                  currentOnUpdateSticker(clip.copy(keyframes = updatedKeyframes))
-                } else {
-                  val newScale = (clip.scale * scaleFactor).coerceIn(0.15f, 8.0f)
-                  val newRot = (clip.rotation + rotDelta) % 360f
-                  currentOnUpdateSticker(clip.copy(scale = newScale, rotation = newRot))
-                }
+                currentOnUpdateSticker(
+                  StickerUserTransform.applyScaleRotation(
+                    currentSticker,
+                    scaleFactor,
+                    rotDelta,
+                    currentPosMs
+                  )
+                )
               },
               onTap = {
                 currentOnSelectElement(SelectedTrackElement.Sticker(currentSticker.id))
@@ -589,12 +572,12 @@ fun InteractiveTransformOverlay(
         Canvas(modifier = Modifier.fillMaxSize()) {
           drawIntoCanvas { composeCanvas ->
             val nativeCanvas = composeCanvas.nativeCanvas
-            StickerLayerRenderer.draw(
+            StickerLayerRenderer.drawSprite(
               canvas = nativeCanvas,
-              clip = StickerLayerRenderer.forLocalSprite(sticker),
-              currentPosMs = currentPosMs,
+              clip = sticker,
               width = size.width.toInt(),
-              height = size.height.toInt()
+              height = size.height.toInt(),
+              opacity = 1f
             )
           }
         }
@@ -614,24 +597,14 @@ fun InteractiveTransformOverlay(
             onUpdateSticker(sticker.copy(scale = 1.0f, rotation = 0f))
           },
           onTransformHandleDrag = { deltaScale, deltaRotation ->
-            val clip = currentSticker
-            val rel = currentPosMs - clip.timelineStartMs
-            val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
-            if (activeKf != null) {
-              val updatedKeyframes = clip.keyframes.map { kfItem ->
-                if (kfItem.id == activeKf.id) {
-                  val newScaleX = (kfItem.scaleX * deltaScale).coerceIn(0.15f, 8.0f)
-                  val newScaleY = (kfItem.scaleY * deltaScale).coerceIn(0.15f, 8.0f)
-                  val newRot = (kfItem.rotation + deltaRotation) % 360f
-                  kfItem.copy(scaleX = newScaleX, scaleY = newScaleY, rotation = newRot)
-                } else kfItem
-              }
-              currentOnUpdateSticker(clip.copy(keyframes = updatedKeyframes))
-            } else {
-              val newScale = (clip.scale * deltaScale).coerceIn(0.15f, 8.0f)
-              val newRot = (clip.rotation + deltaRotation) % 360f
-              currentOnUpdateSticker(clip.copy(scale = newScale, rotation = newRot))
-            }
+            currentOnUpdateSticker(
+              StickerUserTransform.applyScaleRotation(
+                currentSticker,
+                deltaScale,
+                deltaRotation,
+                currentPosMs
+              )
+            )
           }
         )
       }
