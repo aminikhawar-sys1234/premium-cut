@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.EmojiEmotions
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.FastRewind
 import androidx.compose.material.icons.filled.GridOn
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Link
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
@@ -385,6 +386,7 @@ private fun FaceCategoryContent(viewModel: StudioViewModel, uiState: MotionTrack
         QuickTool(Icons.Default.BlurOn, "Blur") { viewModel.attachFaceEffect(EffectType.BLUR) }
         QuickTool(Icons.Default.GridOn, "Mosaic") { viewModel.attachFaceEffect(EffectType.MOSAIC) }
         QuickTool(Icons.Default.EmojiEmotions, "Sticker") { viewModel.attachTrackingToLayer(AttachmentTarget.STICKER) }
+        QuickTool(Icons.Default.Image, "Overlay") { viewModel.attachTrackingToLayer(AttachmentTarget.OVERLAY) }
     }
 }
 

@@ -32,10 +32,13 @@ object MotionTrackingAttach {
             ?: detections.firstOrNull { it.category == category }
             ?: detections.firstOrNull()
         val box = det?.box ?: fallbackRegion ?: return null
-        val startUs = (clip.sourceStartMs * 1000L).coerceAtMost(playheadSourceUs)
-        val endUs = (clip.sourceEndMs * 1000L).coerceAtLeast(playheadSourceUs + 100_000L)
+        val clipStartUs = clip.sourceStartMs * 1000L
+        val clipEndUs = (clip.sourceEndMs * 1000L).coerceAtLeast(clipStartUs + 100_000L)
+        val detectedUs = playheadSourceUs.coerceIn(clipStartUs, clipEndUs)
+        // Only persist the frame that was actually detected. The evaluator holds that
+        // pose outside the key — do not invent motion at other timestamps.
         val kf = MotionKeyframe(
-            timestampUs = playheadSourceUs.coerceIn(startUs, endUs),
+            timestampUs = detectedUs,
             centerX = box.centerX,
             centerY = box.centerY,
             scaleX = 1f,
@@ -46,13 +49,9 @@ object MotionTrackingAttach {
         return TrackingResult(
             targetId = "live_${clip.id}_${det?.id ?: 0}",
             clipId = clip.id,
-            startTimestampUs = startUs,
-            endTimestampUs = endUs,
-            keyframes = listOf(
-                kf.copy(timestampUs = startUs),
-                kf,
-                kf.copy(timestampUs = endUs)
-            ).distinctBy { it.timestampUs },
+            startTimestampUs = detectedUs,
+            endTimestampUs = clipEndUs,
+            keyframes = listOf(kf),
             targetCategory = det?.category ?: category
         )
     }

@@ -340,6 +340,65 @@ class OverlayTrackBindingTest {
     }
 
     @Test
+    fun exportTranslationUsesComposedPoseOnce() {
+        val (tx, ty) = TrackingCoordinateSpace.exportTranslationNdc(0.25f, -0.10f)
+        assertEquals(0.25f, tx, 1e-5f)
+        assertEquals(0.10f, ty, 1e-5f)
+    }
+
+    @Test
+    fun trackedOverlayPreviewMatchesExportWithoutExtraCrop() {
+        val h = host()
+        val result = movingFace()
+        val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(result, h, true, true, true, 0f, 0f))
+        val overlay = h.copy(
+            id = "ov",
+            timelineStartMs = 0L,
+            durationMs = 4000L,
+            cropOffsetX = 0.12f,
+            cropOffsetY = -0.08f,
+            cropScale = 0.45f,
+            trackBindJson = json
+        )
+        val preview = TrackingEvalContext.withTimeline(Timeline(videoClips = listOf(h), overlayClips = listOf(overlay))) {
+            KeyframeInterpolator.interpolate(overlay, 500L)
+        }
+        val exported = TimelineEvaluator().evaluate(
+            Timeline(videoClips = listOf(h), overlayClips = listOf(overlay), aspectRatio = AspectRatio.RATIO_9_16),
+            500L
+        ).activeOverlays.single()
+        assertEquals(preview.posX, exported.posX, 1e-4f)
+        assertEquals(preview.posY, exported.posY, 1e-4f)
+        val (gpuX, gpuY) = TrackingCoordinateSpace.exportTranslationNdc(exported.posX, exported.posY)
+        assertEquals(exported.posX, gpuX, 1e-5f)
+        assertEquals(-exported.posY, gpuY, 1e-5f)
+        assertTrue(kotlin.math.abs(gpuX - (exported.posX + overlay.cropOffsetX)) > 0.05f)
+    }
+
+    @Test
+    fun rebindHostReplacesTrackAndKeepsUserOffset() {
+        val h = host()
+        val live = MotionTrackingAttach.resultFromLive(
+            clip = h,
+            detections = listOf(
+                LiveDetection(1, TrackingCategory.FACE, NormalizedRect(0.2f, 0.2f, 0.4f, 0.4f), "Face", 0.9f)
+            ),
+            selectedId = 1,
+            category = TrackingCategory.FACE,
+            playheadSourceUs = 0L
+        )!!
+        val original = OverlayTrackCodec.fromHost(live, h, true, true, true, 0.05f, -0.02f)
+        val encoded = OverlayTrackCodec.encode(original)
+        val rebound = OverlayTrackCodec.decode(OverlayTrackCodec.rebindHost(encoded, movingFace(), h)!!)!!
+        assertEquals(0.05f, rebound.offsetX, 1e-4f)
+        assertEquals(-0.02f, rebound.offsetY, 1e-4f)
+        assertEquals("face-a", rebound.targetId)
+        assertEquals(3, MotionTrackCodec.decode(rebound.encodedTrack)!!.keyframes.size)
+        val ignored = OverlayTrackCodec.rebindHost(encoded, movingFace(), host(id = "other").copy(uri = "file://other.mp4"))
+        assertEquals(encoded, ignored)
+    }
+
+    @Test
     fun longDurationSamplingStaysInsideTrack() {
         val keys = (0..240).map { i ->
             MotionKeyframe(i * 41_666L, 0.2f + i * 0.002f, 0.5f, 1f, 1f, 0f, 0.9f)

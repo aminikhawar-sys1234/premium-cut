@@ -482,6 +482,119 @@ fun EditorScreen(
     }
   }
 
+  val trackedOverlayPickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.PickVisualMedia()
+  ) { uri: Uri? ->
+    if (uri == null) {
+      viewModel.cancelPendingTrackedAttachment()
+      return@rememberLauncherForActivityResult
+    }
+    coroutineScope.launch {
+      try {
+        val fileName = try {
+          var result: String? = null
+          if (uri.scheme == "content") {
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+              if (it.moveToFirst()) {
+                val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index != -1) result = it.getString(index)
+              }
+            }
+          }
+          result ?: uri.lastPathSegment ?: "Overlay Image"
+        } catch (e: Exception) {
+          uri.lastPathSegment ?: "Overlay Image"
+        }
+        val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
+          context = context,
+          sourceUriString = uri.toString(),
+          suggestedName = fileName
+        )
+        val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
+          context,
+          persistentPath,
+          defaultImageDurationMs = 3000L
+        )
+        val added = viewModel.addTrackedOverlayFromPersistedMedia(
+          uri = persistentPath,
+          name = fileName,
+          isVideo = metadata.isVideo,
+          durationMs = metadata.durationMs,
+          width = metadata.width,
+          height = metadata.height,
+          rotationDegrees = metadata.rotationDegrees,
+          frameRate = metadata.frameRate,
+          mimeType = metadata.mimeType,
+          hasAudio = metadata.hasAudio
+        )
+        if (!added) {
+          android.util.Log.w("EditorScreen", "Tracked overlay import skipped for $fileName")
+        }
+      } catch (e: Throwable) {
+        android.util.Log.e("EditorScreen", "Error importing tracked overlay image", e)
+        viewModel.cancelPendingTrackedAttachment()
+      }
+    }
+  }
+
+  val genericTrackedOverlayPickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.GetContent()
+  ) { uri: Uri? ->
+    if (uri == null) {
+      viewModel.cancelPendingTrackedAttachment()
+      return@rememberLauncherForActivityResult
+    }
+    coroutineScope.launch {
+      try {
+        val fileName = uri.lastPathSegment ?: "Overlay Image"
+        val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
+          context = context,
+          sourceUriString = uri.toString(),
+          suggestedName = fileName
+        )
+        val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
+          context,
+          persistentPath,
+          defaultImageDurationMs = 3000L
+        )
+        viewModel.addTrackedOverlayFromPersistedMedia(
+          uri = persistentPath,
+          name = fileName,
+          isVideo = metadata.isVideo,
+          durationMs = metadata.durationMs,
+          width = metadata.width,
+          height = metadata.height,
+          rotationDegrees = metadata.rotationDegrees,
+          frameRate = metadata.frameRate,
+          mimeType = metadata.mimeType,
+          hasAudio = metadata.hasAudio
+        )
+      } catch (e: Throwable) {
+        android.util.Log.e("EditorScreen", "Error importing tracked overlay fallback image", e)
+        viewModel.cancelPendingTrackedAttachment()
+      }
+    }
+  }
+
+  val pendingTrackedOverlayPick by viewModel.pendingTrackedOverlayPick.collectAsState()
+  LaunchedEffect(pendingTrackedOverlayPick) {
+    if (!pendingTrackedOverlayPick) return@LaunchedEffect
+    viewModel.consumeTrackedOverlayPickRequest()
+    try {
+      trackedOverlayPickerLauncher.launch(
+        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+      )
+    } catch (e: Throwable) {
+      try {
+        genericTrackedOverlayPickerLauncher.launch("image/*")
+      } catch (e2: Throwable) {
+        android.util.Log.e("EditorScreen", "Failed to launch tracked overlay picker", e2)
+        viewModel.cancelPendingTrackedAttachment()
+      }
+    }
+  }
+
   val handleToolClick: (EditorToolItem) -> Unit = { tool ->
     when {
       tool.actionKey.contains("SPLIT", ignoreCase = true) -> {

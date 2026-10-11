@@ -35,10 +35,33 @@ class MotionTrackingAttachTest {
             playheadSourceUs = 1_000_000L
         )
         assertNotNull(result)
-        assertTrue(result!!.keyframes.isNotEmpty())
+        assertEquals(1, result!!.keyframes.size)
+        assertEquals(1_000_000L, result.keyframes[0].timestampUs)
+        assertEquals(1_000_000L, result.startTimestampUs)
         assertEquals(0.425f, result.keyframes[0].centerX, 0.001f)
         assertEquals(0.36f, result.keyframes[0].centerY, 0.001f)
         assertEquals(TrackingCategory.FACE, result.targetCategory)
+    }
+
+    @Test
+    fun liveSeedDoesNotInventKeysAtOtherTimestamps() {
+        val face = LiveDetection(
+            id = 3,
+            category = TrackingCategory.FACE,
+            box = NormalizedRect(0.10f, 0.10f, 0.30f, 0.30f),
+            label = "Face 1",
+            confidence = 0.88f
+        )
+        val result = MotionTrackingAttach.resultFromLive(
+            clip = clip(),
+            detections = listOf(face),
+            selectedId = 3,
+            category = TrackingCategory.FACE,
+            playheadSourceUs = 2_000_000L
+        )!!
+        assertEquals(1, result.keyframes.size)
+        assertTrue(result.keyframes.none { it.timestampUs == 0L })
+        assertEquals(2_000_000L, result.keyframes.single().timestampUs)
     }
 
     @Test
