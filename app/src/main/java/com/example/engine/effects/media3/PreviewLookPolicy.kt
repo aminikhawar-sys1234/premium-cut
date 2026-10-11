@@ -5,6 +5,7 @@ import com.example.domain.model.Timeline
 import com.example.domain.model.VideoAdjustments
 import com.example.domain.model.VideoClip
 import com.example.engine.composition.ColorFilterGenerator
+import kotlin.math.abs
 
 /**
  * Latest look the Filters / Adjust / Video Quality sliders have published.
@@ -47,7 +48,27 @@ object PreviewLookPolicy {
       adj.denoise > 0.01f ||
       adj.antiFlicker > 0.01f
 
+  fun hasDisplayLook(adjustments: VideoAdjustments, filter: FilterSettings): Boolean {
+    if (PreviewFilterEffects.isActiveLook(filter)) return true
+    return abs(adjustments.brightness) > 0.01f ||
+      abs(adjustments.contrast - 1f) > 0.01f ||
+      abs(adjustments.saturation - 1f) > 0.01f ||
+      abs(adjustments.exposure) > 0.01f ||
+      abs(adjustments.temperature) > 0.01f ||
+      abs(adjustments.tint) > 0.01f ||
+      abs(adjustments.highlights) > 0.01f ||
+      abs(adjustments.shadows) > 0.01f ||
+      abs(adjustments.whites) > 0.01f ||
+      abs(adjustments.blacks) > 0.01f ||
+      adjustments.fade > 0.01f ||
+      adjustments.autoEnhance > 0.01f ||
+      adjustments.hdrBoost > 0.01f ||
+      adjustments.colorCorrect > 0.01f ||
+      adjustments.colorFix > 0.01f
+  }
+
   fun displayMatrix(adjustments: VideoAdjustments, filter: FilterSettings): android.graphics.ColorMatrix? {
+    if (!hasDisplayLook(adjustments, filter)) return null
     val combined = ColorFilterGenerator.createCombinedMatrix(adjustments, FilterSettings(), filter)
     return combined.takeUnless { ColorFilterGenerator.isIdentityMatrix(it) }
   }
