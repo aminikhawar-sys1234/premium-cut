@@ -26,7 +26,7 @@ import org.robolectric.annotation.Config
 class PreviewLookAndRestoreTest {
 
   @Test
-  fun artisticFilterIsDisplayOnlyAndDoesNotChangeMedia3Signature() {
+  fun artisticFilterUsesOneGradingNodeAndDoesNotChangeGraphSignatureAcrossPresets() {
     val clip = VideoClip(
       id = "v1",
       name = "v1",
@@ -38,11 +38,18 @@ class PreviewLookAndRestoreTest {
     val none = clip.copy(filter = FilterSettings())
     val bw = clip.copy(filter = FilterSettings(type = FilterType.BLACK_AND_WHITE, intensity = 0.8f))
 
-    assertEquals(
-      PreviewFilterEffects.media3Signature(none, timeline),
-      PreviewFilterEffects.media3Signature(bw, timeline)
+    assertNotEquals(
+      "Turning a look on must add the Media3 grading node once",
+      PreviewFilterEffects.media3GraphSignature(none, timeline),
+      PreviewFilterEffects.media3GraphSignature(clip, timeline)
     )
-    assertTrue(PreviewFilterEffects.effectsFor(clip, timeline).none { it is ColorGradingGlEffect })
+    assertEquals(
+      "Switching presets must not rebuild the ExoPlayer graph",
+      PreviewFilterEffects.media3GraphSignature(clip, timeline),
+      PreviewFilterEffects.media3GraphSignature(bw, timeline)
+    )
+    assertTrue(PreviewFilterEffects.effectsFor(clip, timeline).any { it is ColorGradingGlEffect })
+    assertTrue(PreviewFilterEffects.effectsFor(none, timeline).none { it is ColorGradingGlEffect })
     assertNotNull(PreviewDisplayFilter.matrixFor(clip, timeline))
     assertNull(PreviewDisplayFilter.matrixFor(none, timeline))
     assertNotEquals(
@@ -52,7 +59,7 @@ class PreviewLookAndRestoreTest {
   }
 
   @Test
-  fun colorSlidersPaintDisplayMatrixAndDoNotChangeMedia3Signature() {
+  fun colorSlidersUpdateLiveUniformsAndDoNotChangeGraphSignature() {
     val clip = VideoClip(
       id = "v1",
       name = "v1",
@@ -60,12 +67,17 @@ class PreviewLookAndRestoreTest {
       durationMs = 4000L,
       adjustments = VideoAdjustments(brightness = 0.25f, highlights = 0.3f, whites = 0.2f)
     )
+    val brighter = clip.copy(adjustments = VideoAdjustments(brightness = 0.4f, highlights = 0.3f, whites = 0.2f))
     val timeline = Timeline(videoClips = listOf(clip))
     val effects = PreviewFilterEffects.effectsFor(clip, timeline)
-    assertTrue(effects.none { it is ColorGradingGlEffect })
+    assertTrue(effects.any { it is ColorGradingGlEffect })
     assertEquals(
+      PreviewFilterEffects.media3GraphSignature(clip, timeline),
+      PreviewFilterEffects.media3GraphSignature(brighter, timeline)
+    )
+    assertNotEquals(
       PreviewFilterEffects.media3Signature(clip, timeline),
-      PreviewFilterEffects.media3Signature(clip.copy(adjustments = VideoAdjustments()), timeline)
+      PreviewFilterEffects.media3Signature(brighter, timeline)
     )
     val matrix = PreviewDisplayFilter.matrixFor(clip, timeline)
     assertNotNull(matrix)
@@ -120,7 +132,7 @@ class PreviewLookAndRestoreTest {
   }
 
   @Test
-  fun intensityChangeUpdatesDisplayMatrixWithoutMedia3SignatureChange() {
+  fun intensityChangeUpdatesDisplayMatrixWithoutGraphSignatureChange() {
     val low = VideoClip(
       id = "v1", name = "v1", uri = "u", durationMs = 3000L,
       filter = FilterSettings(type = FilterType.GOLDEN_AUTUMN, intensity = 0.2f)
@@ -128,8 +140,8 @@ class PreviewLookAndRestoreTest {
     val high = low.copy(filter = FilterSettings(type = FilterType.GOLDEN_AUTUMN, intensity = 1f))
     val timeline = Timeline(videoClips = listOf(low))
     assertEquals(
-      PreviewFilterEffects.media3Signature(low, timeline),
-      PreviewFilterEffects.media3Signature(high, timeline)
+      PreviewFilterEffects.media3GraphSignature(low, timeline),
+      PreviewFilterEffects.media3GraphSignature(high, timeline)
     )
     val lowMat = PreviewDisplayFilter.matrixFor(low, timeline)
     val highMat = PreviewDisplayFilter.matrixFor(high, timeline)
@@ -203,8 +215,11 @@ class PreviewLookAndRestoreTest {
     assertNotNull(matrix)
     assertFalse(ColorFilterGenerator.isIdentityMatrix(matrix!!))
     assertEquals(
-      PreviewFilterEffects.media3Signature(clip, timeline),
-      PreviewFilterEffects.media3Signature(clip.copy(adjustments = VideoAdjustments()), timeline)
+      PreviewFilterEffects.media3GraphSignature(clip, timeline),
+      PreviewFilterEffects.media3GraphSignature(
+        clip.copy(adjustments = quality.copy(autoEnhance = 0.9f, hdrBoost = 0.8f)),
+        timeline
+      )
     )
   }
 

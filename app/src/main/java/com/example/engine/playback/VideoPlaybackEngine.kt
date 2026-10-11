@@ -17,14 +17,19 @@ import androidx.media3.exoplayer.SeekParameters
 import com.example.domain.model.Timeline
 import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
+import com.example.domain.model.effectiveAdjustments
 import com.example.domain.model.timelineToSourceMs
 import com.example.engine.controller.CustomVideoEngineController
 import com.example.engine.controller.PlaybackSyncPolicy
 import com.example.engine.controller.PreviewMixPolicy
 import com.example.engine.color.ColorEngineHost
+import com.example.engine.effects.media3.ColorGradingGlEffect
+import com.example.engine.effects.media3.ColorGradingSnapshot
 import com.example.engine.effects.media3.LutStripBaker
 import com.example.engine.effects.media3.Media3EffectPipeline
+import com.example.engine.effects.media3.PreviewEffectApplyPolicy
 import com.example.engine.effects.media3.PreviewFilterEffects
+import com.example.engine.effects.media3.PreviewLookPolicy
 import com.example.engine.media.MediaRelinkManager
 import com.example.ui.components.player.PreviewVideoSurfaceRegistry
 import androidx.media3.common.Effect
@@ -105,9 +110,13 @@ class VideoPlaybackEngine(
       currentPosMs = pos
       _currentPositionMs.value = pos
       val nextClip = findClipAt(pos)
-      val lookChanged = PreviewFilterEffects.media3Signature(nextClip, currentTimeline) != lastMedia3Signature
+      val graphChanged = PreviewFilterEffects.media3GraphSignature(nextClip, currentTimeline) != lastMedia3GraphSignature
       _activeClip.value = nextClip
-      if (lookChanged) applyActiveLookToPlayers()
+      if (graphChanged) {
+        applyActiveLookToPlayers()
+      } else {
+        publishLiveGrading(nextClip)
+      }
       syncOverlayPlayers(pos)
       syncAudioTrackPlayers(pos)
       onTimelinePositionChanged(pos)
@@ -130,7 +139,12 @@ class VideoPlaybackEngine(
   private val secondaryCorrectionAtMs = ConcurrentHashMap<String, Long>()
   private var lastPreviewFilterSignature: String? = null
   private var lastMedia3Signature: String? = null
+  private var lastMedia3GraphSignature: String? = null
   private var lastGoodMedia3Effects: List<Effect> = emptyList()
+  private var pendingMedia3Effects: List<Effect>? = null
+  private var boundMainGrading: ColorGradingGlEffect? = null
+  private val boundOverlayGrading = ConcurrentHashMap<String, ColorGradingGlEffect>()
+  private val lastOverlayGraphSignatures = ConcurrentHashMap<String, String>()
   private val lastOverlayFilterSignatures = ConcurrentHashMap<String, String>()
   @Volatile private var applyingEffects = false
   private var lastPresentAtElapsedMs = 0L
@@ -150,6 +164,9 @@ class VideoPlaybackEngine(
         // A clip that loads fine again must clear the previous error, otherwise the stale
         // message stayed on the preview for the rest of the session.
         if (state == Player.STATE_READY) _playerError.value = null
+      }
+      override fun onRenderedFirstFrame() {
+        commitPendingMedia3Effects("firstFrame")
       }
       override fun onPlayerError(error: PlaybackException) {
         _playerError.value = "${error.errorCodeName}: ${error.message}"
@@ -202,53 +219,99 @@ class VideoPlaybackEngine(
   fun replaceTimelineLooks(timeline: Timeline) {
     currentTimeline = timeline
     _activeClip.value = findClipAt(currentPosMs)
+    publishLiveGrading(_activeClip.value)
     scheduleSpatialLook()
   }
 
   private fun scheduleSpatialLook(preferClipId: String? = null) {
     spatialLookJob?.cancel()
     spatialLookJob = scope.launch {
-      delay(com.example.engine.effects.media3.PreviewLookPolicy.LOOK_DEBOUNCE_MS)
+      delay(PreviewLookPolicy.LOOK_DEBOUNCE_MS)
       if (!isActive) return@launch
-      val before = lastMedia3Signature
+      val beforeGraph = lastMedia3GraphSignature
       applyActiveLookToPlayers(force = false, preferClipId = preferClipId)
-      if (lastMedia3Signature != before && !engineController.timelineSyncManager.isPlaying) {
-        presentCurrentFrame(rebindSurface = false)
+      if (!engineController.timelineSyncManager.isPlaying) {
+        presentCurrentFrame(rebindSurface = lastMedia3GraphSignature != beforeGraph)
       }
     }
+  }
+
+  private fun publishLiveGrading(clip: VideoClip?) {
+    val snapshot = ColorGradingSnapshot.from(
+      clip.effectiveAdjustments(currentTimeline),
+      PreviewFilterEffects.effectiveFilter(clip, currentTimeline)
+    )
+    boundMainGrading?.publishLive(snapshot)
   }
 
   fun applyActiveLookToPlayers(force: Boolean = false, preferClipId: String? = null) {
     val preferred = preferClipId?.let { id -> currentTimeline.videoClips.find { it.id == id } }
     val clip = preferred ?: _activeClip.value
-    val media3Sig = PreviewFilterEffects.media3Signature(clip, currentTimeline)
+    val valueSig = PreviewFilterEffects.media3Signature(clip, currentTimeline)
+    val graphSig = PreviewFilterEffects.media3GraphSignature(clip, currentTimeline)
     lastPreviewFilterSignature = PreviewFilterEffects.signature(clip, currentTimeline)
-    if (force || media3Sig != lastMedia3Signature) {
-      val lut = PreviewFilterEffects.lutLook(clip)
-      val lutBmp = if (clip != null && ColorEngineHost.isBypassed(clip.id)) {
-        null
-      } else {
-        lut?.first?.let { LutStripBaker.bitmapFor(context, it) }
-      }
-      val effects = PreviewFilterEffects.effectsFor(clip, currentTimeline, lutBmp, lut?.second ?: 1f)
-      applyingEffects = true
-      val accepted = try {
-        Media3EffectPipeline.applyRealtimeEffects(player, effects)
-      } finally {
-        applyingEffects = false
-      }
-      if (accepted) {
-        lastMedia3Signature = media3Sig
-        lastGoodMedia3Effects = effects
-        PreviewVideoSurfaceRegistry.rebindCurrent(player)
-        Log.d(
-          TAG,
-          "Applied Media3 preview look lut=${lut?.first ?: "none"} effects=${effects.size} force=$force"
-        )
-      } else {
-        _playerError.value = "Preview look could not be applied. Last valid preview was kept."
-        Log.w(TAG, "Preview look apply failed; keeping last valid Media3 effects")
-      }
+    publishLiveGrading(clip)
+
+    val graphChanged = PreviewEffectApplyPolicy.shouldRebuildGraph(lastMedia3GraphSignature, graphSig, force)
+    if (!graphChanged) {
+      lastMedia3Signature = valueSig
+      applyOverlayLooks(force)
+      return
+    }
+
+    val lut = PreviewFilterEffects.lutLook(clip)
+    val lutBmp = if (clip != null && ColorEngineHost.isBypassed(clip.id)) {
+      null
+    } else {
+      lut?.first?.let { LutStripBaker.bitmapFor(context, it) }
+    }
+    val effects = PreviewFilterEffects.effectsFor(clip, currentTimeline, lutBmp, lut?.second ?: 1f)
+    val grading = effects.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
+    grading?.publishLive(
+      ColorGradingSnapshot.from(
+        clip.effectiveAdjustments(currentTimeline),
+        PreviewFilterEffects.effectiveFilter(clip, currentTimeline)
+      )
+    )
+    boundMainGrading = grading
+
+    val shouldSetEffects = PreviewEffectApplyPolicy.shouldCallSetVideoEffects(
+      newEffectCount = effects.size,
+      previousHadEffects = lastGoodMedia3Effects.isNotEmpty() || pendingMedia3Effects != null,
+      graphChanged = lastMedia3GraphSignature != graphSig,
+      force = force
+    )
+    if (!shouldSetEffects) {
+      lastMedia3GraphSignature = graphSig
+      lastMedia3Signature = valueSig
+      Log.d(TAG, "Skipped empty setVideoEffects (graph=$graphSig)")
+      applyOverlayLooks(force)
+      return
+    }
+
+    val playWhenReady = try { player.playWhenReady } catch (_: Throwable) { false }
+    val volume = try { player.volume } catch (_: Throwable) { 1f }
+    applyingEffects = true
+    pendingMedia3Effects = effects
+    val accepted = try {
+      Media3EffectPipeline.applyRealtimeEffects(player, effects)
+    } finally {
+      applyingEffects = false
+    }
+    if (accepted) {
+      lastMedia3GraphSignature = graphSig
+      lastMedia3Signature = valueSig
+      PreviewVideoSurfaceRegistry.rebindCurrent(player)
+      PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
+      restorePlaybackAfterGraphChange(playWhenReady, volume)
+      Log.i(
+        TAG,
+        "Rebuilt Media3 preview graph lut=${lut?.first ?: "none"} effects=${effects.size} force=$force playWhenReady=$playWhenReady"
+      )
+    } else {
+      pendingMedia3Effects = null
+      _playerError.value = "Preview look could not be applied (${effects.size} effects). Last valid preview was kept."
+      Log.e(TAG, "Preview look apply failed; keeping last valid Media3 effects count=${lastGoodMedia3Effects.size}")
     }
     applyOverlayLooks(force)
   }
@@ -285,37 +348,97 @@ class VideoPlaybackEngine(
    */
   fun prepareForEditorEntry() {
     lastMedia3Signature = null
+    lastMedia3GraphSignature = null
     lastPreviewFilterSignature = null
+    pendingMedia3Effects = null
     try {
       if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
         player.prepare()
       }
     } catch (t: Throwable) {
-      Log.w(TAG, "prepareForEditorEntry prepare failed", t)
+      Log.e(TAG, "prepareForEditorEntry prepare failed", t)
     }
     applyActiveLookToPlayers(force = true)
     presentCurrentFrame()
   }
 
-  private fun recoverFromPreviewEffectError(error: PlaybackException) {
-    val processingFailure = error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED ||
-      error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSOR_INIT_FAILED
-    if (!processingFailure && !applyingEffects) return
-    applyingEffects = true
+  private fun commitPendingMedia3Effects(reason: String) {
+    val pending = pendingMedia3Effects ?: return
+    lastGoodMedia3Effects = pending
+    pendingMedia3Effects = null
+    Log.d(TAG, "Committed preview Media3 effects count=${pending.size} reason=$reason")
+  }
+
+  private fun restorePlaybackAfterGraphChange(playWhenReady: Boolean, volume: Float) {
     try {
-      val fallback = lastGoodMedia3Effects.ifEmpty { emptyList() }
-      if (Media3EffectPipeline.applyRealtimeEffects(player, fallback)) {
-        lastMedia3Signature = null
-        PreviewVideoSurfaceRegistry.rebindCurrent(player)
+      if (player.volume != volume) player.volume = volume
+      if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
+        Log.i(TAG, "Preview player returned to IDLE after setVideoEffects; preparing")
+        player.prepare()
+      }
+      if (playWhenReady && !player.playWhenReady) player.playWhenReady = true
+      if (playWhenReady) player.play()
+    } catch (t: Throwable) {
+      Log.e(TAG, "Failed to restore playback after preview graph change", t)
+    }
+  }
+
+  private fun recoverPreviewPipelineIfNeeded() {
+    try {
+      val error = player.playerError
+      val state = player.playbackState
+      if (error == null && state != Player.STATE_IDLE && state != Player.STATE_ENDED) return
+      Log.e(
+        TAG,
+        "Preview pipeline not ready on play (state=$state error=${error?.errorCodeName}: ${error?.message}); recovering"
+      )
+      val fallback = lastGoodMedia3Effects
+      applyingEffects = true
+      try {
+        if (fallback.isNotEmpty() || lastMedia3GraphSignature != null) {
+          Media3EffectPipeline.applyRealtimeEffects(player, fallback)
+        }
         if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
           player.prepare()
         }
-        presentCurrentFrame(rebindSurface = false)
-        _playerError.value = "Preview GPU look failed (${error.errorCodeName}). Last valid preview was kept."
-        Log.w(TAG, "Rolled back preview effects after ${error.errorCodeName}")
+        PreviewVideoSurfaceRegistry.rebindCurrent(player)
+      } finally {
+        applyingEffects = false
       }
     } catch (t: Throwable) {
-      Log.w(TAG, "Preview effect rollback failed", t)
+      Log.e(TAG, "Preview pipeline recovery failed", t)
+    }
+  }
+
+  private fun recoverFromPreviewEffectError(error: PlaybackException) {
+    val processingFailure = PreviewEffectApplyPolicy.isVideoProcessingFailure(error)
+    if (!processingFailure && !applyingEffects) return
+    val shouldResume = engineController.timelineSyncManager.isPlaying
+    val volume = try { player.volume } catch (_: Throwable) { 1f }
+    applyingEffects = true
+    try {
+      pendingMedia3Effects = null
+      val fallback = lastGoodMedia3Effects
+      if (PreviewEffectApplyPolicy.shouldCallSetVideoEffects(
+          newEffectCount = fallback.size,
+          previousHadEffects = true,
+          graphChanged = true,
+          force = true
+        ) && Media3EffectPipeline.applyRealtimeEffects(player, fallback)
+      ) {
+        lastMedia3GraphSignature = null
+        boundMainGrading = fallback.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
+        PreviewVideoSurfaceRegistry.rebindCurrent(player)
+        PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
+        restorePlaybackAfterGraphChange(shouldResume, volume)
+        if (!shouldResume) presentCurrentFrame(rebindSurface = false)
+        _playerError.value = "Preview GPU look failed (${error.errorCodeName}). Last valid preview was kept."
+        Log.e(TAG, "Rolled back preview effects after ${error.errorCodeName} to ${fallback.size} effects")
+      } else {
+        Log.e(TAG, "Preview effect rollback skipped; no last-good graph to restore")
+      }
+    } catch (t: Throwable) {
+      Log.e(TAG, "Preview effect rollback failed", t)
     } finally {
       applyingEffects = false
     }
@@ -324,24 +447,58 @@ class VideoPlaybackEngine(
   private fun applyOverlayLooks(force: Boolean = false) {
     val activeIds = currentTimeline.overlayClips.map { it.id }.toSet()
     lastOverlayFilterSignatures.keys.toList().filter { it !in activeIds }.forEach { lastOverlayFilterSignatures.remove(it) }
+    lastOverlayGraphSignatures.keys.toList().filter { it !in activeIds }.forEach { lastOverlayGraphSignatures.remove(it) }
+    boundOverlayGrading.keys.toList().filter { it !in activeIds }.forEach { boundOverlayGrading.remove(it) }
     for (overlay in currentTimeline.overlayClips) {
       val p = overlayPlayers[overlay.id] ?: continue
-      val sig = PreviewFilterEffects.media3Signature(overlay, currentTimeline)
-      if (!force && lastOverlayFilterSignatures[overlay.id] == sig) continue
+      val valueSig = PreviewFilterEffects.media3Signature(overlay, currentTimeline)
+      val graphSig = PreviewFilterEffects.media3GraphSignature(overlay, currentTimeline)
+      val snapshot = ColorGradingSnapshot.from(
+        overlay.effectiveAdjustments(currentTimeline),
+        PreviewFilterEffects.effectiveFilter(overlay, currentTimeline)
+      )
+      boundOverlayGrading[overlay.id]?.publishLive(snapshot)
+      if (!force && lastOverlayGraphSignatures[overlay.id] == graphSig) {
+        lastOverlayFilterSignatures[overlay.id] = valueSig
+        continue
+      }
       val lut = PreviewFilterEffects.lutLook(overlay)
       val lutBmp = lut?.first?.let { LutStripBaker.bitmapFor(context, it) }
+      val effects = PreviewFilterEffects.effectsFor(overlay, currentTimeline, lutBmp, lut?.second ?: 1f)
+      val grading = effects.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
+      grading?.publishLive(snapshot)
+      if (grading != null) boundOverlayGrading[overlay.id] = grading else boundOverlayGrading.remove(overlay.id)
+      val previousHad = lastOverlayGraphSignatures[overlay.id] != null
+      if (!PreviewEffectApplyPolicy.shouldCallSetVideoEffects(
+          newEffectCount = effects.size,
+          previousHadEffects = previousHad,
+          graphChanged = lastOverlayGraphSignatures[overlay.id] != graphSig,
+          force = force
+        )
+      ) {
+        lastOverlayGraphSignatures[overlay.id] = graphSig
+        lastOverlayFilterSignatures[overlay.id] = valueSig
+        continue
+      }
+      val playWhenReady = try { p.playWhenReady } catch (_: Throwable) { false }
+      val volume = try { p.volume } catch (_: Throwable) { 1f }
       applyingEffects = true
       val accepted = try {
-        Media3EffectPipeline.applyRealtimeEffects(
-          p,
-          PreviewFilterEffects.effectsFor(overlay, currentTimeline, lutBmp, lut?.second ?: 1f)
-        )
+        Media3EffectPipeline.applyRealtimeEffects(p, effects)
       } finally {
         applyingEffects = false
       }
       if (accepted) {
-        lastOverlayFilterSignatures[overlay.id] = sig
+        lastOverlayGraphSignatures[overlay.id] = graphSig
+        lastOverlayFilterSignatures[overlay.id] = valueSig
         PreviewVideoSurfaceRegistry.rebindCurrent(p)
+        PreviewVideoSurfaceRegistry.rebindCurrent(p, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
+        try {
+          if (p.volume != volume) p.volume = volume
+          if (playWhenReady) p.playWhenReady = true
+        } catch (t: Throwable) {
+          Log.e(TAG, "Failed to restore overlay playback after look apply", t)
+        }
       }
     }
   }
@@ -603,6 +760,7 @@ class VideoPlaybackEngine(
   fun play(startPosMs: Long? = null) {
     if (isTrimPreviewMode) { playTrimPreview(); return }
     _playerError.value = null
+    recoverPreviewPipelineIfNeeded()
     engineController.play(startPosMs)
   }
 

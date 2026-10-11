@@ -1,10 +1,8 @@
 package com.example.engine.effects.media3
 
 import android.graphics.ColorMatrix
-import android.graphics.ColorMatrixColorFilter
-import android.graphics.Paint
+import android.os.Build
 import android.view.TextureView
-import android.view.View
 import com.example.domain.model.FilterSettings
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoAdjustments
@@ -12,14 +10,13 @@ import com.example.domain.model.VideoClip
 import com.example.domain.model.effectiveAdjustments
 
 /**
- * Applies the Filters / Adjust / Video Quality color look to the live TextureView
- * without touching ExoPlayer.
+ * Color-matrix helper for still images, filter thumbnails, and export parity tests.
  *
- * [PreviewLookPolicy.displayMatrix] uses the same [com.example.engine.composition.ColorFilterGenerator]
- * path GpuCompositionRenderer uses on export, so preview and export stay on one definition.
- * Artistic filters and color sliders must not go through
- * [androidx.media3.exoplayer.ExoPlayer.setVideoEffects]: that rebuilds the video graph,
- * drops the bound TextureView, freezes the last frame and can mute source audio.
+ * The live ExoPlayer [TextureView] must NOT receive a ColorMatrix layer paint.
+ * TextureView already owns a SurfaceTexture; `setLayerPaint(ColorMatrixColorFilter)`
+ * composites video frames with A=0 as fully transparent (black preview) the moment
+ * playback starts updating the surface. Filters / Adjust / Video Quality are applied
+ * by [ColorGradingGlEffect] so the decoder, EGL surface and source audio stay intact.
  */
 object PreviewDisplayFilter {
 
@@ -36,34 +33,29 @@ object PreviewDisplayFilter {
   fun matrixFor(filter: FilterSettings): ColorMatrix? =
     matrixFor(VideoAdjustments(), filter)
 
+  /**
+   * Clears any leftover TextureView color paint. Does not apply [matrix] — that path
+   * is what produced the black live preview.
+   */
   fun apply(view: TextureView, matrix: ColorMatrix?) {
-    try {
-      if (matrix == null) {
-        clear(view)
-        return
-      }
-      val paint = Paint(Paint.FILTER_BITMAP_FLAG).apply {
-        colorFilter = ColorMatrixColorFilter(matrix)
-      }
-      if (view.layerType != View.LAYER_TYPE_HARDWARE) {
-        view.setLayerType(View.LAYER_TYPE_HARDWARE, paint)
-      } else {
-        view.setLayerPaint(paint)
-        view.invalidate()
-      }
-    } catch (t: Throwable) {
-      android.util.Log.w("PreviewDisplayFilter", "Failed to apply live filter paint", t)
+    clear(view)
+    if (matrix != null) {
+      android.util.Log.d(
+        "PreviewDisplayFilter",
+        "Live video ColorMatrix is applied by ColorGradingGlEffect, not TextureView paint"
+      )
     }
   }
 
   fun clear(view: TextureView) {
     try {
-      if (view.layerType != View.LAYER_TYPE_NONE) {
-        view.setLayerType(View.LAYER_TYPE_NONE, null)
-      }
+      view.isOpaque = true
       view.setLayerPaint(null)
+      if (Build.VERSION.SDK_INT >= 31) {
+        view.setRenderEffect(null)
+      }
     } catch (t: Throwable) {
-      android.util.Log.w("PreviewDisplayFilter", "Failed to clear live filter paint", t)
+      android.util.Log.e("PreviewDisplayFilter", "Failed to clear live filter paint", t)
     }
   }
 }

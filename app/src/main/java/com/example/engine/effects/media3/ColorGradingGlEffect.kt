@@ -46,6 +46,42 @@ class ColorGradingGlEffect(
   val colorOffset: FloatArray? = null
 ) : GlEffect {
 
+  /**
+   * Latest Filters / Adjust / Video Quality values. The shader reads this every
+   * frame so slider ticks update the look without calling [androidx.media3.exoplayer.ExoPlayer.setVideoEffects].
+   */
+  @Volatile
+  var liveSnapshot: ColorGradingSnapshot? = null
+    private set
+
+  fun publishLive(snapshot: ColorGradingSnapshot) {
+    liveSnapshot = snapshot
+  }
+
+  fun constructorSnapshot(): ColorGradingSnapshot = ColorGradingSnapshot(
+    brightness = brightness,
+    contrast = contrast,
+    saturation = saturation,
+    exposure = exposure,
+    temperature = temperature,
+    tint = tint,
+    highlights = highlights,
+    shadows = shadows,
+    whites = whites,
+    blacks = blacks,
+    vignette = vignette,
+    grain = grain,
+    sharpness = sharpness,
+    clarity = clarity,
+    fade = fade,
+    autoEnhance = autoEnhance,
+    hdrBoost = hdrBoost,
+    colorFix = colorFix,
+    denoise = denoise,
+    colorMatrix4x4 = colorMatrix4x4,
+    colorOffset = colorOffset
+  )
+
   companion object {
     /**
      * Creates a [ColorGradingGlEffect] from domain [VideoAdjustments] and [FilterSettings].
@@ -296,72 +332,118 @@ void main() {
   gl_FragColor = color;
 }
 """
+
+    internal fun bindUniforms(
+      program: GlProgram,
+      snapshot: ColorGradingSnapshot,
+      presentationTimeUs: Long,
+      width: Int,
+      height: Int
+    ) {
+      program.setFloatUniform("uBrightness", snapshot.brightness)
+      program.setFloatUniform("uContrast", snapshot.contrast)
+      program.setFloatUniform("uSaturation", snapshot.saturation)
+      program.setFloatUniform("uExposure", snapshot.exposure)
+      program.setFloatUniform("uTemperature", snapshot.temperature)
+      program.setFloatUniform("uTint", snapshot.tint)
+      program.setFloatUniform("uHighlights", snapshot.highlights)
+      program.setFloatUniform("uShadows", snapshot.shadows)
+      program.setFloatUniform("uWhites", snapshot.whites)
+      program.setFloatUniform("uBlacks", snapshot.blacks)
+      program.setFloatUniform("uFade", snapshot.fade)
+      program.setFloatUniform("uAutoEnhance", snapshot.autoEnhance)
+      program.setFloatUniform("uHdrBoost", snapshot.hdrBoost)
+      program.setFloatUniform("uColorFix", snapshot.colorFix)
+      program.setFloatUniform("uDenoise", snapshot.denoise)
+      program.setFloatUniform("uVignette", snapshot.vignette)
+      program.setFloatUniform("uGrain", snapshot.grain)
+      program.setFloatUniform("uGrainSeed", (presentationTimeUs / 1000L % 10000).toFloat() / 1000f)
+      program.setFloatUniform("uSharpness", snapshot.sharpness)
+      program.setFloatUniform("uClarity", snapshot.clarity)
+
+      val texelW = if (width > 0) 1f / width else 1f / 1920f
+      val texelH = if (height > 0) 1f / height else 1f / 1080f
+      program.setFloatsUniform("uTexelSize", floatArrayOf(texelW, texelH))
+
+      val matrix = snapshot.colorMatrix4x4 ?: GlUtil.create4x4IdentityMatrix()
+      val offset = snapshot.colorOffset ?: floatArrayOf(0f, 0f, 0f, 0f)
+      val useMatrix = if (snapshot.colorMatrix4x4 != null && snapshot.colorOffset != null) 1 else 0
+      program.setIntUniform("uUseColorMatrix", useMatrix)
+      program.setFloatsUniform("uColorMatrix", matrix)
+      program.setFloatsUniform("uColorOffset", offset)
+    }
   }
 
   override fun isNoOp(inputWidth: Int, inputHeight: Int): Boolean {
-    val isDefaultAdjustments = abs(brightness) < 0.001f &&
-        abs(contrast - 1f) < 0.001f &&
-        abs(saturation - 1f) < 0.001f &&
-        abs(exposure) < 0.001f &&
-        abs(temperature) < 0.001f &&
-        abs(tint) < 0.001f &&
-        abs(highlights) < 0.001f &&
-        abs(shadows) < 0.001f &&
-        abs(whites) < 0.001f &&
-        abs(blacks) < 0.001f &&
-        vignette < 0.01f &&
-        grain < 0.01f &&
-        sharpness < 0.01f &&
-        clarity < 0.01f &&
-        fade < 0.01f &&
-        autoEnhance < 0.01f &&
-        hdrBoost < 0.01f &&
-        colorFix < 0.01f &&
-        denoise < 0.01f
-
-    val hasColorMatrix = colorMatrix4x4 != null && colorOffset != null
-    return isDefaultAdjustments && !hasColorMatrix
+    return (liveSnapshot ?: constructorSnapshot()).isNoOp()
   }
 
   override fun toGlShaderProgram(context: Context, useHdr: Boolean): GlShaderProgram {
-    val matrix = colorMatrix4x4 ?: GlUtil.create4x4IdentityMatrix()
-    val offset = colorOffset ?: floatArrayOf(0f, 0f, 0f, 0f)
-    val useMatrix = if (colorMatrix4x4 != null && colorOffset != null) 1 else 0
-
     return CustomShaderGlShaderProgram(
       useHdr = useHdr,
       vertexShader = CustomShaderGlEffect.DEFAULT_VERTEX_SHADER,
       fragmentShader = COLOR_GRADING_FRAGMENT_SHADER,
       uniformBinder = { program: GlProgram, presentationTimeUs: Long, width: Int, height: Int ->
-        program.setFloatUniform("uBrightness", brightness)
-        program.setFloatUniform("uContrast", contrast)
-        program.setFloatUniform("uSaturation", saturation)
-        program.setFloatUniform("uExposure", exposure)
-        program.setFloatUniform("uTemperature", temperature)
-        program.setFloatUniform("uTint", tint)
-        program.setFloatUniform("uHighlights", highlights)
-        program.setFloatUniform("uShadows", shadows)
-        program.setFloatUniform("uWhites", whites)
-        program.setFloatUniform("uBlacks", blacks)
-        program.setFloatUniform("uFade", fade)
-        program.setFloatUniform("uAutoEnhance", autoEnhance)
-        program.setFloatUniform("uHdrBoost", hdrBoost)
-        program.setFloatUniform("uColorFix", colorFix)
-        program.setFloatUniform("uDenoise", denoise)
-        program.setFloatUniform("uVignette", vignette)
-        program.setFloatUniform("uGrain", grain)
-        program.setFloatUniform("uGrainSeed", (presentationTimeUs / 1000L % 10000).toFloat() / 1000f)
-        program.setFloatUniform("uSharpness", sharpness)
-        program.setFloatUniform("uClarity", clarity)
-
-        val texelW = if (width > 0) 1f / width else 1f / 1920f
-        val texelH = if (height > 0) 1f / height else 1f / 1080f
-        program.setFloatsUniform("uTexelSize", floatArrayOf(texelW, texelH))
-
-        program.setIntUniform("uUseColorMatrix", useMatrix)
-        program.setFloatsUniform("uColorMatrix", matrix)
-        program.setFloatsUniform("uColorOffset", offset)
+        bindUniforms(program, liveSnapshot ?: constructorSnapshot(), presentationTimeUs, width, height)
       }
     )
+  }
+}
+
+/**
+ * Frame-time color-grading parameters. Publishing a new snapshot updates the live
+ * preview shader without rebuilding ExoPlayer's video graph.
+ */
+data class ColorGradingSnapshot(
+  val brightness: Float = 0f,
+  val contrast: Float = 1f,
+  val saturation: Float = 1f,
+  val exposure: Float = 0f,
+  val temperature: Float = 0f,
+  val tint: Float = 0f,
+  val highlights: Float = 0f,
+  val shadows: Float = 0f,
+  val whites: Float = 0f,
+  val blacks: Float = 0f,
+  val vignette: Float = 0f,
+  val grain: Float = 0f,
+  val sharpness: Float = 0f,
+  val clarity: Float = 0f,
+  val fade: Float = 0f,
+  val autoEnhance: Float = 0f,
+  val hdrBoost: Float = 0f,
+  val colorFix: Float = 0f,
+  val denoise: Float = 0f,
+  val colorMatrix4x4: FloatArray? = null,
+  val colorOffset: FloatArray? = null
+) {
+  fun isNoOp(): Boolean {
+    val isDefaultAdjustments = abs(brightness) < 0.001f &&
+      abs(contrast - 1f) < 0.001f &&
+      abs(saturation - 1f) < 0.001f &&
+      abs(exposure) < 0.001f &&
+      abs(temperature) < 0.001f &&
+      abs(tint) < 0.001f &&
+      abs(highlights) < 0.001f &&
+      abs(shadows) < 0.001f &&
+      abs(whites) < 0.001f &&
+      abs(blacks) < 0.001f &&
+      vignette < 0.01f &&
+      grain < 0.01f &&
+      sharpness < 0.01f &&
+      clarity < 0.01f &&
+      fade < 0.01f &&
+      autoEnhance < 0.01f &&
+      hdrBoost < 0.01f &&
+      colorFix < 0.01f &&
+      denoise < 0.01f
+    return isDefaultAdjustments && colorMatrix4x4 == null
+  }
+
+  companion object {
+    fun from(effect: ColorGradingGlEffect): ColorGradingSnapshot = effect.constructorSnapshot()
+
+    fun from(adjustments: VideoAdjustments, filter: FilterSettings = FilterSettings()): ColorGradingSnapshot =
+      from(ColorGradingGlEffect.fromTimeline(adjustments, filter))
   }
 }

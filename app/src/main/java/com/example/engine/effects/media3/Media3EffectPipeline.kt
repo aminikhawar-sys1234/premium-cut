@@ -51,12 +51,26 @@ object Media3EffectPipeline {
     return try {
       val playWhenReady = exoPlayer.playWhenReady
       val volume = exoPlayer.volume
+      val state = exoPlayer.playbackState
+      android.util.Log.i(
+        "Media3EffectPipeline",
+        "setVideoEffects count=${effects.size} playWhenReady=$playWhenReady volume=$volume state=$state"
+      )
       exoPlayer.setVideoEffects(effects)
-      if (exoPlayer.volume != volume) exoPlayer.volume = volume
-      if (exoPlayer.playWhenReady != playWhenReady) exoPlayer.playWhenReady = playWhenReady
+      if (exoPlayer.volume != volume) {
+        android.util.Log.w("Media3EffectPipeline", "setVideoEffects changed volume $volume -> ${exoPlayer.volume}; restoring")
+        exoPlayer.volume = volume
+      }
+      if (exoPlayer.playWhenReady != playWhenReady) {
+        android.util.Log.w(
+          "Media3EffectPipeline",
+          "setVideoEffects changed playWhenReady $playWhenReady -> ${exoPlayer.playWhenReady}; restoring"
+        )
+        exoPlayer.playWhenReady = playWhenReady
+      }
       true
     } catch (e: Exception) {
-      android.util.Log.w("Media3EffectPipeline", "Failed to apply real-time video effects to ExoPlayer", e)
+      android.util.Log.e("Media3EffectPipeline", "Failed to apply real-time video effects to ExoPlayer", e)
       false
     }
   }

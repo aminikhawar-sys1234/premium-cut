@@ -115,14 +115,20 @@ object PreviewVideoSurfaceRegistry {
    * and silently drops the output surface; calling this restores live frames without creating
    * a new TextureView.
    */
-  fun rebindCurrent(player: ExoPlayer) {
-    onMain {
-      val view = synchronized(lock) { boundView[player]?.get() } ?: return@onMain
-      if (!view.isAvailable) return@onMain
+  fun rebindCurrent(player: ExoPlayer, afterMs: Long = 0L) {
+    val bind: () -> Unit = bind@{
+      val view = synchronized(lock) { boundView[player]?.get() } ?: return@bind
+      if (!view.isAvailable) return@bind
       try {
         player.setVideoTextureView(view)
-      } catch (_: Throwable) {
+      } catch (t: Throwable) {
+        android.util.Log.e("PreviewVideoSurfaceRegistry", "Failed to rebind preview TextureView", t)
       }
+    }
+    if (afterMs <= 0L) {
+      onMain(bind)
+    } else {
+      mainHandler.postDelayed({ onMain(bind) }, afterMs)
     }
   }
 

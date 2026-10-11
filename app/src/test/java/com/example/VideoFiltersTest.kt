@@ -201,12 +201,12 @@ class VideoFiltersTest {
 
     val fourK = PreviewFilterEffects.effectsFor(clip, timeline)
     assertTrue(
-      "Artistic filters stay off the ExoPlayer graph so a filter tap cannot rebuild the decoder",
-      fourK.none { it is ColorGradingGlEffect }
+      "Artistic filters share the live ColorGradingGlEffect so preview matches export",
+      fourK.any { it is ColorGradingGlEffect }
     )
     assertEquals(
-      PreviewFilterEffects.media3Signature(clip, timeline),
-      PreviewFilterEffects.media3Signature(clip.copy(filter = FilterSettings(type = FilterType.BLACK_AND_WHITE)), timeline)
+      PreviewFilterEffects.media3GraphSignature(clip, timeline),
+      PreviewFilterEffects.media3GraphSignature(clip.copy(filter = FilterSettings(type = FilterType.BLACK_AND_WHITE)), timeline)
     )
     assertNotNull(
       "4K must still produce a real ColorFilterGenerator matrix for the live TextureView and export",

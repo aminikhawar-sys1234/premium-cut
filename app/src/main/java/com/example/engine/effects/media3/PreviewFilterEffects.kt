@@ -13,16 +13,14 @@ import com.example.domain.model.effectiveAdjustments
 import com.example.engine.color.ColorEngineHost
 
 /**
- * Builds the live-preview Media3 look for spatial Adjust / Video Quality, LUT and catalog VFX.
+ * Builds the live-preview Media3 look for Filters / Adjust / Video Quality, LUT and catalog VFX.
  *
- * Color-matrix work (brightness, highlights, whites, artistic filters, Auto Enhance, HDR, …)
- * is painted onto the live TextureView through [PreviewDisplayFilter] using the same
- * [com.example.engine.composition.ColorFilterGenerator] matrices as export. Those parameters
- * are intentionally omitted from [effectsFor] so a slider tick cannot rebuild ExoPlayer's
- * video graph (ANR / frozen frame / silent audio).
+ * Color and spatial parameters share [ColorGradingGlEffect]. Slider ticks publish a
+ * [ColorGradingSnapshot] onto the already-bound effect; [media3GraphSignature] stays
+ * stable so [androidx.media3.exoplayer.ExoPlayer.setVideoEffects] is not called again
+ * (that rebuild dropped the TextureView, produced black frames and stopped source audio).
  *
- * Neighbor-pixel operations (vignette, grain, sharpness, clarity, denoise, anti-flicker)
- * still go through Media3, but callers must coalesce them with [PreviewLookPolicy.LOOK_DEBOUNCE_MS].
+ * Thumbnails and still images still use [PreviewDisplayFilter] / ColorFilterGenerator.
  */
 @OptIn(UnstableApi::class)
 object PreviewFilterEffects {
@@ -43,22 +41,28 @@ object PreviewFilterEffects {
     lutIntensity: Float = 1f
   ): List<Effect> =
     Media3EffectPipeline.buildRealtimePreviewEffects(
-      adjustments = PreviewLookPolicy.spatialAdjustments(clip.effectiveAdjustments(timeline)),
-      // Color-matrix filters / sliders are painted onto the TextureView.
-      filterSettings = FilterSettings(),
+      adjustments = clip.effectiveAdjustments(timeline),
+      filterSettings = effectiveFilter(clip, timeline),
       customLut = lutBitmap,
       customLutIntensity = lutIntensity
     ) + PreviewVfxEffects.effectsFor(clip)
 
   /**
-   * Signature of the ExoPlayer effect list only. Artistic filters and color-matrix sliders
-   * must not be included: a brightness tick would otherwise call setVideoEffects and ANR.
+   * Structural Media3 graph identity. Value-only look edits must not change this
+   * or [androidx.media3.exoplayer.ExoPlayer.setVideoEffects] will rebuild the decoder.
+   */
+  fun media3GraphSignature(clip: VideoClip?, timeline: Timeline): String =
+    PreviewEffectApplyPolicy.graphSignature(clip, timeline)
+
+  /**
+   * Full value signature of the live look (filters + every adjustment + LUT + VFX).
+   * Used for logging and paused-frame refresh, not for setVideoEffects.
    */
   fun media3Signature(clip: VideoClip?, timeline: Timeline): String {
     val lut = lutLook(clip)
     return signature(
-      PreviewLookPolicy.spatialAdjustments(clip.effectiveAdjustments(timeline)),
-      FilterSettings(),
+      clip.effectiveAdjustments(timeline),
+      effectiveFilter(clip, timeline),
       lutId = lut?.first,
       lutIntensity = lut?.second ?: 0f
     ) + "|" + PreviewVfxEffects.signature(clip)
