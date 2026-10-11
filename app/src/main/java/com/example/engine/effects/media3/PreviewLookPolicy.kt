@@ -48,6 +48,9 @@ object PreviewLookPolicy {
       adj.denoise > 0.01f ||
       adj.antiFlicker > 0.01f
 
+  fun hasAnyLook(adjustments: VideoAdjustments, filter: FilterSettings): Boolean =
+    hasDisplayLook(adjustments, filter) || hasSpatialLook(adjustments)
+
   fun hasDisplayLook(adjustments: VideoAdjustments, filter: FilterSettings): Boolean {
     if (PreviewFilterEffects.isActiveLook(filter)) return true
     return abs(adjustments.brightness) > 0.01f ||
