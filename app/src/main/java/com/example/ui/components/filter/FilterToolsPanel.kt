@@ -47,8 +47,6 @@ import com.example.domain.model.VideoAdjustments
 import com.example.engine.SelectedTrackElement
 import com.example.engine.color.ColorEngineHost
 import com.ahstudio.color.core.LutState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.ui.graphics.SolidColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -424,7 +422,6 @@ fun FilterToolsPanel(
             FiltersTabContent(
               viewModel = viewModel,
               currentFilter = currentFilter,
-              selectedClipId = selectedClip?.id,
               lutClipId = lutClip?.id,
               lutClipGradeJson = lutClip?.colorGradeJson,
               baseBitmap = baseThumbnailBitmap,
@@ -470,22 +467,14 @@ private sealed interface LookItem {
   object NoLut : LookItem { override val key: String get() = "lut:none" }
 }
 
-private fun lookName(item: LookItem): String = when (item) {
-  is LookItem.Preset -> item.type.displayName
-  is LookItem.Lut -> item.name
-  LookItem.NoLut -> "No LUT"
-}
-
 /**
  * Tab 1: FILTERS CONTENT
- * Search, Favorites and Recent, built-in presets, and bundled LUT looks (real .cube grading,
- * thumbnails sampled from the LUT itself). 4 columns, vertical scroll, zero-lag thumbnails.
+ * Category chips, then a full-height 4-column thumbnail grid of built-in presets and LUT looks.
  */
 @Composable
 private fun FiltersTabContent(
   viewModel: StudioViewModel,
   currentFilter: FilterSettings,
-  selectedClipId: String?,
   lutClipId: String?,
   lutClipGradeJson: String?,
   baseBitmap: Bitmap?,
@@ -493,7 +482,6 @@ private fun FiltersTabContent(
 ) {
   val context = LocalContext.current
   var selectedCategory by remember { mutableStateOf(CAT_ALL) }
-  var query by remember { mutableStateOf("") }
   val categories = listOf(CAT_ALL, CAT_FAVOURITES, CAT_RECENT, "Pro Enhancements", "Cinematic & Nature", "Aesthetic Looks", CAT_LUT)
 
   var favourites by remember { mutableStateOf(FilterPrefs.favourites(context)) }
@@ -552,11 +540,8 @@ private fun FiltersTabContent(
     if (key.startsWith("lut:")) luts.firstOrNull { it.key == key }
     else allPresets.firstOrNull { it.name == key }?.let { LookItem.Preset(it) }
 
-  val items: List<LookItem> = remember(selectedCategory, query, favourites, recent) {
-    val q = query.trim()
-    if (q.isNotEmpty()) {
-      (allPresets.map { LookItem.Preset(it) } + luts).filter { lookName(it).contains(q, ignoreCase = true) }
-    } else when (selectedCategory) {
+  val items: List<LookItem> = remember(selectedCategory, favourites, recent) {
+    when (selectedCategory) {
       CAT_FAVOURITES -> favourites.mapNotNull { resolve(it) }
       CAT_RECENT -> recent.mapNotNull { resolve(it) }
       CAT_LUT -> listOf<LookItem>(LookItem.NoLut) + luts
@@ -574,7 +559,6 @@ private fun FiltersTabContent(
       .padding(horizontal = 8.dp, vertical = 4.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp)
   ) {
-    // Category chips
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -582,14 +566,14 @@ private fun FiltersTabContent(
       horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
       categories.forEach { cat ->
-        val isCatSelected = selectedCategory == cat && query.isBlank()
+        val isCatSelected = selectedCategory == cat
         Surface(
           shape = RoundedCornerShape(12.dp),
           color = if (isCatSelected) BlueGreenAccent.copy(alpha = 0.25f) else Color(0xFF0C2028),
           border = BorderStroke(1.dp, if (isCatSelected) BlueGreenAccent else BlueGreenBorder),
           modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
-            .clickable { selectedCategory = cat; query = "" }
+            .clickable { selectedCategory = cat }
             .testTag("filter_category_${cat.lowercase().replace(" ", "_").replace("&", "and")}")
         ) {
           Text(
@@ -603,206 +587,12 @@ private fun FiltersTabContent(
       }
     }
 
-    // Search
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .height(28.dp)
-        .clip(RoundedCornerShape(8.dp))
-        .background(Color(0xFF0C2028))
-        .border(1.dp, BlueGreenBorder, RoundedCornerShape(8.dp))
-        .padding(horizontal = 8.dp),
-      verticalAlignment = Alignment.CenterVertically
-    ) {
-      Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(14.dp))
-      Spacer(modifier = Modifier.width(6.dp))
-      Box(modifier = Modifier.weight(1f)) {
-        if (query.isEmpty()) Text("Search looks", color = TextSecondary, fontSize = 11.sp)
-        BasicTextField(
-          value = query,
-          onValueChange = { query = it },
-          singleLine = true,
-          textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 11.sp),
-          cursorBrush = SolidColor(BlueGreenAccent),
-          modifier = Modifier.fillMaxWidth().testTag("filter_search_field")
-        )
-      }
-      if (query.isNotEmpty()) {
-        Icon(
-          Icons.Default.Close,
-          contentDescription = "Clear search",
-          tint = TextSecondary,
-          modifier = Modifier.size(14.dp).clickable { query = "" }
-        )
-      }
-    }
-
-    // Filter Intensity Slider (Visible when active filter != NONE)
-    if (currentFilter.type != FilterType.NONE) {
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0B1E26),
-        border = BorderStroke(1.dp, BlueGreenBorder),
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Column(
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Text(
-              text = "${currentFilter.type.displayName} Intensity",
-              color = Color.White,
-              fontWeight = FontWeight.SemiBold,
-              fontSize = 11.sp
-            )
-            Text(
-              text = "${(currentFilter.intensity * 100).roundToInt()}%",
-              color = BlueGreenAccent,
-              fontWeight = FontWeight.Bold,
-              fontSize = 11.sp
-            )
-          }
-
-          Slider(
-            value = currentFilter.intensity,
-            onValueChange = { onFilterChange(currentFilter.copy(intensity = it)) },
-            valueRange = 0.01f..1f,
-            colors = SliderDefaults.colors(
-              thumbColor = BlueGreenAccent,
-              activeTrackColor = BlueGreenAccent,
-              inactiveTrackColor = BlueGreenBorder
-            ),
-            modifier = Modifier
-              .height(24.dp)
-              .testTag("filter_intensity_slider")
-          )
-
-          // Quick presets & Apply to all clips
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-              listOf(0.25f, 0.50f, 0.75f, 1.0f).forEach { preset ->
-                val isPSelected = abs(currentFilter.intensity - preset) < 0.05f
-                Surface(
-                  shape = RoundedCornerShape(4.dp),
-                  color = if (isPSelected) BlueGreenAccent.copy(alpha = 0.25f) else Color(0xFF0E2730),
-                  border = BorderStroke(1.dp, if (isPSelected) BlueGreenAccent else BlueGreenBorder),
-                  modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable { onFilterChange(currentFilter.copy(intensity = preset)) }
-                ) {
-                  Text(
-                    text = "${(preset * 100).toInt()}%",
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isPSelected) BlueGreenAccent else TextSecondary,
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                  )
-                }
-              }
-            }
-
-            Surface(
-              shape = RoundedCornerShape(4.dp),
-              color = Color(0xFF0E2730),
-              border = BorderStroke(1.dp, BlueGreenBorder),
-              modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .clickable {
-                  viewModel.timelineEngine.applyFilterToAllClips(currentFilter)
-                  viewModel.refreshCurrentFrame(preferClipId = selectedClipId)
-                }
-                .testTag("filter_apply_all_button")
-            ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-              ) {
-                Icon(
-                  Icons.Default.DoneAll,
-                  contentDescription = null,
-                  tint = BlueGreenAccent,
-                  modifier = Modifier.size(11.dp)
-                )
-                Spacer(modifier = Modifier.width(3.dp))
-                Text(
-                  text = "Apply All Clips",
-                  fontSize = 9.5.sp,
-                  fontWeight = FontWeight.SemiBold,
-                  color = BlueGreenAccent
-                )
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // LUT intensity (visible when a LUT look is active on the selected main-track clip)
-    activeLutId?.let { id ->
-      val lutName = ColorEngineHost.BUNDLED_LUTS.firstOrNull { it.first == id }?.second ?: id
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0B1E26),
-        border = BorderStroke(1.dp, BlueGreenBorder),
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Text(text = "$lutName LUT", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-              Text(
-                text = "${(lutIntensity * 100).roundToInt()}%",
-                color = BlueGreenAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp
-              )
-              Spacer(modifier = Modifier.width(10.dp))
-              Text(
-                text = "Remove",
-                color = TextSecondary, fontSize = 10.sp,
-                modifier = Modifier.clickable { commitLut(null, 1f) }.testTag("lut_remove_button")
-              )
-            }
-          }
-          Slider(
-            value = lutIntensity.coerceIn(0f, 1f),
-            onValueChange = { commitLut(id, it) },
-            valueRange = 0f..1f,
-            colors = SliderDefaults.colors(
-              thumbColor = BlueGreenAccent,
-              activeTrackColor = BlueGreenAccent,
-              inactiveTrackColor = BlueGreenBorder
-            ),
-            modifier = Modifier.height(24.dp).testTag("lut_intensity_slider")
-          )
-        }
-      }
-    }
-
-    if (!lutEnabled && (selectedCategory == CAT_LUT || query.isNotBlank())) {
-      Text(
-        text = "LUT looks apply to main-track clips. Select a main-track clip to use them.",
-        color = TextSecondary, fontSize = 10.sp
-      )
-    }
-
     if (items.isEmpty()) {
       Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
         Text(
-          text = when {
-            query.isNotBlank() -> "No looks match \"${query.trim()}\""
-            selectedCategory == CAT_FAVOURITES -> "No favorites yet. Tap the star on a look."
-            selectedCategory == CAT_RECENT -> "Looks you use will show up here."
+          text = when (selectedCategory) {
+            CAT_FAVOURITES -> "No favorites yet. Tap the star on a look."
+            CAT_RECENT -> "Looks you use will show up here."
             else -> "Nothing here."
           },
           color = TextSecondary, fontSize = 11.sp
