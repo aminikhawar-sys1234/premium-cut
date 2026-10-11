@@ -128,6 +128,16 @@ class PreviewMixPolicyTest {
 
     val mutedClip = audioClip.copy(isMuted = true)
     assertEquals(0f, PreviewMixPolicy.audioClipGain(mutedClip, audible, hasClipSolo = true), 0.0001f)
+
+    val hiddenClip = audioClip.copy(isHidden = true)
+    assertEquals(0f, PreviewMixPolicy.audioClipGain(hiddenClip, audible, hasClipSolo = true), 0.0001f)
+  }
+
+  @Test
+  fun hiddenVideoClipIsSilentWhileHiddenTrackIsNot() {
+    val tl = timeline(TrackSettings(TrackType.MAIN_VIDEO, isHidden = true))
+    assertEquals(1.0f, PreviewMixPolicy.clipGain(clip(), tl, TrackType.MAIN_VIDEO), 0.0001f)
+    assertEquals(0f, PreviewMixPolicy.clipGain(clip().copy(isHidden = true), tl, TrackType.MAIN_VIDEO), 0.0001f)
   }
 
   @Test

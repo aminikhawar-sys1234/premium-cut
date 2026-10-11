@@ -19,6 +19,7 @@ import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
 import com.example.domain.model.effectiveAdjustments
 import com.example.domain.model.timelineToSourceMs
+import com.example.engine.audio.AudioEffectsPreviewCache
 import com.example.engine.controller.CustomVideoEngineController
 import com.example.engine.controller.PlaybackSyncPolicy
 import com.example.engine.controller.PreviewMixPolicy
@@ -636,14 +637,11 @@ class VideoPlaybackEngine(
     if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return
     try {
       val hasSolo = currentTimeline.audioClips.any { it.isSolo }
-      // Same gate as AudioExportProcessor.collectAudioTracks(): mute/solo only. Hiding a track
-      // switches the picture off, it must not silence the mix (a hidden audio track is still
-      // exported, so muting it in the preview would be a preview/export divergence).
-      val isAudioTrackMuted = !PreviewMixPolicy.isTrackAudible(currentTimeline, TrackType.AUDIO)
+      // Same gate as AudioExportProcessor.collectAudioTracks() / PreviewMixPolicy:
+      // track mute/solo plus clip mute/hide. Track-level hide still leaves audio audible.
       val activeAudios = currentTimeline.audioClips.filter {
-        !it.isHidden && !it.isMuted && !isAudioTrackMuted &&
-        (!hasSolo || it.isSolo) &&
-        isPlayableInPlayer(it.uri)
+        PreviewMixPolicy.audioClipGain(it, currentTimeline, hasSolo) > 0f &&
+          isPlayableInPlayer(it.uri)
       }
 
       val activeIds = activeAudios.map { it.id }.toSet()
@@ -653,7 +651,14 @@ class VideoPlaybackEngine(
       }
 
       for (audio in activeAudios) {
-        val effectiveUri = audio.uri
+        val bakedUri = AudioEffectsPreviewCache.cachedUri(audio)
+        val effectiveUri = bakedUri ?: audio.uri
+        if (audio.audioEffects.hasActiveEffects() && bakedUri == null) {
+          AudioEffectsPreviewCache.request(context, audio, scope) {
+            audioLoadedUris.remove(audio.id)
+            syncAudioTrackPlayers(currentPosMs)
+          }
+        }
         var p = audioTrackPlayers[audio.id]
         if (p == null) {
           p = try {

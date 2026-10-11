@@ -344,7 +344,8 @@ class AudioExportProcessor(
 
         if (videoAudible) {
             timeline.videoClips.filter {
-                it.isVideo && it.hasAudio && it.volume > 0f && !it.isMuted && isExportableAudioUri(it.uri)
+                it.isVideo && it.hasAudio && isExportableAudioUri(it.uri) &&
+                    PreviewMixPolicy.clipGain(it, timeline, TrackType.MAIN_VIDEO) > 0f
             }.forEach {
                 list.add(AudioTrackDescriptor(
                     uri = it.uri,
@@ -367,7 +368,8 @@ class AudioExportProcessor(
         }
         if (overlayAudible) {
             timeline.overlayClips.filter {
-                it.isVideo && it.hasAudio && it.volume > 0f && !it.isMuted && isExportableAudioUri(it.uri)
+                it.isVideo && it.hasAudio && isExportableAudioUri(it.uri) &&
+                    PreviewMixPolicy.clipGain(it, timeline, TrackType.OVERLAY) > 0f
             }.forEach {
                 list.add(AudioTrackDescriptor(
                     uri = it.uri,

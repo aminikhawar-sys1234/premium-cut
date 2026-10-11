@@ -42,7 +42,7 @@ object PreviewMixPolicy {
   /** Effective preview gain for a main video / overlay clip. 0f = silent, else 0..2. */
   fun clipGain(clip: VideoClip, timeline: Timeline, type: TrackType): Float {
     if (!isTrackAudible(timeline, type)) return 0f
-    if (clip.isMuted) return 0f
+    if (clip.isMuted || clip.isHidden) return 0f
     return clip.volume.coerceIn(0f, 2f)
   }
 
@@ -63,7 +63,7 @@ object PreviewMixPolicy {
   /** Effective preview gain for an audio lane clip (track gate + clip mute/solo). */
   fun audioClipGain(clip: AudioClip, timeline: Timeline, hasClipSolo: Boolean): Float {
     if (!isTrackAudible(timeline, TrackType.AUDIO)) return 0f
-    if (clip.isMuted) return 0f
+    if (clip.isMuted || clip.isHidden) return 0f
     if (hasClipSolo && !clip.isSolo) return 0f
     return clip.volume.coerceIn(0f, 2f)
   }

@@ -260,12 +260,14 @@ fun VoiceChangerPanel(
               .combinedClickable(
                 onClick = {
                   selectedEffect = if (isSelected) null else item
-                  // Play a small synthesized preview tone
-                  viewModel.audioEngine.playPreviewSfx(
-                    sfxId = item.id,
-                    durationMs = 800L,
-                    category = item.name
-                  )
+                  if (selectedEffect != null) {
+                    viewModel.audioEngine.playVoiceEffectPreview(
+                      effect = item.voiceEffect,
+                      pitchShiftSemitones = item.pitchShift
+                    )
+                  } else {
+                    viewModel.audioEngine.stopAudio()
+                  }
                 },
                 onLongClick = {
                   toggleFavorite(item)

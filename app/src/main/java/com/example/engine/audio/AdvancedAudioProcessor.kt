@@ -149,7 +149,7 @@ object AdvancedAudioProcessor {
     effect: VoiceEffect,
     customPitchShift: Float
   ): ShortArray {
-    return when (effect) {
+    val effected = when (effect) {
       VoiceEffect.DEEP_VOICE -> pitchShiftResample(pcm, channels, pitchRatio = 0.72f)
       VoiceEffect.CHIPMUNK -> pitchShiftResample(pcm, channels, pitchRatio = 1.45f)
       VoiceEffect.ROBOT -> {
@@ -243,6 +243,14 @@ object AdvancedAudioProcessor {
           pitchShiftResample(pcm, channels, ratio)
         } else pcm
       }
+    }
+    // Catalog items store both a named effect and extra semitones. The named branch
+    // used to swallow pitchShiftSemitones, so Voice Changer cards never applied it.
+    return if (effect != VoiceEffect.NONE && customPitchShift != 0.0f) {
+      val ratio = 2.0.pow((customPitchShift / 12.0).toDouble()).toFloat()
+      pitchShiftResample(effected, channels, ratio)
+    } else {
+      effected
     }
   }
 

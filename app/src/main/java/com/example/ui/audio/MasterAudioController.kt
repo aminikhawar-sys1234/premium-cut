@@ -101,6 +101,12 @@ class MasterAudioController(
           _state.update { it.copy(progress = p) }
         }
       }
+      if (!result.file.exists() || result.file.length() == 0L || result.durationMs <= 0L) {
+        throw IllegalStateException("Master render produced no audio")
+      }
+      val waveform = withContext(Dispatchers.IO) {
+        com.example.engine.audio.AudioWaveformManager.extractWaveformFromFile(result.file)
+      }
       val tl = timelineEngine.timeline.value
       val updated = tl.audioClips.map {
         if (it.id == clip.id) it.copy(
@@ -108,7 +114,8 @@ class MasterAudioController(
           sourceStartMs = 0L,
           sourceEndMs = result.durationMs,
           durationMs = (result.durationMs / it.speed.coerceAtLeast(0.1f)).toLong(),
-          waveformData = emptyList(),
+          sourceTotalDurationMs = result.durationMs,
+          waveformData = waveform,
         ) else it
       }
       timelineEngine.replaceTimelineKeepingState(tl.copy(audioClips = updated))

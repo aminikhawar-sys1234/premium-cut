@@ -2964,13 +2964,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
         val denoisedResult = aiTools.reduceAudioNoise(audioFile)
         val denoisedFile = denoisedResult.getOrThrow()
+        val durationMs = com.example.engine.audio.AudioMediaDuration.durationMs(getApplication(), denoisedFile.absolutePath)
+          ?: com.example.engine.audio.WavDuration.durationMs(denoisedFile)
+          ?: throw IllegalStateException("Denoised audio was written, but its duration could not be read.")
 
         val newAudioClip = AudioClip(
           id = UUID.randomUUID().toString(),
           title = "Denoised Audio",
           uri = denoisedFile.absolutePath,
           timelineStartMs = 0L,
-          durationMs = timeline.totalDurationMs.coerceAtLeast(3000L),
+          durationMs = durationMs,
+          sourceEndMs = durationMs,
+          sourceTotalDurationMs = durationMs,
           volume = 1.0f
         )
         val updatedAudioClips = timeline.audioClips.toMutableList().apply { add(newAudioClip) }
