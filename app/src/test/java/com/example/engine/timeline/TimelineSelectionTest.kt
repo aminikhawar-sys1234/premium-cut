@@ -12,42 +12,102 @@ import org.junit.Test
 
 class TimelineSelectionTest {
 
-  private val timeline = Timeline(
-    videoClips = listOf(VideoClip(id = "v1", name = "V", uri = "v", durationMs = 2000L)),
-    overlayClips = listOf(VideoClip(id = "o1", name = "O", uri = "o", durationMs = 1000L, trackIndex = 1)),
-    audioClips = listOf(AudioClip(id = "a1", title = "A", uri = "a", durationMs = 2000L)),
-    textClips = listOf(TextClip(id = "t1", text = "Hi", durationMs = 1000L))
+  private var timeline = Timeline(
+    videoClips = listOf(VideoClip(id = "v1", name = "v1"), VideoClip(id = "v2", name = "v2", timelineStartMs = 3000)),
+    overlayClips = listOf(VideoClip(id = "o1", name = "o1", trackIndex = 1)),
+    audioClips = listOf(AudioClip(id = "a1", uri = "a", title = "a")),
+    textClips = listOf(TextClip(id = "t1"))
   )
+  private val selection = TimelineSelection { timeline }
 
   @Test
-  fun findTrackElementResolvesEveryLane() {
-    assertEquals(SelectedTrackElement.Video("v1"), TimelineSelection.findTrackElementForClip(timeline, "v1"))
-    assertEquals(SelectedTrackElement.Overlay("o1"), TimelineSelection.findTrackElementForClip(timeline, "o1"))
-    assertEquals(SelectedTrackElement.Audio("a1"), TimelineSelection.findTrackElementForClip(timeline, "a1"))
-    assertEquals(SelectedTrackElement.Text("t1"), TimelineSelection.findTrackElementForClip(timeline, "t1"))
-    assertEquals(SelectedTrackElement.None, TimelineSelection.findTrackElementForClip(timeline, "missing"))
+  fun trackElementResolvesEachClipKind() {
+    assertEquals(SelectedTrackElement.Video("v1"), timeline.trackElementFor("v1"))
+    assertEquals(SelectedTrackElement.Overlay("o1"), timeline.trackElementFor("o1"))
+    assertEquals(SelectedTrackElement.Audio("a1"), timeline.trackElementFor("a1"))
+    assertEquals(SelectedTrackElement.Text("t1"), timeline.trackElementFor("t1"))
+    assertEquals(SelectedTrackElement.None, timeline.trackElementFor("missing"))
   }
 
   @Test
-  fun toggleSelectEntersMultiSelectWhenAddingASecondClip() {
-    val first = TimelineSelection.selectElement(SelectedTrackElement.Video("v1"))
-    val second = TimelineSelection.toggleSelectClip(timeline, first, "o1")
-    assertTrue(second.multiSelect)
-    assertEquals(setOf("v1", "o1"), second.clipIds)
+  fun selectReplacesIdsWithTheElementClip() {
+    selection.selectMultiple(setOf("v1", "a1"))
+    selection.select(SelectedTrackElement.Text("t1"))
+    assertEquals(setOf("t1"), selection.selectedClipIds.value)
+    selection.select(SelectedTrackElement.None)
+    assertTrue(selection.selectedClipIds.value.isEmpty())
   }
 
   @Test
-  fun pruneDropsDeletedClipsAfterUndo() {
-    val selected = TimelineSelection.selectMultiple(timeline, setOf("v1", "o1", "gone"))
-    val pruned = TimelineSelection.pruneAfterHistoryChange(timeline, selected)
-    assertEquals(setOf("v1", "o1"), pruned.clipIds)
-    assertFalse(pruned.clipIds.contains("gone"))
+  fun addAndRemoveTrackMultiSelectModeAndFocus() {
+    selection.selectClip("v1")
+    selection.add("o1")
+    assertTrue(selection.isMultiSelectMode.value)
+    assertEquals(SelectedTrackElement.Overlay("o1"), selection.selectedElement.value)
+
+    selection.remove("o1")
+    assertFalse(selection.isMultiSelectMode.value)
+    assertEquals(SelectedTrackElement.Video("v1"), selection.selectedElement.value)
+
+    selection.remove("v1")
+    assertEquals(SelectedTrackElement.None, selection.selectedElement.value)
   }
 
   @Test
-  fun selectAllCollectsEveryClipId() {
-    val all = TimelineSelection.selectAll(timeline)
-    assertEquals(setOf("v1", "o1", "a1", "t1"), all.clipIds)
-    assertTrue(all.multiSelect)
+  fun tappingASecondClipOutsideMultiSelectPromotesToMultiSelect() {
+    selection.toggle("v1")
+    assertFalse(selection.isMultiSelectMode.value)
+    selection.toggle("a1")
+    assertTrue(selection.isMultiSelectMode.value)
+    assertEquals(setOf("v1", "a1"), selection.selectedClipIds.value)
+  }
+
+  @Test
+  fun togglingTheLastClipOffInMultiSelectExitsTheMode() {
+    selection.selectMultiple(setOf("v1", "v2"))
+    selection.toggle("v1")
+    selection.toggle("v2")
+    assertTrue(selection.selectedClipIds.value.isEmpty())
+    assertFalse(selection.isMultiSelectMode.value)
+    assertEquals(SelectedTrackElement.None, selection.selectedElement.value)
+  }
+
+  @Test
+  fun leavingMultiSelectKeepsOnlyTheFirstClip() {
+    selection.selectMultiple(setOf("v2", "o1", "a1"))
+    selection.toggleMultiSelectMode()
+    assertEquals(setOf("v2"), selection.selectedClipIds.value)
+    assertEquals(SelectedTrackElement.Video("v2"), selection.selectedElement.value)
+  }
+
+  @Test
+  fun selectAllCoversEveryTrack() {
+    selection.selectAll()
+    assertEquals(setOf("v1", "v2", "o1", "t1", "a1"), selection.selectedClipIds.value)
+    assertTrue(selection.isMultiSelectMode.value)
+  }
+
+  @Test
+  fun replaceDoesNotEnterMultiSelectMode() {
+    selection.replace(setOf("v1", "v2"))
+    assertFalse(selection.isMultiSelectMode.value)
+    assertEquals(SelectedTrackElement.Video("v1"), selection.selectedElement.value)
+  }
+
+  @Test
+  fun pruneMissingDropsClipsRemovedFromTheTimeline() {
+    selection.selectMultiple(setOf("v1", "o1"))
+    selection.add("a1")
+    timeline = timeline.copy(audioClips = emptyList(), overlayClips = emptyList())
+    selection.pruneMissing()
+    assertEquals(setOf("v1"), selection.selectedClipIds.value)
+    assertEquals(SelectedTrackElement.None, selection.selectedElement.value)
+  }
+
+  @Test
+  fun isSelectedChecksFocusedElementToo() {
+    selection.selectedElementState.value = SelectedTrackElement.Audio("a1")
+    assertTrue(selection.isSelected("a1"))
+    assertFalse(selection.isSelected("v1"))
   }
 }
