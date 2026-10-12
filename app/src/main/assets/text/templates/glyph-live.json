@@ -1,0 +1,252 @@
+[
+  {
+    "id": "glyph.rise-reveal",
+    "name": "Rise Reveal",
+    "category": "Glyph",
+    "text": "Hello",
+    "fontFamily": "sans-serif-black",
+    "fontSizeSp": 48,
+    "fontWeight": 900,
+    "textColor": "#FFFFFFFF",
+    "is3D": false,
+    "depth3D": 0,
+    "animationIn": "Rise Reveal",
+    "animationType": "Rise Reveal",
+    "animDurationMs": 1600,
+    "textAnimators": [
+      {
+        "name": "Rise Reveal",
+        "basis": "Characters",
+        "shape": "Square",
+        "softness": 30,
+        "durationMs": 900,
+        "timeEasing": "Linear",
+        "opacityPct": 0,
+        "posY": 0.45
+      }
+    ]
+  },
+  {
+    "id": "glyph.scatter-pop",
+    "name": "Scatter Pop",
+    "category": "Glyph",
+    "text": "Hello",
+    "fontFamily": "sans-serif-black",
+    "fontSizeSp": 48,
+    "fontWeight": 900,
+    "textColor": "#FFFFF7ED",
+    "hasGlow": true,
+    "glowColor": "#FFF97316",
+    "glowRadius": 12,
+    "is3D": false,
+    "depth3D": 0,
+    "animationIn": "Scatter Pop",
+    "animationType": "Scatter Pop",
+    "animDurationMs": 1600,
+    "textAnimators": [
+      {
+        "name": "Scatter Pop",
+        "basis": "Characters",
+        "shape": "Square",
+        "softness": 40,
+        "randomize": true,
+        "durationMs": 800,
+        "timeEasing": "Linear",
+        "opacityPct": 0,
+        "scalePct": 0,
+        "rotationDeg": -25
+      }
+    ]
+  },
+  {
+    "id": "glyph.wave",
+    "name": "Wave",
+    "category": "Glyph",
+    "text": "Hello",
+    "fontFamily": "sans-serif-black",
+    "fontSizeSp": 48,
+    "fontWeight": 900,
+    "textColor": "#FF67E8F9",
+    "is3D": false,
+    "depth3D": 0,
+    "animationIn": "Wave",
+    "animationType": "Wave",
+    "animDurationMs": 1600,
+    "textAnimators": [
+      {
+        "name": "Wave",
+        "basis": "Characters",
+        "shape": "Smooth",
+        "startFrom": -50,
+        "startTo": 100,
+        "endFrom": 0,
+        "endTo": 150,
+        "durationMs": 1400,
+        "timeEasing": "Linear",
+        "loopMode": "Loop",
+        "posY": -0.4,
+        "scalePct": 115
+      }
+    ]
+  },
+  {
+    "id": "glyph.spotlight",
+    "name": "Spotlight",
+    "category": "Glyph",
+    "text": "Hello",
+    "fontFamily": "serif",
+    "fontSizeSp": 48,
+    "fontWeight": 800,
+    "textColor": "#FFFFFFFF",
+    "is3D": false,
+    "depth3D": 0,
+    "animationIn": "Spotlight",
+    "animationType": "Spotlight",
+    "animDurationMs": 1800,
+    "textAnimators": [
+      {
+        "name": "Spotlight",
+        "basis": "Words",
+        "shape": "Round",
+        "startFrom": -40,
+        "startTo": 100,
+        "endFrom": 20,
+        "endTo": 160,
+        "durationMs": 1800,
+        "timeEasing": "Ease In Out",
+        "loopMode": "Loop",
+        "scalePct": 120,
+        "useFill": true,
+        "fillColor": "#FFFFC107"
+      }
+    ]
+  },
+  {
+    "id": "glyph.flip-in",
+    "name": "Glyph Flip",
+    "category": "Glyph",
+    "text": "Hello",
+    "fontFamily": "sans-serif-black",
+    "fontSizeSp": 48,
+    "fontWeight": 900,
+    "textColor": "#FFFFFFFF",
+    "is3D": true,
+    "depth3D": 10,
+    "bevelRadius3D": 1.5,
+    "material3D": "plastic",
+    "color3D": "#FF1E293B",
+    "animationIn": "None",
+    "animationType": "None",
+    "animDurationMs": 1600,
+    "textAnimators": [
+      {
+        "name": "3D Flip In",
+        "basis": "Characters",
+        "shape": "Square",
+        "softness": 35,
+        "durationMs": 1000,
+        "timeEasing": "Ease Out",
+        "opacityPct": 0,
+        "tiltYDeg": -90,
+        "depthPx": 14
+      }
+    ]
+  },
+  {
+    "id": "glyph.depth-pop",
+    "name": "Depth Pop",
+    "category": "Glyph",
+    "text": "Hello",
+    "fontFamily": "sans-serif-black",
+    "fontSizeSp": 48,
+    "fontWeight": 900,
+    "textColor": "#FFFDE68A",
+    "is3D": true,
+    "depth3D": 12,
+    "material3D": "metallic",
+    "color3D": "#FF78350F",
+    "animationIn": "None",
+    "animationType": "None",
+    "animDurationMs": 1600,
+    "textAnimators": [
+      {
+        "name": "Depth Pop",
+        "basis": "Characters",
+        "shape": "Smooth",
+        "startFrom": -50,
+        "startTo": 100,
+        "endFrom": 0,
+        "endTo": 150,
+        "durationMs": 1200,
+        "timeEasing": "Linear",
+        "loopMode": "Loop",
+        "depthPx": 18,
+        "scalePct": 108,
+        "posY": -0.12
+      }
+    ]
+  },
+  {
+    "id": "glyph.light-sweep",
+    "name": "Light Sweep",
+    "category": "Glyph",
+    "text": "Hello",
+    "fontFamily": "sans-serif-black",
+    "fontSizeSp": 48,
+    "fontWeight": 900,
+    "textColor": "#FFE8EEF4",
+    "is3D": true,
+    "depth3D": 14,
+    "material3D": "chrome",
+    "color3D": "#FF334155",
+    "animationIn": "None",
+    "animationType": "None",
+    "animDurationMs": 1600,
+    "textAnimators": [
+      {
+        "name": "Light Sweep",
+        "basis": "Characters",
+        "shape": "Smooth",
+        "startFrom": -60,
+        "startTo": 100,
+        "endFrom": 0,
+        "endTo": 160,
+        "durationMs": 1600,
+        "timeEasing": "Linear",
+        "loopMode": "Loop",
+        "lightShiftDeg": 140
+      }
+    ]
+  },
+  {
+    "id": "glyph.tumble",
+    "name": "Tumble",
+    "category": "Glyph",
+    "text": "Hello",
+    "fontFamily": "serif",
+    "fontSizeSp": 48,
+    "fontWeight": 800,
+    "textColor": "#FFFFFFFF",
+    "is3D": true,
+    "depth3D": 10,
+    "material3D": "matte",
+    "color3D": "#FF1E293B",
+    "animationIn": "None",
+    "animationType": "None",
+    "animDurationMs": 1600,
+    "textAnimators": [
+      {
+        "name": "Tumble",
+        "basis": "Words",
+        "shape": "Square",
+        "softness": 30,
+        "durationMs": 1100,
+        "timeEasing": "Ease Out",
+        "opacityPct": 0,
+        "tiltXDeg": 80,
+        "depthPx": 10,
+        "posY": 0.3
+      }
+    ]
+  }
+]

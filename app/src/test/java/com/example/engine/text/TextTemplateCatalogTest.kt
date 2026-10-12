@@ -136,6 +136,32 @@ class TextTemplateCatalogTest {
     assertEquals("My Title", reset.text)
     assertFalse(reset.is3D)
     assertEquals("None", reset.animation3D)
+    assertTrue(reset.textAnimators.isEmpty())
+  }
+
+  @Test
+  fun glyphTemplatesCarryPerCharacterAnimatorsAndApplyOntoUserText() {
+    val glyphs = TextAssetRegistry.getTemplates().filter { it.id.startsWith("glyph.") }
+    assertEquals(8, glyphs.size)
+    glyphs.forEach { template ->
+      val spec = template.templateClip.textAnimators.single()
+      assertTrue(spec.enabled)
+      assertTrue(spec.basis == "Characters" || spec.basis == "Words")
+      assertTrue(TextTemplateCatalog.matches(template.templateClip, template))
+    }
+    val rise = glyphs.first { it.id == "glyph.rise-reveal" }
+    assertEquals("Characters", rise.templateClip.textAnimators.single().basis)
+    assertEquals(0f, rise.templateClip.textAnimators.single().opacityPct, 0.01f)
+
+    val applied = TextTemplateCatalog.applyStyle(
+      TextClip(id = "live", text = "My Title"),
+      rise.templateClip,
+      keepText = true
+    )
+    assertEquals("My Title", applied.text)
+    assertEquals("Rise Reveal", applied.textAnimators.single().name)
+    assertTrue(TextTemplateCatalog.resetStyle(applied).textAnimators.isEmpty())
+    assertFalse(TextTemplateCatalog.matches(TextTemplateCatalog.resetStyle(applied), rise))
   }
 
   @Test

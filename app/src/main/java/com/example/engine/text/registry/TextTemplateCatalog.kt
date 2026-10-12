@@ -2,6 +2,7 @@ package com.example.engine.text.registry
 
 import android.content.Context
 import android.util.Log
+import com.example.domain.model.TextAnimatorSpec
 import com.example.domain.model.TextClip
 import com.example.domain.plugin.PluginCategory
 import com.example.engine.plugin.PluginManager
@@ -127,7 +128,8 @@ object TextTemplateCatalog {
       lightAngle3D = source.lightAngle3D,
       lightIntensity3D = source.lightIntensity3D,
       animation3D = source.animation3D,
-      effectStyle = source.effectStyle
+      effectStyle = source.effectStyle,
+      textAnimators = source.textAnimators
     )
   }
 
@@ -156,7 +158,8 @@ object TextTemplateCatalog {
     animationOut = "None",
     animation3D = "None",
     animationType = "None",
-    effectStyle = "None"
+    effectStyle = "None",
+    textAnimators = emptyList()
   )
 
   fun matches(clip: TextClip, template: RegisteredTextTemplate): Boolean {
@@ -165,8 +168,12 @@ object TextTemplateCatalog {
       clip.textColor == src.textColor &&
       clip.is3D == src.is3D &&
       clip.animationIn == src.animationIn &&
-      clip.animation3D == src.animation3D
+      clip.animation3D == src.animation3D &&
+      animatorKey(clip) == animatorKey(src)
   }
+
+  private fun animatorKey(clip: TextClip): String =
+    clip.textAnimators.filter { it.enabled }.joinToString("|") { "${it.name}:${it.basis}:${it.shape}" }
 
   internal fun parseColor(raw: String?, fallback: Long): Long {
     if (raw.isNullOrBlank()) return fallback
@@ -353,7 +360,51 @@ object TextTemplateCatalog {
       lightAngle3D = num("lightAngle3D", 315.0).toFloat(),
       lightIntensity3D = num("lightIntensity3D", 1.0).toFloat(),
       animation3D = str("animation3D", "None"),
-      effectStyle = str("effectStyle", "None")
+      effectStyle = str("effectStyle", "None"),
+      textAnimators = animatorsFrom(src, root)
     )
+  }
+
+  private fun animatorsFrom(src: JSONObject, root: JSONObject): List<TextAnimatorSpec> {
+    val arr = when {
+      src.has("textAnimators") -> src.optJSONArray("textAnimators")
+      else -> root.optJSONArray("textAnimators")
+    } ?: return emptyList()
+    return (0 until arr.length()).mapNotNull { index ->
+      val o = arr.optJSONObject(index) ?: return@mapNotNull null
+      TextAnimatorSpec(
+        name = o.optString("name", "Animator").ifBlank { "Animator" },
+        enabled = o.optBoolean("enabled", true),
+        basis = o.optString("basis", "Characters").ifBlank { "Characters" },
+        shape = o.optString("shape", "Square").ifBlank { "Square" },
+        startFrom = o.optDouble("startFrom", 0.0).toFloat(),
+        startTo = o.optDouble("startTo", 100.0).toFloat(),
+        endFrom = o.optDouble("endFrom", 100.0).toFloat(),
+        endTo = o.optDouble("endTo", 100.0).toFloat(),
+        offset = o.optDouble("offset", 0.0).toFloat(),
+        softness = o.optDouble("softness", 0.0).toFloat(),
+        easeHigh = o.optDouble("easeHigh", 0.0).toFloat(),
+        easeLow = o.optDouble("easeLow", 0.0).toFloat(),
+        randomize = o.optBoolean("randomize", false),
+        randomSeed = o.optInt("randomSeed", 1),
+        delayMs = o.optLong("delayMs", 0L),
+        durationMs = o.optLong("durationMs", 1000L),
+        timeEasing = o.optString("timeEasing", "Ease Out").ifBlank { "Ease Out" },
+        loopMode = o.optString("loopMode", "Once").ifBlank { "Once" },
+        posX = o.optDouble("posX", 0.0).toFloat(),
+        posY = o.optDouble("posY", 0.0).toFloat(),
+        scalePct = o.optDouble("scalePct", 100.0).toFloat(),
+        rotationDeg = o.optDouble("rotationDeg", 0.0).toFloat(),
+        skewDeg = o.optDouble("skewDeg", 0.0).toFloat(),
+        opacityPct = o.optDouble("opacityPct", 100.0).toFloat(),
+        trackingEm = o.optDouble("trackingEm", 0.0).toFloat(),
+        useFill = o.optBoolean("useFill", false),
+        fillColor = parseColor(o.optString("fillColor"), 0xFFFFEB3B),
+        depthPx = o.optDouble("depthPx", 0.0).toFloat(),
+        tiltXDeg = o.optDouble("tiltXDeg", 0.0).toFloat(),
+        tiltYDeg = o.optDouble("tiltYDeg", 0.0).toFloat(),
+        lightShiftDeg = o.optDouble("lightShiftDeg", 0.0).toFloat()
+      )
+    }
   }
 }
