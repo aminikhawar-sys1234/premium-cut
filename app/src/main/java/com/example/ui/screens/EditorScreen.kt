@@ -120,6 +120,8 @@ fun EditorScreen(
   // Overlay clips whose video player exists, so PIP layers switch from placeholder to video
   // as soon as the player is created.
   val overlayPlayerIds by viewModel.playbackEngine.overlayPlayerIds.collectAsState()
+  val compositorActive by viewModel.playbackEngine.compositorActive.collectAsState()
+  val compositorEngine = if (compositorActive) viewModel.playbackEngine else null
   val playerGeneration by viewModel.playbackEngine.playerGeneration.collectAsState()
   val previewPlayer = remember(playerGeneration) { viewModel.playbackEngine.player }
   val canUndo by viewModel.timelineEngine.canUndo.collectAsState()
@@ -788,6 +790,7 @@ fun EditorScreen(
           overlayPlayerIds = overlayPlayerIds,
           onBindOverlaySurface = { clipId, view -> viewModel.playbackEngine.bindOverlaySurface(clipId, view) },
           liveLook = livePreviewLook,
+          compositorEngine = compositorEngine,
           isPrimarySurface = true,
           onToggleFullscreen = { isFullscreenPreview = true },
           onAddMedia = safeLaunchMediaPicker,
@@ -1611,6 +1614,7 @@ fun EditorScreen(
           overlayPlayerIds = overlayPlayerIds,
           onBindOverlaySurface = { clipId, view -> viewModel.playbackEngine.bindOverlaySurface(clipId, view) },
           liveLook = livePreviewLook,
+          compositorEngine = compositorEngine,
           isPrimarySurface = false,
           onToggleFullscreen = { isFullscreenPreview = false },
           onAddMedia = safeLaunchMediaPicker,
@@ -1846,6 +1850,11 @@ fun VideoPreviewSurface(
   overlayPlayerIds: Set<String> = emptySet(),
   onBindOverlaySurface: ((String, android.view.TextureView) -> Unit)? = null,
   liveLook: LivePreviewLook? = null,
+  /**
+   * Set while the GPU compositor draws the picture: it replaces the player layer, the Compose
+   * effects layer and the overlay media. Text, stickers and edit handles are still drawn here.
+   */
+  compositorEngine: com.example.engine.playback.VideoPlaybackEngine? = null,
   /** The inline preview owns the player surface; a fullscreen dialog surface is secondary. */
   isPrimarySurface: Boolean = true,
   onToggleFullscreen: (() -> Unit)? = null,
@@ -2044,7 +2053,9 @@ fun VideoPreviewSurface(
           }
       ) {
         // Background Video / Image Layer
-        if (activeClip != null) {
+        if (compositorEngine != null) {
+          com.example.ui.components.player.PreviewCompositorView(compositorEngine, Modifier.fillMaxSize())
+        } else if (activeClip != null) {
           Box(
             modifier = Modifier
               .fillMaxSize()
@@ -2209,7 +2220,7 @@ fun VideoPreviewSurface(
         }
 
         // Active Visual Effects Overlay (procedural shaders, flares, sparks, scanlines, glitch, wings, grids)
-        if (activeEffects.isNotEmpty()) {
+        if (compositorEngine == null && activeEffects.isNotEmpty()) {
           androidx.compose.foundation.Canvas(
             modifier = Modifier.fillMaxSize()
           ) {
@@ -2249,6 +2260,7 @@ fun VideoPreviewSurface(
           onEditText = onEditText,
           getOverlayPlayer = onGetOverlayPlayer,
           overlayPlayerIds = overlayPlayerIds,
+          renderOverlayMedia = compositorEngine == null,
           onBindOverlaySurface = onBindOverlaySurface,
           timeline = timeline,
           liveLook = liveLook,

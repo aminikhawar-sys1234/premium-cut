@@ -218,6 +218,8 @@ fun InteractiveTransformOverlay(
    * added PIP video kept showing the image placeholder until something else recomposed.
    */
   overlayPlayerIds: Set<String> = emptySet(),
+  /** False when the GPU compositor already draws the overlay pixels: only the edit frame is shown. */
+  renderOverlayMedia: Boolean = true,
   /** Clock-driven overlay decoder surface (no per-clip ExoPlayer). */
   onBindOverlaySurface: ((String, android.view.TextureView) -> Unit)? = null,
   timeline: Timeline = Timeline(),
@@ -289,10 +291,14 @@ fun InteractiveTransformOverlay(
           .scale(kf.scale)
           .rotate(kf.rotation)
           .clip(RoundedCornerShape(8.dp))
-          .background(Color(0xFF1E293B))
+          .background(if (renderOverlayMedia) Color(0xFF1E293B) else Color.Transparent)
           .border(
             width = if (isSelected) 2.dp else 1.dp,
-            color = if (isSelected) (if (overlay.isLocked) RedAccent else AmberAccent) else Color.White.copy(alpha = 0.5f),
+            color = when {
+              isSelected -> if (overlay.isLocked) RedAccent else AmberAccent
+              renderOverlayMedia -> Color.White.copy(alpha = 0.5f)
+              else -> Color.White.copy(alpha = 0.2f)
+            },
             shape = RoundedCornerShape(8.dp)
           )
           .pointerInput(overlay.id, kf.rotation, kf.scale, overlay.isLocked) {
@@ -377,7 +383,9 @@ fun InteractiveTransformOverlay(
         } else null
         val bindCompositorSurface = onBindOverlaySurface != null && isRealVideoOverlay && overlay.id in overlayPlayerIds
 
-        if (bindCompositorSurface) {
+        if (!renderOverlayMedia) {
+          // GPU compositor already drew this overlay; only the edit frame remains.
+        } else if (bindCompositorSurface) {
           AndroidView(
             factory = { ctx ->
               android.view.TextureView(ctx).apply {
@@ -428,7 +436,7 @@ fun InteractiveTransformOverlay(
           )
         }
 
-        Column(
+        if (renderOverlayMedia || isSelected) Column(
           modifier = Modifier
             .fillMaxSize()
             .padding(4.dp),

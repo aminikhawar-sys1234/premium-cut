@@ -18,13 +18,12 @@ import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
 import com.example.domain.model.*
-import com.example.engine.composition.ComposedOverlay
+import com.example.engine.composition.CompositionRenderGraph
 import com.example.engine.composition.VideoCompositionEngine
 import com.example.engine.composition.graph.SharedCompositionGraph
 import com.example.engine.composition.gpu.EglCore
 import com.example.engine.composition.gpu.GpuCompositionRenderer
 import com.example.engine.composition.gpu.HardwareVideoTextureSource
-import com.example.engine.composition.gpu.TransitionSourceTexture
 import com.example.engine.composition.gpu.WindowSurface
 import com.example.engine.controller.DecoderManager
 import kotlinx.coroutines.CancellationException
@@ -793,150 +792,83 @@ class AsyncFramePipelineEngine(private val context: Context) {
             val frame = SharedCompositionGraph.evaluate(timeline, timelinePosMs, fps).composedFrame
             val activeClip = frame.activeClip
 
-            val currentNeededClipIds = mutableSetOf<String>()
-            if (activeClip != null && activeClip.isVideo) currentNeededClipIds.add(activeClip.id)
-            for (ov in frame.activeOverlays) {
-              if (ov.clip.isVideo) currentNeededClipIds.add(ov.clip.id)
-            }
+            // The same layer list the preview samples. A NONE transition still pins its decoders
+            // so a following real transition does not have to reopen them.
+            val layers = CompositionRenderGraph.layersOf(frame)
+            val currentNeededClipIds = layers.filter { it.clip.isVideo }.map { it.clip.id }.toMutableSet()
             frame.activeTransition?.let { tr ->
               if (tr.clipBefore.isVideo) currentNeededClipIds.add(tr.clipBefore.id)
               if (tr.clipAfter.isVideo) currentNeededClipIds.add(tr.clipAfter.id)
             }
 
-            var mainTexId = 0
-            var isMainOes = false
-            var mainTexMatrix: FloatArray? = null
-            var effectiveFrame = frame
-
-            // 1. Main clip
-            if (activeClip != null) {
-              if (activeClip.isVideo && activeClip.uri.isNotBlank()) {
-                val decoder = decodeClipFrame(activeClip, frame.clipSourcePosMs, currentNeededClipIds)
-                if (decoder != null && decoder.textureId != 0) {
-                  mainTexId = decoder.textureId
-                  isMainOes = true
-                  mainTexMatrix = decoder.transformMatrix
-                  if (decoder.width > 0 && decoder.height > 0 && (activeClip.width <= 0 || activeClip.height <= 0)) {
-                    effectiveFrame = effectiveFrame.copy(
-                      activeClip = activeClip.copy(width = decoder.width, height = decoder.height)
-                    )
-                  }
-                }
-                // Resilient fallback: still-frame extraction when the codec cannot give us a picture
-                if (mainTexId == 0) {
-                  val fallbackBmp = fetchFallbackBitmap(activeClip, frame.clipSourcePosMs, exportWidth, exportHeight)
-                  if (fallbackBmp != null) {
-                    val texId = gpuRenderer?.uploadImageTexture("fallback_main_${activeClip.id}", fallbackBmp) ?: 0
-                    fallbackBmp.recycle()
-                    if (texId > 0) {
-                      mainTexId = texId
-                      isMainOes = false
-                      mainTexMatrix = null
-                    }
-                  }
-                }
-                if (mainTexId == 0) {
-                  throw ExportPipelineException(
-                    "Could not decode a video frame from '${activeClip.name}' at ${frame.clipSourcePosMs} ms " +
-                      "(timeline ${timelinePosMs} ms). Export stopped instead of writing black frames.",
-                    retryable = false
-                  )
-                }
-              } else {
-                mainTexId = imageTextures[activeClip.uri] ?: 0
-                isMainOes = false
-                if (mainTexId == 0 && activeClip.uri.isNotBlank()) {
-                  throw ExportPipelineException("Image '${activeClip.name}' could not be loaded for export.", retryable = false)
-                }
+            val decoded = HashMap<String, CompositionRenderGraph.ResolvedLayer>()
+            fun rememberDecoded(clip: VideoClip, dec: HardwareClipDecoder) {
+              if (dec.textureId == 0 || clip.id in decoded) return
+              decoded[clip.id] = CompositionRenderGraph.ResolvedLayer(
+                textureId = dec.textureId,
+                isOes = true,
+                texMatrix = dec.transformMatrix.copyOf(),
+                width = dec.width,
+                height = dec.height
+              )
+            }
+            fun rememberFallback(clip: VideoClip, key: String, srcPosMs: Long) {
+              if (clip.id in decoded) return
+              val bmp = fetchFallbackBitmap(clip, srcPosMs, exportWidth, exportHeight) ?: return
+              val texId = gpuRenderer?.uploadImageTexture(key, bmp) ?: 0
+              bmp.recycle()
+              if (texId > 0) {
+                decoded[clip.id] = CompositionRenderGraph.ResolvedLayer(texId, false, null, 0, 0)
               }
             }
 
-            // 1b. Transition sources: real pixels of BOTH clips for the shader transition engine.
-            fun acquireTransitionSource(clip: VideoClip, timelinePos: Long): TransitionSourceTexture? {
-              if (activeClip != null && clip.id == activeClip.id && mainTexId > 0) {
-                return TransitionSourceTexture(mainTexId, isMainOes, mainTexMatrix?.copyOf())
+            for (layer in layers) {
+              val clip = layer.clip
+              if (!clip.isVideo || clip.uri.isBlank() || clip.id in decoded) continue
+              val srcMs = layer.sourceUs / 1000L
+              decodeClipFrame(clip, srcMs, currentNeededClipIds)?.let { rememberDecoded(clip, it) }
+              if (clip.id in decoded) continue
+              val key = when (layer.role) {
+                CompositionRenderGraph.LayerRole.MAIN -> "fallback_main_${clip.id}"
+                CompositionRenderGraph.LayerRole.OVERLAY -> "fallback_ov_${clip.id}"
+                else -> "fallback_tr_${clip.id}"
               }
-              val srcPos = clip.timelineToSourceMs(timelinePos)
-              if (clip.isVideo && clip.uri.isNotBlank()) {
-                val dec = decodeClipFrame(clip, srcPos, currentNeededClipIds)
-                if (dec != null && dec.textureId != 0) {
-                  return TransitionSourceTexture(dec.textureId, true, dec.transformMatrix.copyOf())
-                }
-                val bmp = fetchFallbackBitmap(clip, srcPos, exportWidth, exportHeight)
-                val tex = if (bmp != null) gpuRenderer?.uploadImageTexture("fallback_tr_${clip.id}", bmp) ?: 0 else 0
-                bmp?.recycle()
-                return if (tex > 0) TransitionSourceTexture(tex, false, null) else null
+              rememberFallback(clip, key, srcMs)
+              if (clip.id !in decoded && layer.role == CompositionRenderGraph.LayerRole.OVERLAY) {
+                Log.w(tag, "Overlay '${clip.name}' has no decodable frame at ${srcMs}ms; it will be missing from this frame")
               }
-              val img = imageTextures[clip.uri] ?: 0
-              return if (img > 0) TransitionSourceTexture(img, false, null) else null
-            }
-            var transitionBefore: TransitionSourceTexture? = null
-            var transitionAfter: TransitionSourceTexture? = null
-            val activeTr = frame.activeTransition
-            if (activeTr != null && activeTr.type != TransitionType.NONE) {
-              transitionBefore = acquireTransitionSource(activeTr.clipBefore, frame.timelinePosMs)
-              transitionAfter = acquireTransitionSource(activeTr.clipAfter, frame.timelinePosMs)
             }
 
-            // 2. Overlays
-            val overlayTextures = HashMap<String, Int>()
-            val overlayTexMatrices = HashMap<String, FloatArray>()
-            val updatedOverlays = mutableListOf<ComposedOverlay>()
-            for (overlay in frame.activeOverlays) {
-              if (overlay.clip.isVideo && overlay.clip.uri.isNotBlank()) {
-                val ovDecoder = decodeClipFrame(overlay.clip, overlay.sourcePosMs, currentNeededClipIds)
-                var ovTexId = 0
-                if (ovDecoder != null && ovDecoder.textureId != 0) {
-                  ovTexId = ovDecoder.textureId
-                  overlayTextures[overlay.clip.id] = ovTexId
-                  overlayTexMatrices[overlay.clip.id] = ovDecoder.transformMatrix
-                  if (ovDecoder.width > 0 && ovDecoder.height > 0 && (overlay.clip.width <= 0 || overlay.clip.height <= 0)) {
-                    updatedOverlays.add(overlay.copy(clip = overlay.clip.copy(width = ovDecoder.width, height = ovDecoder.height)))
-                  } else {
-                    updatedOverlays.add(overlay)
-                  }
-                }
-                if (ovTexId == 0) {
-                  val ovBmp = fetchFallbackBitmap(overlay.clip, overlay.sourcePosMs, exportWidth, exportHeight)
-                  if (ovBmp != null) {
-                    val texId = gpuRenderer?.uploadImageTexture("fallback_ov_${overlay.clip.id}", ovBmp) ?: 0
-                    ovBmp.recycle()
-                    if (texId > 0) overlayTextures[overlay.clip.id] = texId
-                  } else {
-                    Log.w(tag, "Overlay '${overlay.clip.name}' has no decodable frame at ${overlay.sourcePosMs}ms; it will be missing from this frame")
-                  }
-                  updatedOverlays.add(overlay)
-                }
-              } else {
-                val texId = imageTextures[overlay.clip.uri]
-                if (texId != null && texId > 0) overlayTextures[overlay.clip.id] = texId
-                updatedOverlays.add(overlay)
-              }
+            if (activeClip != null && activeClip.isVideo && activeClip.uri.isNotBlank() && activeClip.id !in decoded) {
+              throw ExportPipelineException(
+                "Could not decode a video frame from '${activeClip.name}' at ${frame.clipSourcePosMs} ms " +
+                  "(timeline ${timelinePosMs} ms). Export stopped instead of writing black frames.",
+                retryable = false
+              )
             }
-            if (updatedOverlays.isNotEmpty()) {
-              effectiveFrame = effectiveFrame.copy(activeOverlays = updatedOverlays)
+            if (activeClip != null && !activeClip.isVideo && activeClip.uri.isNotBlank() && (imageTextures[activeClip.uri] ?: 0) == 0) {
+              throw ExportPipelineException("Image '${activeClip.name}' could not be loaded for export.", retryable = false)
             }
 
-            // 3. Compose (video + AR + effects + text + stickers) into the encoder Surface's back buffer
+            // 3. Compose (video + AR + effects + text + stickers) into the encoder Surface's back buffer.
+            // Assembly is shared with the preview, so both draw the same layers from the same source times.
+            val assembled = CompositionRenderGraph.assemble(
+              frame = frame,
+              decoded = decoded,
+              imageTextureId = { uri -> imageTextures[uri] ?: 0 },
+              drawTextAndStickers = true
+            )
             val composeStart = System.nanoTime()
             val rend = gpuRenderer ?: throw IllegalStateException("GPU renderer is not initialised")
-            rend.render(
-              frame = effectiveFrame,
-              mainTextureId = mainTexId,
-              isMainOes = isMainOes,
-              mainTexMatrix = mainTexMatrix,
-              overlayTextures = overlayTextures,
-              overlayTexMatrices = overlayTexMatrices,
+            CompositionRenderGraph.present(
+              renderer = rend,
+              assembled = assembled,
               viewportWidth = exportWidth,
               viewportHeight = exportHeight,
-              timelineAdjustments = timeline.adjustments,
-              timelineFilter = timeline.filter,
+              adjustments = timeline.adjustments,
+              filter = timeline.filter,
               chromaKey = timeline.chromaKey,
-              flipYForEncoder = ExportOrientationPolicy.FLIP_Y_FOR_ENCODER,
-              flipXForEncoder = false,
-              transitionBefore = transitionBefore,
-              transitionAfter = transitionAfter,
-              deterministicMasks = true
+              presentation = CompositionRenderGraph.FramePresentation.export(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER)
             )
             // Submit GPU work without a full GPU/CPU stall. eglSwapBuffers already publishes
             // the frame to the encoder; glFinish serialized every frame and made long exports
@@ -946,7 +878,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             // Black-frame guard: sample the real back buffer on a few frames (cheap, diagnostic + hard fail
             // only if EVERY sampled frame of a video project is black). The readback in here synchronises
             // the GPU on its own, so no glFinish() is needed for correctness.
-            if (frameIndex in probeFrames && mainTexId > 0) {
+            if (frameIndex in probeFrames && assembled.mainTextureId > 0) {
               probes++
               if (isBackBufferBlack(exportWidth, exportHeight)) blackProbes++
             }
