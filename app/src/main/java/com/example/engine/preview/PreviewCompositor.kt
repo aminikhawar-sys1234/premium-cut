@@ -4,7 +4,6 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.SurfaceTexture
-import android.net.Uri
 import android.opengl.GLES20
 import android.os.Handler
 import android.os.HandlerThread
@@ -13,6 +12,7 @@ import android.os.SystemClock
 import android.util.Log
 import android.view.Choreographer
 import android.view.Surface
+import androidx.core.net.toUri
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
 import com.example.engine.composition.ComposedFrame
@@ -359,7 +359,7 @@ class PreviewCompositor(
   }
 
   private fun decodeSampledBitmap(uriString: String): Bitmap? = try {
-    val uri = Uri.parse(uriString)
+    val uri = uriString.toUri()
     fun open() = if (uri.scheme == "content") context.contentResolver.openInputStream(uri) else java.io.FileInputStream(if (uri.scheme == "file") uri.path ?: uriString else uriString)
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     open()?.use { BitmapFactory.decodeStream(it, null, bounds) }

@@ -1,6 +1,7 @@
 package com.example.engine.preview
 
 import android.content.Context
+import androidx.core.content.edit
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -23,6 +24,6 @@ object PreviewCompositorSettings {
 
   fun setEnabled(context: Context, enabled: Boolean) {
     _enabled.value = enabled
-    context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit().putBoolean(KEY_ENABLED, enabled).apply()
+    context.getSharedPreferences(FILE, Context.MODE_PRIVATE).edit { putBoolean(KEY_ENABLED, enabled) }
   }
 }
