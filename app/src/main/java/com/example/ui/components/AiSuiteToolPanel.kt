@@ -3,7 +3,6 @@ package com.example.ui.components
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -21,7 +20,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.engine.ai.*
+import com.example.engine.ai.AiAutoCaptionEngine
+import com.example.engine.ai.CaptionLanguage
 import com.example.ui.EditorToolbarTab
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.*
@@ -32,7 +32,6 @@ data class AiFeatureItem(
   val title: String,
   val description: String,
   val icon: ImageVector,
-  val tag: String = "AI PRO"
 )
 
 @Composable
@@ -50,12 +49,10 @@ fun AiSuiteToolPanel(
   var selectedLanguage by remember { mutableStateOf(CaptionLanguage.URDU) }
 
   val aiFeatures = listOf(
-    AiFeatureItem("captions", "AI Auto Captions", "Firebase speech-to-text", Icons.Default.ClosedCaption),
-    AiFeatureItem("scene_cut", "AI Scene Cut", "Auto detect scene boundaries & split", Icons.Default.ContentCut),
-    AiFeatureItem("color", "AI Color Grade", "Intelligent white balance & skin tone", Icons.Default.Palette),
+    AiFeatureItem("captions", "Auto Captions", "Firebase speech-to-text", Icons.Default.ClosedCaption),
     AiFeatureItem("motion", "Motion Tracker", "Track objects & anchor text/stickers", Icons.Default.GpsFixed),
-    AiFeatureItem("matting", "AI Cutout / Matting", "Remove background without green screen", Icons.Default.AutoAwesome),
-    AiFeatureItem("tts", "Text to Speech", "Urdu/English voice synthesis", Icons.Default.RecordVoiceOver)
+    AiFeatureItem("matting", "Cutout / Matting", "On-device subject mask", Icons.Default.AutoAwesome),
+    AiFeatureItem("tts", "Text to Speech", "Device speech synthesis", Icons.Default.RecordVoiceOver)
   )
 
   Column(
@@ -65,7 +62,6 @@ fun AiSuiteToolPanel(
       .padding(16.dp),
     verticalArrangement = Arrangement.spacedBy(12.dp)
   ) {
-    // Header
     Row(
       modifier = Modifier.fillMaxWidth(),
       horizontalArrangement = Arrangement.SpaceBetween,
@@ -103,13 +99,12 @@ fun AiSuiteToolPanel(
         }
       }
     } else {
-      // Language Selector Bar for Auto Captions / Speech
       Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
       ) {
-        Text("AI Language Mode:", fontSize = 12.sp, color = TextSecondary, fontWeight = FontWeight.SemiBold)
+        Text("Caption language:", fontSize = 12.sp, color = TextSecondary, fontWeight = FontWeight.SemiBold)
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
           CaptionLanguage.values().take(3).forEach { lang ->
             FilterChip(
@@ -139,9 +134,9 @@ fun AiSuiteToolPanel(
               .fillMaxWidth()
               .clickable {
                 coroutineScope.launch {
-                  isProcessing = true
                   when (feature.id) {
                     "captions" -> {
+                      isProcessing = true
                       resultMessage = null
                       val timeline = viewModel.timelineEngine.timeline.value
                       val clips = AiAutoCaptionEngine.generateCaptions(context, timeline, selectedLanguage) { _, msg ->
@@ -155,26 +150,7 @@ fun AiSuiteToolPanel(
                         }
                         resultMessage = "Generated ${clips.size} captions from the Firebase speech engine."
                       }
-                    }
-                    "scene_cut" -> {
-                      val activeClip = viewModel.getSelectedVideoClip()
-                      if (activeClip != null) {
-                        val cuts = AiSceneDetector.detectSceneCuts(activeClip) { _, msg ->
-                          statusMessage = msg
-                        }
-                        cuts.forEach { _ ->
-                          viewModel.timelineEngine.splitAtPlayhead()
-                        }
-                      }
-                    }
-                    "color" -> {
-                      val activeClip = viewModel.getSelectedVideoClip()
-                      if (activeClip != null) {
-                        val adj = AiColorCorrectionEngine.autoColorCorrect(activeClip) { _, msg ->
-                          statusMessage = msg
-                        }
-                        viewModel.timelineEngine.updateAdjustments(adj)
-                      }
+                      isProcessing = false
                     }
                     "motion" -> {
                       viewModel.setActiveToolbarTab(EditorToolbarTab.MOTION_TRACKING)
@@ -183,11 +159,9 @@ fun AiSuiteToolPanel(
                       viewModel.setActiveToolbarTab(EditorToolbarTab.AI_MATTING)
                     }
                     "tts" -> {
-                      statusMessage = "Synthesizing Urdu/English speech clip..."
-                      kotlinx.coroutines.delay(1000)
+                      viewModel.setActiveToolbarTab(EditorToolbarTab.AUDIO)
                     }
                   }
-                  isProcessing = false
                 }
               }
           ) {
