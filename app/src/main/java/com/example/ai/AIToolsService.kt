@@ -1,7 +1,6 @@
 package com.example.ai
 
 import android.content.Context
-import android.graphics.Bitmap
 import com.ahstudio.captions.android.CaptionsGraph
 import com.ahstudio.captions.engine.AutoCaptionOptions
 import com.ahstudio.captions.recognition.CaptionLanguages
@@ -13,24 +12,14 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.UUID
 
-typealias VideoHighlightSegment = com.example.ai.providers.VideoHighlightSegment
-
 /**
- * High-level AI Tools Service coordinating all 6 AI provider interfaces:
- * - SpeechToText
- * - Translation
- * - BackgroundRemoval
- * - NoiseReduction
- * - TextToSpeech
- * - HighlightDetection
- *
- * Enforces real processing on actual media without generating fake/mock results.
+ * Coordinates the AI providers that actually process media:
+ * speech-to-text, translation, DSP noise reduction, and device TTS.
  */
 class AIToolsService(private val context: Context? = null) {
 
   val speechToText: SpeechToTextProvider = GeminiAIProvider(context)
   val translation: TranslationProvider = GeminiAIProvider(context)
-  val backgroundRemoval: BackgroundRemovalProvider = SystemBackgroundRemovalProvider()
   private val safeContext: Context?
     get() = context ?: runCatching { com.example.StudioApplication.instance }.getOrNull()
 
@@ -39,7 +28,8 @@ class AIToolsService(private val context: Context? = null) {
       ?: object : NoiseReductionProvider {
         override val providerName: String = "System Noise Reduction (Inactive)"
         override val isAvailable: Boolean = false
-        override suspend fun reduceNoise(audioFile: java.io.File): Result<java.io.File> = Result.success(audioFile)
+        override suspend fun reduceNoise(audioFile: java.io.File): Result<java.io.File> =
+          Result.failure(IllegalStateException("Noise reduction unavailable: Context not initialized"))
       }
   }
 
@@ -52,8 +42,6 @@ class AIToolsService(private val context: Context? = null) {
           Result.failure(IllegalStateException("Text to speech service unavailable: Context not initialized"))
       }
   }
-
-  val highlightDetection: HighlightDetectionProvider = GeminiAIProvider(context)
 
   val isAIConfigured: Boolean
     get() = AISecurityConfig.isConfigured(context)
@@ -152,21 +140,7 @@ class AIToolsService(private val context: Context? = null) {
   }
 
   /**
-   * AI Background Removal: Processes actual bitmap pixels and returns a transparent ARGB_8888 bitmap.
-   */
-  suspend fun removeBackground(inputBitmap: Bitmap): Result<Bitmap> = withContext(Dispatchers.Default) {
-    return@withContext backgroundRemoval.removeBackground(inputBitmap)
-  }
-
-  /**
-   * AI Alpha Mask: Generates a high-contrast alpha matte mask for visual keying.
-   */
-  suspend fun generateAlphaMask(inputBitmap: Bitmap): Result<Bitmap> = withContext(Dispatchers.Default) {
-    return@withContext backgroundRemoval.generateAlphaMask(inputBitmap)
-  }
-
-  /**
-   * AI Noise Reduction: Processes actual audio file with spectral noise gating and high-pass filtering.
+   * DSP noise reduction: spectral gating and high-pass filtering on a real audio file.
    */
   suspend fun reduceAudioNoise(audioFile: File): Result<File> = withContext(Dispatchers.IO) {
     return@withContext noiseReduction.reduceNoise(audioFile)
@@ -177,99 +151,6 @@ class AIToolsService(private val context: Context? = null) {
    */
   suspend fun synthesizeSpeech(text: String, pitch: Float = 1.0f, speed: Float = 1.0f): Result<File> = withContext(Dispatchers.IO) {
     return@withContext textToSpeech.synthesizeSpeech(text, pitch, speed)
-  }
-
-  /**
-   * AI Highlight Analyzer: Scans actual timeline clips and duration to detect viral hooks.
-   */
-  suspend fun analyzeHighlights(timeline: Timeline): Result<List<VideoHighlightSegment>> = withContext(Dispatchers.IO) {
-    if (timeline.videoClips.isEmpty()) {
-      return@withContext Result.failure(
-        IllegalStateException("No clips on timeline: Please import video clips to analyze highlights.")
-      )
-    }
-    if (!highlightDetection.isAvailable) {
-      return@withContext Result.failure(
-        IllegalStateException("AI Highlight Analyzer is not configured. Please set your credentials in AI Settings.")
-      )
-    }
-    return@withContext highlightDetection.analyzeTimelineHighlights(timeline)
-  }
-
-  /**
-   * AI Auto Edit: Analyzes actual clips, durations, and rhythm to generate a real, fully editable timeline.
-   */
-  fun autoEditMontage(clips: List<VideoClip>, targetDurationMs: Long = 15000L): Result<Timeline> {
-    if (clips.isEmpty()) {
-      return Result.failure(IllegalStateException("No video clips available. Please add at least one clip to auto-edit."))
-    }
-
-    // Dynamic pacing calculation based on actual clip durations
-    val totalSourceDuration = clips.sumOf { it.durationMs }
-    val sliceDuration = (targetDurationMs / clips.size).coerceIn(1800L, 4000L)
-
-    var currentStartMs = 0L
-    val editedClips = mutableListOf<VideoClip>()
-
-    clips.forEachIndexed { index, clip ->
-      val inPoint = if (clip.durationMs > sliceDuration + 500L) 300L else 0L
-      val clipDuration = minOf(sliceDuration, clip.durationMs - inPoint).coerceAtLeast(1000L)
-      val speedFactor = if (index % 3 == 1) 1.25f else 1.0f
-
-      editedClips.add(
-        clip.copy(
-          id = UUID.randomUUID().toString(),
-          sourceStartMs = inPoint,
-          timelineStartMs = currentStartMs,
-          durationMs = (clipDuration / speedFactor).toLong(),
-          speed = speedFactor
-        )
-      )
-      currentStartMs += (clipDuration / speedFactor).toLong()
-    }
-
-    // Transitions between clips
-    val transitionTypes = listOf(
-      TransitionType.ZOOM_IN,
-      TransitionType.FLASH,
-      TransitionType.DISSOLVE,
-      TransitionType.SLIDE_LEFT
-    )
-    val transitions = (0 until editedClips.size - 1).map { idx ->
-      Transition(
-        id = UUID.randomUUID().toString(),
-        clipIndexBefore = idx,
-        type = transitionTypes[idx % transitionTypes.size],
-        durationMs = 400L
-      )
-    }
-
-    // Intro Title overlay
-    val firstClipName = clips.firstOrNull()?.name ?: "REEL"
-    val cleanTitle = firstClipName.substringBeforeLast(".").uppercase().take(18)
-    val titleClip = TextClip(
-      id = UUID.randomUUID().toString(),
-      text = "$cleanTitle • AI EDIT",
-      timelineStartMs = 200L,
-      durationMs = minOf(2800L, currentStartMs),
-      fontSizeSp = 28f,
-      fontWeight = 900,
-      textColor = 0xFF00E5FF,
-      strokeWidth = 2.5f,
-      strokeColor = 0xFF000000,
-      hasBackground = true,
-      backgroundColor = 0x88000000,
-      posY = 0.35f,
-      animationType = "Pop"
-    )
-
-    val generatedTimeline = Timeline(
-      videoClips = editedClips,
-      transitions = transitions,
-      textClips = listOf(titleClip)
-    )
-
-    return Result.success(generatedTimeline)
   }
 
   /**

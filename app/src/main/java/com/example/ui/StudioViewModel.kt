@@ -9,7 +9,6 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.AIToolsService
-import com.example.ai.VideoHighlightSegment
 import com.example.data.local.AppDatabase
 import com.example.data.local.ExportedVideoEntity
 import com.example.data.local.ProjectEntity
@@ -282,9 +281,6 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   private val _aiStatusMessage = MutableStateFlow("")
   val aiStatusMessage: StateFlow<String> = _aiStatusMessage.asStateFlow()
-
-  private val _aiHighlights = MutableStateFlow<List<VideoHighlightSegment>>(emptyList())
-  val aiHighlights: StateFlow<List<VideoHighlightSegment>> = _aiHighlights.asStateFlow()
 
   // Playback & auto-save jobs
   private var autoSaveJob: Job? = null
@@ -3067,7 +3063,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
         val newAudioClip = AudioClip(
           id = UUID.randomUUID().toString(),
-          title = "AI Voice: ${text.take(20)}...",
+          title = "TTS: ${text.take(20)}...",
           uri = file.absolutePath,
           timelineStartMs = timelineEngine.currentPositionMs.value,
           durationMs = durationMs,
@@ -3077,44 +3073,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         )
         val currentAudio = timelineEngine.timeline.value.audioClips.toMutableList().apply { add(newAudioClip) }
         timelineEngine.replaceTimelineKeepingState(timelineEngine.timeline.value.copy(audioClips = currentAudio))
-        _aiStatusMessage.value = "AI Voice audio added to timeline audio track!"
+        _aiStatusMessage.value = "Speech audio added to the timeline."
       } catch (e: Exception) {
         _aiStatusMessage.value = e.message ?: "Voice synthesis failed."
-      } finally {
-        _isAIBusy.value = false
-      }
-    }
-  }
-
-  fun runAIHighlightAnalysis() {
-    viewModelScope.launch {
-      _isAIBusy.value = true
-      _aiStatusMessage.value = "Requesting highlight times from the project title and duration..."
-      try {
-        val result = aiTools.analyzeHighlights(timelineEngine.timeline.value)
-        val highlights = result.getOrThrow()
-        _aiHighlights.value = highlights
-        _aiStatusMessage.value = "The model suggested ${highlights.size} time ranges from the title and duration. It did not see the frames."
-      } catch (e: Exception) {
-        _aiStatusMessage.value = e.message ?: "Highlight analysis unavailable."
-      } finally {
-        _isAIBusy.value = false
-      }
-    }
-  }
-
-  fun runAIAutoEdit() {
-    viewModelScope.launch {
-      _isAIBusy.value = true
-      _aiStatusMessage.value = "Building a paced montage from clip durations..."
-      try {
-        val clips = timelineEngine.timeline.value.videoClips
-        val result = aiTools.autoEditMontage(clips)
-        val editedTimeline = result.getOrThrow()
-        timelineEngine.replaceTimelineKeepingState(editedTimeline)
-        _aiStatusMessage.value = "Montage built from fixed slice lengths and a rotating transition list."
-      } catch (e: Exception) {
-        _aiStatusMessage.value = e.message ?: "Auto-edit failed."
       } finally {
         _isAIBusy.value = false
       }
