@@ -8,10 +8,12 @@ import com.example.engine.history.TimelineActionType
 import com.example.engine.timeline.ClipTrimMath
 import com.example.engine.timeline.TransitionDurationLimits
 import com.example.engine.timeline.ClipView
+import com.example.engine.timeline.TimelineClipQueries
 import com.example.engine.timeline.TimelineFrameMath
 import com.example.engine.timeline.TimelineSelection
 import com.example.engine.timeline.TimelineSourceEdits
 import com.example.engine.timeline.TimelineSplitEngine
+import com.example.engine.timeline.TimelineTrackCommands
 import com.example.engine.timeline.TimelineTrackRules
 import com.example.engine.timeline.TimelineOverlapQueries
 import com.example.engine.timeline.trackElementFor
@@ -1294,17 +1296,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   fun slipClip(clipId: String, deltaMs: Long): Boolean = withStateLock {
     val next = TimelineClipEdits.slipClip(_timeline.value, clipId, deltaMs) ?: return false
     recordHistory(TimelineActionType.GENERIC_EDIT, "Slip Clip", setOf(clipId))
-    val current = _timeline.value
-    val updated = when (element) {
-      is SelectedTrackElement.Video -> if (isTrackLocked(TrackType.MAIN_VIDEO)) null
-        else TimelineSourceEdits.slipVideo(current.videoClips, clipId, deltaMs)?.let { current.copy(videoClips = it) }
-      is SelectedTrackElement.Overlay -> if (isTrackLocked(TrackType.OVERLAY)) null
-        else TimelineSourceEdits.slipVideo(current.overlayClips, clipId, deltaMs)?.let { current.copy(overlayClips = it) }
-      is SelectedTrackElement.Audio -> if (isTrackLocked(TrackType.AUDIO)) null
-        else TimelineSourceEdits.slipAudio(current.audioClips, clipId, deltaMs)?.let { current.copy(audioClips = it) }
-      else -> null
-    } ?: return false
-    _timeline.value = updated
+    _timeline.value = next
     true
   }
 
