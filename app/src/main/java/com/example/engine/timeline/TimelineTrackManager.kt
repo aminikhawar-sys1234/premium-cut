@@ -381,7 +381,7 @@ object TimelineTrackManager {
         val ids = laneClipIds(timeline, trackType, lane)
         val remainingTracks = timeline.tracks.filterNot { it.trackType == trackType && (lane < 0 || it.zOrder == lane) }
         if (ids.isEmpty() && remainingTracks.size == timeline.tracks.size) return null
-        return timeline.copy(
+        val removed = timeline.copy(
             overlayClips = timeline.overlayClips.filterNot { it.id in ids },
             audioClips = timeline.audioClips.filterNot { it.id in ids },
             textClips = timeline.textClips.filterNot { it.id in ids },
@@ -390,6 +390,7 @@ object TimelineTrackManager {
             shapeClips = timeline.shapeClips.filterNot { it.id in ids },
             tracks = remainingTracks
         )
+        return if (trackType.isAudioTrack) com.example.engine.audio.AutoDucking.withoutLane(removed, lane) else removed
     }
 
     /** All lanes of a type that currently exist (have clips or an explicit track), ascending. */
@@ -421,8 +422,11 @@ object TimelineTrackManager {
         return when (trackType) {
             TrackType.OVERLAY, TrackType.ELEMENT, TrackType.ADJUSTMENT ->
                 timeline.copy(overlayClips = timeline.overlayClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
-            TrackType.AUDIO, TrackType.MUSIC, TrackType.SFX ->
-                timeline.copy(audioClips = timeline.audioClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
+            TrackType.AUDIO, TrackType.MUSIC, TrackType.SFX -> com.example.engine.audio.AutoDucking.withLanesSwapped(
+                timeline.copy(audioClips = timeline.audioClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks),
+                laneA,
+                laneB
+            )
             TrackType.TEXT, TrackType.CAPTION ->
                 timeline.copy(textClips = timeline.textClips.map { it.copy(trackIndex = swap(it.trackIndex)) }, tracks = tracks)
             TrackType.STICKER ->

@@ -38,6 +38,7 @@ enum class TimelineActionType(val displayName: String) {
   AR_OVERLAY_EDIT("AR Filter"),
   AUDIO_EFFECTS_EDIT("Audio Effects & EQ"),
   TRACK_SETTINGS_EDIT("Track Settings"),
+  AUTO_DUCKING_EDIT("Auto-Ducking"),
   GENERIC_EDIT("Timeline Edit")
 }
 

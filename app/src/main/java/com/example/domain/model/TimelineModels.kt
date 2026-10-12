@@ -1348,7 +1348,11 @@ data class Timeline(
   val markers: List<TimelineMarker> = emptyList(),
   val version: Int = 1,
   /** Speakers found by caption diarization (label + colour). Persisted so speaker cards survive save / reload. */
-  val captionSpeakers: List<TimelineSpeaker> = emptyList()
+  val captionSpeakers: List<TimelineSpeaker> = emptyList(),
+  /** Explicit voice / music roles of audio lanes. Lanes without an entry are [AudioTrackRole.UNSPECIFIED]. */
+  val audioLaneRoles: List<AudioLaneRole> = emptyList(),
+  /** Auto-ducking per background audio lane; at most one entry per [AudioDuckingSettings.targetTrackIndex]. */
+  val audioDucking: List<AudioDuckingSettings> = emptyList()
 ) {
   val totalDurationMs: Long
     get() {
