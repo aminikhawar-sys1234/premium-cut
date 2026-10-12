@@ -136,17 +136,26 @@ class VideoCompositionEngine(private val context: Context) {
     filter: FilterSettings = FilterSettings(),
     chromaKey: ChromaKeySettings = ChromaKeySettings()
   ) {
-    gpuRenderer.render(
-      frame = frame,
-      mainTextureId = mainTextureId,
-      isMainOes = isMainOes,
-      mainTexMatrix = mainTexMatrix,
-      overlayTextures = overlayTextures,
+    val decoded = HashMap<String, CompositionRenderGraph.ResolvedLayer>()
+    frame.activeClip?.let { clip ->
+      if (mainTextureId > 0) {
+        decoded[clip.id] = CompositionRenderGraph.ResolvedLayer(mainTextureId, isMainOes, mainTexMatrix, 0, 0)
+      }
+    }
+    for (overlay in frame.activeOverlays) {
+      val tex = overlayTextures[overlay.clip.id] ?: continue
+      if (tex > 0) decoded[overlay.clip.id] = CompositionRenderGraph.ResolvedLayer(tex, overlay.clip.isVideo, null, 0, 0)
+    }
+    val assembled = CompositionRenderGraph.assemble(frame, decoded, imageTextureId = { 0 }, drawTextAndStickers = true)
+    CompositionRenderGraph.present(
+      renderer = gpuRenderer,
+      assembled = assembled,
       viewportWidth = viewportWidth,
       viewportHeight = viewportHeight,
-      timelineAdjustments = adjustments,
-      timelineFilter = filter,
-      chromaKey = chromaKey
+      adjustments = adjustments,
+      filter = filter,
+      chromaKey = chromaKey,
+      presentation = CompositionRenderGraph.FramePresentation.PREVIEW
     )
   }
 

@@ -1,9 +1,9 @@
 package com.example.engine.preview
 
 import com.example.domain.model.Timeline
-import com.example.domain.model.TransitionType
 import com.example.domain.model.VideoClip
 import com.example.engine.composition.ComposedFrame
+import com.example.engine.composition.CompositionRenderGraph
 
 /**
  * What the preview compositor has to fetch to draw one [ComposedFrame]: one decode per video
@@ -29,37 +29,28 @@ data class PreviewFramePlan(
 
     private fun needsDecoder(clip: VideoClip) = clip.isVideo && !isSynthetic(clip.uri)
 
+    private fun CompositionRenderGraph.LayerRole.toPreview(): Role = when (this) {
+      CompositionRenderGraph.LayerRole.MAIN -> Role.MAIN
+      CompositionRenderGraph.LayerRole.TRANSITION_BEFORE -> Role.TRANSITION_BEFORE
+      CompositionRenderGraph.LayerRole.TRANSITION_AFTER -> Role.TRANSITION_AFTER
+      CompositionRenderGraph.LayerRole.OVERLAY -> Role.OVERLAY
+    }
+
     /**
-     * Text and stickers are left out: the Compose overlay still draws (and edits) them on top of
-     * the compositor surface, so drawing them here too would double them.
+     * Decode and image requests for [frame]. Source times come from [CompositionRenderGraph.layersOf],
+     * the same list export samples. The side of a transition that is the main clip is not requested
+     * again. Text and stickers are left out of [PreviewFramePlan.frame]: Compose still draws them.
      */
     fun of(frame: ComposedFrame): PreviewFramePlan {
       val previewFrame = frame.copy(activeTexts = emptyList(), activeStickers = emptyList())
       val decodes = mutableListOf<DecodeRequest>()
       val images = LinkedHashSet<String>()
-
-      fun addImage(clip: VideoClip) {
-        if (!clip.isVideo && !isSynthetic(clip.uri)) images.add(clip.uri)
-      }
-
-      frame.activeClip?.let { main ->
-        if (needsDecoder(main)) decodes.add(DecodeRequest(main, frame.clipSourcePosMs * 1000L, Role.MAIN)) else addImage(main)
-      }
-      frame.activeTransition?.takeIf { it.type != TransitionType.NONE }?.let { tr ->
-        for ((clip, role) in listOf(tr.clipBefore to Role.TRANSITION_BEFORE, tr.clipAfter to Role.TRANSITION_AFTER)) {
-          if (clip.id == frame.activeClip?.id) continue
-          if (needsDecoder(clip)) {
-            decodes.add(DecodeRequest(clip, clip.timelineToSourceMs(frame.timelinePosMs) * 1000L, role))
-          } else {
-            addImage(clip)
-          }
-        }
-      }
-      for (overlay in frame.activeOverlays) {
-        if (needsDecoder(overlay.clip)) {
-          decodes.add(DecodeRequest(overlay.clip, overlay.sourcePosMs * 1000L, Role.OVERLAY))
-        } else {
-          addImage(overlay.clip)
+      for (layer in CompositionRenderGraph.layersOf(frame)) {
+        if (layer.role != CompositionRenderGraph.LayerRole.MAIN && layer.clip.id == frame.activeClip?.id) continue
+        if (needsDecoder(layer.clip)) {
+          decodes.add(DecodeRequest(layer.clip, layer.sourceUs, layer.role.toPreview()))
+        } else if (!layer.clip.isVideo && !isSynthetic(layer.clip.uri)) {
+          images.add(layer.clip.uri)
         }
       }
       return PreviewFramePlan(previewFrame, decodes, images.toList())

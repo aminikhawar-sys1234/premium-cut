@@ -280,6 +280,8 @@ class GpuCompositionRenderer(private val context: Context) {
     mainTexMatrix: FloatArray? = null,
     overlayTextures: Map<String, Int> = emptyMap(),
     overlayTexMatrices: Map<String, FloatArray> = emptyMap(),
+    /** Actual texture type per overlay. Absent entries keep the old guess (a video clip is OES). */
+    overlayIsOes: Map<String, Boolean> = emptyMap(),
     viewportWidth: Int,
     viewportHeight: Int,
     timelineAdjustments: VideoAdjustments = VideoAdjustments(),
@@ -472,7 +474,7 @@ class GpuCompositionRenderer(private val context: Context) {
       val overlay = frame.activeOverlays[i]
       val overlayTexId = overlayTextures[overlay.clip.id]
       if (overlayTexId != null && overlayTexId > 0) {
-        val isOvOes = overlay.clip.isVideo
+        val isOvOes = overlayIsOes[overlay.clip.id] ?: overlay.clip.isVideo
         val ovRawTexId = processOverlayVideoTo2D(
           overlay = overlay,
           textureId = overlayTexId,
