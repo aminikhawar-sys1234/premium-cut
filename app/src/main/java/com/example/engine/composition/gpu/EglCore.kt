@@ -157,9 +157,8 @@ class EglCore(
     return EGL14.eglSwapBuffers(eglDisplay, eglSurface)
   }
 
-  fun setPresentationTime(eglSurface: EGLSurface, nsecs: Long) {
+  fun setPresentationTime(eglSurface: EGLSurface, nsecs: Long): Boolean =
     EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, nsecs)
-  }
 
   fun releaseSurface(eglSurface: EGLSurface) {
     EGL14.eglDestroySurface(eglDisplay, eglSurface)

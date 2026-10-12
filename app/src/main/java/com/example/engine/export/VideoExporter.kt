@@ -66,20 +66,38 @@ sealed class ExportState {
  * 1. Tracks are registered before MediaMuxer is started; the muxer only starts once EVERY expected
  *    track (video, and audio when [hasAudio]) has its real encoder output format.
  * 2. Exact track indices returned by MediaMuxer are stored and used.
- * 3. CODEC_CONFIG packets are filtered out (CSD is supplied via MediaFormat) and the codec EOS flag
- *    is stripped from samples (it is a codec-queue signal, not a container flag).
- * 4. Per-track strictly monotonic timestamps; any correction is counted so callers can detect it.
- * 5. Any muxer failure (add track, start, write) is thrown, never swallowed: a file that silently lost
+ * 3. CODEC_CONFIG packets are never written as samples (CSD is supplied via MediaFormat) and the codec EOS
+ *    flag is stripped from samples (it is a codec-queue signal, not a container flag). A buffer flagged
+ *    CODEC_CONFIG that also carries the first IDR picture is split: the parameter sets become CSD, the
+ *    picture is written as the first key frame. A video track is only registered once its format has
+ *    valid csd-0 (+ csd-1 for AVC); missing CSD is rebuilt from the encoder's parameter sets.
+ * 4. The first video sample in the file is always a sync (key) frame; leading non-key frames are dropped
+ *    and reported so the caller can request a sync frame.
+ * 5. Per-track strictly monotonic timestamps; any correction is counted so callers can detect it.
+ * 6. Any muxer failure (add track, start, write) is thrown, never swallowed: a file that silently lost
  *    its video samples (audio-only / empty-video MP4) is worse than a clear export error.
- * 6. Safe finalization of the MP4 container (moov atom) before file inspection.
+ * 7. Safe finalization of the MP4 container (moov atom) before file inspection.
  */
 class MuxerCoordinator(
   private val mediaMuxer: MediaMuxer,
   private val hasAudio: Boolean,
   /** Upper bound for samples buffered while waiting for the remaining track format(s). */
-  private val maxPendingBytes: Long = 96L * 1024 * 1024
+  private val maxPendingBytes: Long = 96L * 1024 * 1024,
+  private var videoMime: String? = null
 ) {
   private val tag = "MuxerCoordinator"
+
+  enum class VideoSampleResult { WRITTEN, CODEC_CONFIG, DROPPED_BEFORE_KEYFRAME, IGNORED }
+
+  /** Encoder output format still waiting for its CSD (parameter sets) before it can be registered. */
+  private var pendingVideoFormat: MediaFormat? = null
+  private var capturedParameterSets: ByteArray? = null
+  private var sawVideoKeyFrame = false
+
+  /** Non-key frames the encoder emitted before its first key frame (never written to the file). */
+  var droppedLeadingVideoSamples: Long = 0L
+    private set
+  val hasWrittenKeyFrame: Boolean @Synchronized get() = sawVideoKeyFrame
 
   var videoTrackIndex: Int = -1
     private set
@@ -142,6 +160,21 @@ class MuxerCoordinator(
       Log.w(tag, "Ignoring repeated video output format after track registration: $format")
       return
     }
+    format.getString(MediaFormat.KEY_MIME)?.let { videoMime = it }
+    if (!hasValidCsd(format)) {
+      val captured = capturedParameterSets
+      if (captured == null || !injectCsd(format, captured)) {
+        Log.w(tag, "Video output format has no csd-0/csd-1 yet; waiting for the encoder's parameter sets: $format")
+        pendingVideoFormat = format
+        return
+      }
+      Log.i(tag, "Rebuilt missing video CSD from the encoder's codec-config buffer")
+    }
+    registerVideoTrack(format)
+  }
+
+  private fun registerVideoTrack(format: MediaFormat) {
+    pendingVideoFormat = null
     try {
       videoTrackIndex = mediaMuxer.addTrack(format)
     } catch (e: Exception) {
@@ -228,33 +261,105 @@ class MuxerCoordinator(
     pendingBytes = 0L
   }
 
-  private fun enqueue(isAudio: Boolean, buffer: ByteBuffer, info: MediaCodec.BufferInfo) {
-    pendingBytes += info.size
+  private fun enqueue(isAudio: Boolean, buffer: ByteBuffer, offset: Int, size: Int, presentationTimeUs: Long, flags: Int) {
+    pendingBytes += size
     if (pendingBytes > maxPendingBytes) {
-      val missing = if (videoTrackIndex < 0) "video" else "audio"
-      throw IllegalStateException("The $missing encoder never produced an output format; export aborted instead of buffering without bound.")
+      val missing = when {
+        videoTrackIndex < 0 && pendingVideoFormat != null -> "video encoder never produced its codec config (SPS/PPS)"
+        videoTrackIndex < 0 -> "video encoder never produced an output format"
+        else -> "audio encoder never produced an output format"
+      }
+      throw IllegalStateException("The $missing; export aborted instead of buffering without bound.")
     }
-    val bytes = ByteArray(info.size)
-    val currentPos = buffer.position()
-    val currentLim = buffer.limit()
-    buffer.position(info.offset)
-    buffer.limit(info.offset + info.size)
-    buffer.get(bytes)
-    buffer.position(currentPos)
-    buffer.limit(currentLim)
-    pendingQueue.add(QueuedPacket(isAudio, bytes, info.presentationTimeUs, info.flags))
+    pendingQueue.add(QueuedPacket(isAudio, copyBytes(buffer, offset, size), presentationTimeUs, flags))
   }
 
+  /**
+   * Accepts EVERY non-empty video encoder output buffer, including CODEC_CONFIG ones (see class doc).
+   * [DROPPED_BEFORE_KEYFRAME] means the caller should request a sync frame from the encoder.
+   */
   @Synchronized
-  fun writeVideoSample(buffer: ByteBuffer, info: MediaCodec.BufferInfo) {
-    if (isStopped) return
-    // Ignore codec config buffers (CSD) and empty buffers
-    if ((info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0 || info.size <= 0) return
-    if (isStarted && videoTrackIndex >= 0) {
-      writeNow(false, buffer, info.offset, info.size, info.presentationTimeUs, info.flags)
-    } else {
-      enqueue(false, buffer, info)
+  fun writeVideoSample(buffer: ByteBuffer, info: MediaCodec.BufferInfo): VideoSampleResult {
+    if (isStopped || info.size <= 0) return VideoSampleResult.IGNORED
+    val hevc = ExportVideoBitstream.isHevc(videoMime)
+    val isConfig = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+    var isKey = (info.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME) != 0
+    var sampleBuffer = buffer
+    var offset = info.offset
+    var size = info.size
+
+    // Only buffers that may carry parameter sets are parsed: config buffers and everything up to the
+    // first key frame. Steady-state frames go straight to the muxer.
+    if (isConfig || !sawVideoKeyFrame || videoTrackIndex < 0) {
+      val bytes = copyBytes(buffer, info.offset, info.size)
+      val split = ExportVideoBitstream.splitParameterSets(bytes, hevc)
+      if (split.parameterSets.isNotEmpty()) captureParameterSets(split.parameterSets)
+      if (isConfig) {
+        if (split.picture.isEmpty()) return VideoSampleResult.CODEC_CONFIG
+        if (!isKey && !ExportVideoBitstream.containsRandomAccess(split.picture, hevc)) {
+          Log.w(tag, "Discarding CODEC_CONFIG buffer with trailing non-IDR data (${split.picture.size} bytes)")
+          return VideoSampleResult.CODEC_CONFIG
+        }
+        Log.i(tag, "Encoder delivered the IDR picture inside a CODEC_CONFIG buffer; writing it as the key frame")
+        isKey = true
+        sampleBuffer = ByteBuffer.wrap(split.picture); offset = 0; size = split.picture.size
+      } else if (!isKey && !sawVideoKeyFrame && ExportVideoBitstream.containsRandomAccess(bytes, hevc)) {
+        Log.w(tag, "Encoder sample at pts=${info.presentationTimeUs}us contains an IDR but no KEY_FRAME flag; marking it as key frame")
+        isKey = true
+      }
     }
+
+    if (!sawVideoKeyFrame) {
+      if (!isKey) {
+        droppedLeadingVideoSamples++
+        Log.w(tag, "Dropping non-key video sample at pts=${info.presentationTimeUs}us before the first key frame")
+        return VideoSampleResult.DROPPED_BEFORE_KEYFRAME
+      }
+      sawVideoKeyFrame = true
+    }
+
+    val flags = (if (isKey) MediaCodec.BUFFER_FLAG_KEY_FRAME else 0) or
+      (info.flags and (MediaCodec.BUFFER_FLAG_KEY_FRAME or MediaCodec.BUFFER_FLAG_CODEC_CONFIG or MediaCodec.BUFFER_FLAG_END_OF_STREAM).inv())
+    if (isStarted && videoTrackIndex >= 0) {
+      writeNow(false, sampleBuffer, offset, size, info.presentationTimeUs, flags)
+    } else {
+      enqueue(false, sampleBuffer, offset, size, info.presentationTimeUs, flags)
+    }
+    return VideoSampleResult.WRITTEN
+  }
+
+  private fun captureParameterSets(params: ByteArray) {
+    if (capturedParameterSets == null) capturedParameterSets = params
+    val pending = pendingVideoFormat ?: return
+    if (injectCsd(pending, params)) {
+      Log.i(tag, "Registering video track with CSD rebuilt from the encoder's parameter sets")
+      registerVideoTrack(pending)
+    }
+  }
+
+  /** MediaMuxer accepts AVC SPS+PPS either split over csd-0/csd-1 or concatenated in csd-0. */
+  private fun hasValidCsd(format: MediaFormat): Boolean =
+    format.containsKey("csd-0") &&
+      (runCatching { format.getByteBuffer("csd-0") }.getOrNull()?.remaining() ?: 0) > 0
+
+  private fun injectCsd(format: MediaFormat, params: ByteArray): Boolean {
+    return if (ExportVideoBitstream.isHevc(format.getString(MediaFormat.KEY_MIME))) {
+      val csd = ExportVideoBitstream.hevcCsd(params) ?: return false
+      format.setByteBuffer("csd-0", ByteBuffer.wrap(csd))
+      true
+    } else {
+      val csd = ExportVideoBitstream.avcCsd(params) ?: return false
+      format.setByteBuffer("csd-0", ByteBuffer.wrap(csd.sps))
+      format.setByteBuffer("csd-1", ByteBuffer.wrap(csd.pps))
+      true
+    }
+  }
+
+  private fun copyBytes(buffer: ByteBuffer, offset: Int, size: Int): ByteArray {
+    val dup = buffer.duplicate()
+    dup.limit(offset + size)
+    dup.position(offset)
+    return ByteArray(size).also { dup.get(it) }
   }
 
   @Synchronized
@@ -264,7 +369,7 @@ class MuxerCoordinator(
     if (isStarted && audioTrackIndex >= 0) {
       writeNow(true, buffer, info.offset, info.size, info.presentationTimeUs, info.flags)
     } else {
-      enqueue(true, buffer, info)
+      enqueue(true, buffer, info.offset, info.size, info.presentationTimeUs, info.flags)
     }
   }
 
