@@ -15,6 +15,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import com.example.engine.media.MediaPlayableUri
 
 /**
  * Owns the single Media3/ExoPlayer hardware playback pipeline.
@@ -283,18 +284,5 @@ class PlaybackManager(
     currentLoadedUri = null
   }
 
-  private fun normalizeUri(uri: Uri): Uri = when {
-    uri.scheme == "asset" -> {
-      var path = uri.path ?: ""
-      if (path.startsWith("/")) path = path.substring(1)
-      if (path.isEmpty()) path = uri.authority ?: ""
-      Uri.parse("asset:///$path")
-    }
-    uri.scheme == null || uri.scheme == "file" -> {
-      val path = uri.path ?: uri.toString()
-      val file = java.io.File(path)
-      if (file.exists()) Uri.fromFile(file) else uri
-    }
-    else -> uri
-  }
+  private fun normalizeUri(uri: Uri): Uri = MediaPlayableUri.toExoPlayerUri(uri.toString())
 }

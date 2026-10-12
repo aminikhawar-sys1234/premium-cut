@@ -33,8 +33,14 @@ object MediaRelinkManager {
       return isAssetAccessible(context, uriString)
     }
 
+    val playable = MediaPlayableUri.resolvePlayableString(context, uriString)
+    val local = MediaPlayableUri.resolveLocalFile(playable)
+    if (local != null) {
+      return local.exists() && local.length() > 0L
+    }
+
     return try {
-      val parsedUri = Uri.parse(uriString)
+      val parsedUri = Uri.parse(playable)
       when (parsedUri.scheme) {
         "content" -> {
           // Check if ContentResolver can open or query the content URI
@@ -51,11 +57,11 @@ object MediaRelinkManager {
           File(path).exists()
         }
         null -> {
-          File(uriString).exists()
+          File(playable).exists()
         }
         else -> {
           // For http / https or unknown schemes, check basic structure
-          uriString.isNotBlank()
+          playable.isNotBlank()
         }
       }
     } catch (e: Exception) {
@@ -78,10 +84,24 @@ object MediaRelinkManager {
       return false
     }
 
+    // Prefer a rewritten local file (absolute path or file://) so a reopened project
+    // whose JSON still has a scheme-less path is treated as playable.
+    val local = MediaPlayableUri.resolveLocalFile(uriString)
+    if (local != null) {
+      return local.exists() && local.canRead() && local.length() > 0L
+    }
+    val resolved = MediaPlayableUri.resolvePlayableString(context, uriString)
+    if (resolved != uriString) {
+      val resolvedLocal = MediaPlayableUri.resolveLocalFile(resolved)
+      if (resolvedLocal != null) {
+        return resolvedLocal.exists() && resolvedLocal.canRead() && resolvedLocal.length() > 0L
+      }
+    }
+
     return try {
-      val parsedUri = Uri.parse(uriString)
+      val parsedUri = Uri.parse(resolved)
       when (parsedUri.scheme) {
-        "asset" -> isAssetAccessible(context, uriString)
+        "asset" -> isAssetAccessible(context, resolved)
         "content" -> {
           context.contentResolver.openFileDescriptor(parsedUri, "r")?.use { true } ?: false
         }
@@ -99,9 +119,9 @@ object MediaRelinkManager {
             file.exists() && file.canRead() && file.length() > 0L
           }
         }
-        "http", "https" -> true
+        "http", "https", "android.resource" -> true
         null -> {
-          val file = File(uriString)
+          val file = File(resolved)
           file.exists() && file.canRead() && file.length() > 0L
         }
         else -> false
