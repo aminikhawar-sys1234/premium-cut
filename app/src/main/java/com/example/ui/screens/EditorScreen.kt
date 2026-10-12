@@ -2261,6 +2261,7 @@ fun VideoPreviewSurface(
           getOverlayPlayer = onGetOverlayPlayer,
           overlayPlayerIds = overlayPlayerIds,
           renderOverlayMedia = compositorEngine == null,
+          onBindOverlaySurface = onBindOverlaySurface,
           timeline = timeline,
           liveLook = liveLook,
           modifier = Modifier.fillMaxSize()

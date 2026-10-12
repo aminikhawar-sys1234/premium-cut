@@ -220,6 +220,8 @@ fun InteractiveTransformOverlay(
   overlayPlayerIds: Set<String> = emptySet(),
   /** False when the GPU compositor already draws the overlay pixels: only the edit frame is shown. */
   renderOverlayMedia: Boolean = true,
+  /** Clock-driven overlay decoder surface (no per-clip ExoPlayer). */
+  onBindOverlaySurface: ((String, android.view.TextureView) -> Unit)? = null,
   timeline: Timeline = Timeline(),
   liveLook: LivePreviewLook? = null,
   modifier: Modifier = Modifier
@@ -382,7 +384,26 @@ fun InteractiveTransformOverlay(
         val bindCompositorSurface = onBindOverlaySurface != null && isRealVideoOverlay && overlay.id in overlayPlayerIds
 
         if (!renderOverlayMedia) {
-          // Composited underneath; nothing to draw inside the frame.
+          // GPU compositor already drew this overlay; only the edit frame remains.
+        } else if (bindCompositorSurface) {
+          AndroidView(
+            factory = { ctx ->
+              android.view.TextureView(ctx).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                onBindOverlaySurface?.invoke(overlay.id, this)
+                PreviewDisplayFilter.apply(this, overlayDisplayMatrix)
+              }
+            },
+            update = { tv ->
+              onBindOverlaySurface?.invoke(overlay.id, tv)
+              PreviewDisplayFilter.apply(tv, overlayDisplayMatrix)
+            },
+            onReset = { /* Keep texture view intact */ },
+            modifier = Modifier.fillMaxSize()
+          )
         } else if (isRealVideoOverlay && overlayPlayer != null) {
           AndroidView(
             factory = { ctx ->

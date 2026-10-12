@@ -35,9 +35,11 @@ import com.example.engine.effects.media3.PreviewLookPolicy
 import com.example.engine.media.MediaPlayableUri
 import com.example.engine.media.MediaRelinkManager
 import com.example.engine.preview.PreviewCompositor
+import com.example.engine.preview.PreviewCompositorPolicy
 import com.example.engine.preview.PreviewCompositorSettings
 import com.example.engine.preview.PreviewFramePlan
 import com.example.engine.preview.PreviewLayerPlanner
+import com.example.engine.preview.SingleClockPreviewCompositor
 import com.example.ui.components.player.PreviewVideoSurfaceRegistry
 import androidx.media3.common.Effect
 import kotlinx.coroutines.CoroutineScope
@@ -664,7 +666,7 @@ class VideoPlaybackEngine(
   }
 
   /**
-   * Releases overlay players, the main ExoPlayer / MediaCodec / VideoFrameProcessor chain,
+   * Releases overlay players, both preview compositors, the main ExoPlayer / MediaCodec chain,
    * and re-binds the remembered TextureView to the new instance.
    */
   fun resetPlaybackSession() {
@@ -672,22 +674,7 @@ class VideoPlaybackEngine(
     spatialLookJob = null
     try { pause() } catch (_: Throwable) {}
     teardownCompositor()
-    overlayPlayers.values.forEach { p ->
-      PreviewVideoSurfaceRegistry.forget(p)
-      try { p.stop(); p.clearVideoSurface(); p.release() } catch (_: Exception) {}
-    }
-    overlayPlayers.clear()
-    overlayLoadedUris.clear()
-    boundOverlayGrading.clear()
-    lastOverlayGraphSignatures.clear()
-    lastOverlayFilterSignatures.clear()
-  }
-
-  fun resetPlaybackSession() {
-    spatialLookJob?.cancel()
-    spatialLookJob = null
-    try { pause() } catch (_: Throwable) {}
-    releaseOverlayExoPlayers()
+    releaseOverlayPlayers()
     previewCompositor.release()
     audioTrackPlayers.values.forEach { p ->
       try { p.stop(); p.release() } catch (_: Exception) {}
@@ -872,6 +859,15 @@ class VideoPlaybackEngine(
     if (isTrimPreviewMode) return
     if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return
     try {
+      // Default path: one clock, no overlay ExoPlayer. The GPU compositor (beta) is the exception
+      // and keeps audio-only players for audible overlays.
+      if (!_compositorActive.value && !PreviewCompositorPolicy.shouldAllocateOverlayExoPlayer()) {
+        releaseOverlayPlayers()
+        val fps = currentTimeline.videoClips.firstOrNull()?.frameRate?.toInt()?.takeIf { it > 0 } ?: 30
+        previewCompositor.sync(currentTimeline, posMs, fps)
+        _overlayPlayerIds.value = previewCompositor.overlaySurfaceIds.value
+        return
+      }
       // Players exist only around the playhead. In compositor mode they only carry the overlay's
       // audio (the picture is decoded by the compositor), so silent overlays get none.
       val compositing = _compositorActive.value
@@ -1230,6 +1226,7 @@ class VideoPlaybackEngine(
     scope.cancel()
     teardownCompositor()
     compositorSurfaces.clear()
+    previewCompositor.release()
     overlayPlayers.values.forEach { try { it.stop(); it.release() } catch (_: Exception) {} }
     overlayPlayers.clear()
     overlayLoadedUris.clear()
