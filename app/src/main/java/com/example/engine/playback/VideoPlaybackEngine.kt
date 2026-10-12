@@ -32,6 +32,8 @@ import com.example.engine.effects.media3.PreviewFilterEffects
 import com.example.engine.effects.media3.PreviewLookPolicy
 import com.example.engine.media.MediaPlayableUri
 import com.example.engine.media.MediaRelinkManager
+import com.example.engine.preview.PreviewCompositorPolicy
+import com.example.engine.preview.SingleClockPreviewCompositor
 import com.example.ui.components.player.PreviewVideoSurfaceRegistry
 import androidx.media3.common.Effect
 import kotlinx.coroutines.CoroutineScope
@@ -139,6 +141,7 @@ class VideoPlaybackEngine(
   val isScrubbing: Boolean get() = isScrubbingMode
   val isTrimPreview: Boolean get() = isTrimPreviewMode
 
+  val previewCompositor = SingleClockPreviewCompositor(context)
   private val overlayPlayers = ConcurrentHashMap<String, ExoPlayer>()
   private val overlayLoadedUris = ConcurrentHashMap<String, String>()
   private val audioTrackPlayers = ConcurrentHashMap<String, ExoPlayer>()
@@ -520,16 +523,25 @@ class VideoPlaybackEngine(
    * Releases overlay players, the main ExoPlayer / MediaCodec / VideoFrameProcessor chain,
    * and re-binds the remembered TextureView to the new instance.
    */
-  fun resetPlaybackSession() {
-    spatialLookJob?.cancel()
-    spatialLookJob = null
-    try { pause() } catch (_: Throwable) {}
+  private fun releaseOverlayExoPlayers() {
+    if (overlayPlayers.isEmpty()) return
     overlayPlayers.values.forEach { p ->
       PreviewVideoSurfaceRegistry.forget(p)
       try { p.stop(); p.clearVideoSurface(); p.release() } catch (_: Exception) {}
     }
     overlayPlayers.clear()
     overlayLoadedUris.clear()
+    boundOverlayGrading.clear()
+    lastOverlayGraphSignatures.clear()
+    lastOverlayFilterSignatures.clear()
+  }
+
+  fun resetPlaybackSession() {
+    spatialLookJob?.cancel()
+    spatialLookJob = null
+    try { pause() } catch (_: Throwable) {}
+    releaseOverlayExoPlayers()
+    previewCompositor.release()
     audioTrackPlayers.values.forEach { p ->
       try { p.stop(); p.release() } catch (_: Exception) {}
     }
@@ -597,6 +609,7 @@ class VideoPlaybackEngine(
   }
 
   private fun applyOverlayLooks(force: Boolean = false) {
+    if (!PreviewCompositorPolicy.shouldAllocateOverlayExoPlayer()) return
     val activeIds = currentTimeline.overlayClips.map { it.id }.toSet()
     lastOverlayFilterSignatures.keys.toList().filter { it !in activeIds }.forEach { lastOverlayFilterSignatures.remove(it) }
     lastOverlayGraphSignatures.keys.toList().filter { it !in activeIds }.forEach { lastOverlayGraphSignatures.remove(it) }
@@ -655,7 +668,14 @@ class VideoPlaybackEngine(
     }
   }
 
-  fun getOverlayPlayer(clipId: String): ExoPlayer? = try { overlayPlayers[clipId] } catch (_: Exception) { null }
+  fun getOverlayPlayer(clipId: String): ExoPlayer? {
+    if (!PreviewCompositorPolicy.shouldAllocateOverlayExoPlayer()) return null
+    return try { overlayPlayers[clipId] } catch (_: Exception) { null }
+  }
+
+  fun bindOverlaySurface(clipId: String, view: android.view.TextureView) {
+    previewCompositor.bindOverlaySurface(clipId, view)
+  }
 
   /**
    * Decides whether a secondary (overlay/audio) player must be re-seeked while the timeline is playing.
@@ -705,6 +725,13 @@ class VideoPlaybackEngine(
     if (isTrimPreviewMode) return
     if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return
     try {
+      if (!PreviewCompositorPolicy.shouldAllocateOverlayExoPlayer()) {
+        releaseOverlayExoPlayers()
+        val fps = currentTimeline.videoClips.firstOrNull()?.frameRate?.toInt()?.takeIf { it > 0 } ?: 30
+        previewCompositor.sync(currentTimeline, posMs, fps)
+        _overlayPlayerIds.value = previewCompositor.overlaySurfaceIds.value
+        return
+      }
       val activeOverlays = currentTimeline.overlayClips.filter { it.isVideo && !it.isHidden && isPlayableInPlayer(it.uri) }
       val activeIds = activeOverlays.map { it.id }.toSet()
       overlayPlayers.keys.toList().filter { it !in activeIds }.forEach { id ->
@@ -1040,9 +1067,8 @@ class VideoPlaybackEngine(
     spatialLookJob?.cancel()
     trimPollJob?.cancel()
     scope.cancel()
-    overlayPlayers.values.forEach { try { it.stop(); it.release() } catch (_: Exception) {} }
-    overlayPlayers.clear()
-    overlayLoadedUris.clear()
+    releaseOverlayExoPlayers()
+    previewCompositor.release()
     audioTrackPlayers.values.forEach { try { it.stop(); it.release() } catch (_: Exception) {} }
     audioTrackPlayers.clear()
     audioLoadedUris.clear()

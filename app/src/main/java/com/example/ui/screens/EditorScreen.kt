@@ -786,6 +786,7 @@ fun EditorScreen(
           player = previewPlayer,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
+          onBindOverlaySurface = { clipId, view -> viewModel.playbackEngine.bindOverlaySurface(clipId, view) },
           liveLook = livePreviewLook,
           isPrimarySurface = true,
           onToggleFullscreen = { isFullscreenPreview = true },
@@ -1608,6 +1609,7 @@ fun EditorScreen(
           player = previewPlayer,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
+          onBindOverlaySurface = { clipId, view -> viewModel.playbackEngine.bindOverlaySurface(clipId, view) },
           liveLook = livePreviewLook,
           isPrimarySurface = false,
           onToggleFullscreen = { isFullscreenPreview = false },
@@ -1842,6 +1844,7 @@ fun VideoPreviewSurface(
   onGetOverlayPlayer: ((String) -> ExoPlayer?)? = null,
   /** Overlay clips whose ExoPlayer exists (observable so the video layer appears with the player). */
   overlayPlayerIds: Set<String> = emptySet(),
+  onBindOverlaySurface: ((String, android.view.TextureView) -> Unit)? = null,
   liveLook: LivePreviewLook? = null,
   /** The inline preview owns the player surface; a fullscreen dialog surface is secondary. */
   isPrimarySurface: Boolean = true,
@@ -2246,6 +2249,7 @@ fun VideoPreviewSurface(
           onEditText = onEditText,
           getOverlayPlayer = onGetOverlayPlayer,
           overlayPlayerIds = overlayPlayerIds,
+          onBindOverlaySurface = onBindOverlaySurface,
           timeline = timeline,
           liveLook = liveLook,
           modifier = Modifier.fillMaxSize()
