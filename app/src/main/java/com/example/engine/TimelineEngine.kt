@@ -5,6 +5,7 @@ import android.util.Log
 import com.example.engine.history.TimelineAction
 import com.example.engine.history.TimelineActionManager
 import com.example.engine.history.TimelineActionType
+import com.example.engine.timeline.CompoundClipOps
 import com.example.engine.timeline.ClipTrimMath
 import com.example.engine.timeline.TransitionDurationLimits
 import com.example.engine.timeline.ClipView
@@ -1546,13 +1547,15 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
       }
     }
 
-    _timeline.value = _timeline.value.copy(
-      videoClips = newVideo.sortedBy { it.timelineStartMs },
-      overlayClips = newOverlay.sortedBy { it.timelineStartMs },
-      audioClips = newAudio.sortedBy { it.timelineStartMs },
-      textClips = newText.sortedBy { it.timelineStartMs },
-      stickerClips = newSticker.sortedBy { it.timelineStartMs },
-      effectClips = newEffect.sortedBy { it.timelineStartMs }
+    _timeline.value = CompoundClipOps.rebindCopiedShells(
+      _timeline.value.copy(
+        videoClips = newVideo.sortedBy { it.timelineStartMs },
+        overlayClips = newOverlay.sortedBy { it.timelineStartMs },
+        audioClips = newAudio.sortedBy { it.timelineStartMs },
+        textClips = newText.sortedBy { it.timelineStartMs },
+        stickerClips = newSticker.sortedBy { it.timelineStartMs },
+        effectClips = newEffect.sortedBy { it.timelineStartMs }
+      )
     )
     _selectedClipIds.value = newSelected
     if (newSelected.isNotEmpty()) {
@@ -1582,7 +1585,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
         val copy = clip.copy(id = UUID.randomUUID().toString(), timelineStartMs = clip.timelineStartMs + clip.durationMs)
         val list = _timeline.value.videoClips.toMutableList()
         list.add(copy)
-        _timeline.value = _timeline.value.copy(videoClips = list)
+        _timeline.value = CompoundClipOps.rebindCopiedShells(_timeline.value.copy(videoClips = list))
         selectElement(SelectedTrackElement.Video(copy.id))
         return true
       }
@@ -1592,7 +1595,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
         val copy = clip.copy(id = UUID.randomUUID().toString(), timelineStartMs = clip.timelineStartMs + clip.durationMs)
         val list = _timeline.value.overlayClips.toMutableList()
         list.add(copy)
-        _timeline.value = _timeline.value.copy(overlayClips = list)
+        _timeline.value = CompoundClipOps.rebindCopiedShells(_timeline.value.copy(overlayClips = list))
         selectElement(SelectedTrackElement.Overlay(copy.id))
         return true
       }
@@ -1656,6 +1659,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
       _timeline.value.textClips.filter { it.id in targets }.forEach { copies.add(it) }
       _timeline.value.stickerClips.filter { it.id in targets }.forEach { copies.add(it) }
       _timeline.value.effectClips.filter { it.id in targets }.forEach { copies.add(it) }
+      _timeline.value.compoundClips.filter { it.id in targets }.forEach { copies.add(it) }
       _clipboardClips.value = copies
     }
   }
@@ -1713,13 +1717,17 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
       }
     }
 
-    _timeline.value = _timeline.value.copy(
-      videoClips = newVideo.sortedBy { it.timelineStartMs },
-      overlayClips = newOverlay.sortedBy { it.timelineStartMs },
-      audioClips = newAudio.sortedBy { it.timelineStartMs },
-      textClips = newText.sortedBy { it.timelineStartMs },
-      stickerClips = newSticker.sortedBy { it.timelineStartMs },
-      effectClips = newEffect.sortedBy { it.timelineStartMs }
+    val pastedCompounds = items.filterIsInstance<CompoundClip>()
+    _timeline.value = CompoundClipOps.rebindCopiedShells(
+      _timeline.value.copy(
+        videoClips = newVideo.sortedBy { it.timelineStartMs },
+        overlayClips = newOverlay.sortedBy { it.timelineStartMs },
+        audioClips = newAudio.sortedBy { it.timelineStartMs },
+        textClips = newText.sortedBy { it.timelineStartMs },
+        stickerClips = newSticker.sortedBy { it.timelineStartMs },
+        effectClips = newEffect.sortedBy { it.timelineStartMs },
+        compoundClips = (_timeline.value.compoundClips + pastedCompounds).distinctBy { it.id }
+      )
     )
     _selectedClipIds.value = newSelected
     if (newSelected.isNotEmpty()) {
@@ -5594,6 +5602,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
         if (audioSplit != null) working = audioSplit.timeline
       }
     }
+    working = CompoundClipOps.applyCompoundSplit(working, split.headId, split.tailId)
     recordHistory(TimelineActionType.SPLIT_CLIP, "Split Clip", setOf(clipId))
     _timeline.value = working
     if (split.tailElement != SelectedTrackElement.None) selectElement(split.tailElement)
@@ -6168,6 +6177,64 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     return tracks
   }
 
+  /**
+   * Groups [selectedClipIds] into one compound shell. Children keep relative offsets, lanes and
+   * keyframes inside the nest. The shell replaces them on the main track when the selection
+   * contains main video, otherwise on a free overlay lane, then the main track is packed.
+   * Returns the shell id, or null when the selection cannot be grouped.
+   */
+  fun createCompoundClipFromSelection(selectedClipIds: Set<String>, name: String = "Compound Clip"): String? = withStateLock {
+    val created = CompoundClipOps.create(_timeline.value, selectedClipIds, name) ?: return null
+    recordHistory(
+      TimelineActionType.CREATE_COMPOUND_CLIP,
+      "Create Compound Clip",
+      selectedClipIds + created.compoundId
+    )
+    _timeline.value = created.timeline
+    enforceMainTrackContinuity()
+    selection.selectMultiple(setOf(created.compoundId))
+    created.compoundId
+  }
+
+  /**
+   * Explodes [compoundClipId] back onto its original tracks. A trimmed shell restores only the
+   * visible window. Main-track children are packed so [enforceMainTrackContinuity] stays intact.
+   */
+  fun breakApartCompoundClip(compoundClipId: String): Boolean = withStateLock {
+    val exploded = CompoundClipOps.breakApart(_timeline.value, compoundClipId) ?: return false
+    recordHistory(
+      TimelineActionType.BREAK_COMPOUND_CLIP,
+      "Break Apart Compound Clip",
+      setOf(compoundClipId) + exploded.restoredIds
+    )
+    _timeline.value = exploded.timeline
+    enforceMainTrackContinuity()
+    selection.selectMultiple(exploded.restoredIds)
+    true
+  }
+
+  /** Nested sequence for child editing. Null when [compoundClipId] is not a compound. */
+  fun openCompoundTimeline(compoundClipId: String): Timeline? = withStateLock {
+    CompoundClipOps.open(_timeline.value, compoundClipId)
+  }
+
+  /**
+   * Writes a child-edited nest back into the compound. A shell that still shows the whole
+   * sequence adopts the new length and the main track is packed. One undo step.
+   */
+  fun replaceCompoundTimeline(compoundClipId: String, nested: Timeline): Boolean = withStateLock {
+    val updated = CompoundClipOps.replaceNested(_timeline.value, compoundClipId, nested) ?: return false
+    if (updated == _timeline.value) return false
+    recordHistory(
+      TimelineActionType.REPLACE_COMPOUND_TIMELINE,
+      "Edit Compound Clip",
+      setOf(compoundClipId)
+    )
+    _timeline.value = updated
+    enforceMainTrackContinuity()
+    true
+  }
+
   fun splitAllClipsAtPlayhead(): List<Pair<String, String>> = withStateLock {
     val playhead = alignedPlayheadMs()
     val original = _timeline.value
@@ -6175,7 +6242,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     val results = mutableListOf<Pair<String, String>>()
     for (id in TimelineSplitEngine.clipIdsCrossing(original, playhead)) {
       val split = TimelineSplitEngine.splitClipInTimeline(working, id, playhead, lockPredicate(working)) ?: continue
-      working = split.timeline
+      working = CompoundClipOps.applyCompoundSplit(split.timeline, split.headId, split.tailId)
       results += split.headId to split.tailId
     }
     if (results.isNotEmpty()) {

@@ -1,6 +1,7 @@
 package com.example.engine.timeline.edit
 
 import com.example.domain.model.Timeline
+import com.example.engine.timeline.CompoundClipOps
 import com.example.domain.model.TrackType
 import com.example.engine.timeline.ClipTrimMath
 import com.example.engine.timeline.ClipView
@@ -172,14 +173,16 @@ object TimelineClipEdits {
     val newSticker = if (!isTrackLocked(timeline, TrackType.STICKER)) timeline.stickerClips.filterNot { it.id in clipIds } else timeline.stickerClips
     val newEffect = if (!isTrackLocked(timeline, TrackType.EFFECT)) timeline.effectClips.filterNot { it.id in clipIds } else timeline.effectClips
     val validTransitions = timeline.transitions.filter { it.clipIndexBefore < (newVideo.size - 1).coerceAtLeast(0) }
-    return timeline.copy(
-      videoClips = newVideo,
-      overlayClips = newOverlay,
-      audioClips = newAudio,
-      textClips = newText,
-      stickerClips = newSticker,
-      effectClips = newEffect,
-      transitions = validTransitions
+    return CompoundClipOps.droppingOrphanCompounds(
+      timeline.copy(
+        videoClips = newVideo,
+        overlayClips = newOverlay,
+        audioClips = newAudio,
+        textClips = newText,
+        stickerClips = newSticker,
+        effectClips = newEffect,
+        transitions = validTransitions
+      )
     )
   }
 
@@ -239,14 +242,16 @@ object TimelineClipEdits {
       { c, start -> c.copy(timelineStartMs = start) }, { it.timelineStartMs }
     )
     val validTransitions = timeline.transitions.filter { it.clipIndexBefore < (newVideo.size - 1).coerceAtLeast(0) }
-    return timeline.copy(
-      videoClips = newVideo,
-      overlayClips = newOverlay,
-      audioClips = newAudio,
-      textClips = newText,
-      stickerClips = newSticker,
-      effectClips = newEffect,
-      transitions = validTransitions
+    return CompoundClipOps.droppingOrphanCompounds(
+      timeline.copy(
+        videoClips = newVideo,
+        overlayClips = newOverlay,
+        audioClips = newAudio,
+        textClips = newText,
+        stickerClips = newSticker,
+        effectClips = newEffect,
+        transitions = validTransitions
+      )
     )
   }
 }

@@ -1297,6 +1297,36 @@ fun defaultTrackSettings(): Map<TrackType, TrackSettings> {
   return TrackType.values().associateWith { TrackSettings(it) }
 }
 
+/** Mime type of a compound-clip shell. The shell is a normal [VideoClip]; the nest lives in [CompoundClip]. */
+const val COMPOUND_CLIP_MIME = "application/x-compound-clip"
+
+/** URI scheme for a compound shell: `compound://<shellId>`. */
+const val COMPOUND_CLIP_URI_PREFIX = "compound://"
+
+fun compoundClipUri(id: String): String = COMPOUND_CLIP_URI_PREFIX + id
+
+fun VideoClip.isCompoundContainer(): Boolean =
+  mimeType == COMPOUND_CLIP_MIME || uri.startsWith(COMPOUND_CLIP_URI_PREFIX)
+
+/** Id of the [CompoundClip] this shell displays. Equals the shell id once the shell has been rebound. */
+fun VideoClip.compoundOwnerId(): String =
+  if (uri.startsWith(COMPOUND_CLIP_URI_PREFIX)) uri.removePrefix(COMPOUND_CLIP_URI_PREFIX).ifBlank { id } else id
+
+/**
+ * Nested timeline group (CapCut / Final Cut compound clip).
+ *
+ * Child clips keep their track lanes, keyframes and offsets relative to the compound origin.
+ * On the parent timeline the group is one [VideoClip] shell with the same [id], so trim, split,
+ * move, duplicate and animation operate on a single block. [contentDurationMs] is the nested
+ * sequence length; the shell's source in/out is the visible window into that sequence.
+ */
+data class CompoundClip(
+  val id: String = UUID.randomUUID().toString(),
+  val name: String = "Compound Clip",
+  val nested: Timeline = Timeline(),
+  val contentDurationMs: Long = 0L
+)
+
 data class Timeline(
   val videoClips: List<VideoClip> = emptyList(),
   val overlayClips: List<VideoClip> = emptyList(),
@@ -1305,6 +1335,8 @@ data class Timeline(
   val stickerClips: List<StickerClip> = emptyList(),
   val effectClips: List<EffectClip> = emptyList(),
   val shapeClips: List<ShapeClip> = emptyList(),
+  /** Top-level nested sequences. Each id matches its shell [VideoClip] on the main or overlay track. */
+  val compoundClips: List<CompoundClip> = emptyList(),
   val transitions: List<Transition> = emptyList(),
   val adjustments: VideoAdjustments = VideoAdjustments(),
   val filter: FilterSettings = FilterSettings(),
