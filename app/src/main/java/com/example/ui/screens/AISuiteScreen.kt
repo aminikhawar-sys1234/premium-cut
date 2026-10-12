@@ -34,7 +34,6 @@ import com.example.ai.providers.secure.AISecurityConfig
 import com.example.domain.model.TextClip
 import com.example.ui.AppScreen
 import com.example.ui.StudioViewModel
-import com.example.ui.components.PrimaryPillButton
 import com.example.ui.components.formatDurationShort
 import com.example.ui.theme.*
 
@@ -48,7 +47,6 @@ fun AISuiteScreen(
   val clipboardManager = LocalClipboardManager.current
   val isAIBusy by viewModel.isAIBusy.collectAsState()
   val statusMessage by viewModel.aiStatusMessage.collectAsState()
-  val highlights by viewModel.aiHighlights.collectAsState()
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
 
   var selectedLanguage by remember { mutableStateOf("English") }
@@ -418,10 +416,10 @@ fun AISuiteScreen(
         }
       }
 
-      // Feature 4: AI Audio Noise Reduction
+      // Feature 4: DSP Audio Noise Reduction
       item {
         AIFeatureCard(
-          title = "AI Audio Noise Reduction",
+          title = "Audio Noise Reduction",
           description = "Processes actual audio with dynamic noise floor scanning, spectral gating, and rumble elimination.",
           icon = Icons.Default.Hearing
         ) {
@@ -442,11 +440,11 @@ fun AISuiteScreen(
         }
       }
 
-      // Feature 5: AI Voice Studio (Text-to-Speech)
+      // Feature 5: Device Text-to-Speech
       item {
         AIFeatureCard(
-          title = "AI Voice Studio (Text-to-Speech)",
-          description = "Synthesizes actual WAV audio files from written scripts and adds them directly to the timeline.",
+          title = "Text-to-Speech",
+          description = "Synthesizes actual WAV audio files from written scripts with the device speech engine and adds them to the timeline.",
           icon = Icons.Default.RecordVoiceOver
         ) {
           Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -493,87 +491,6 @@ fun AISuiteScreen(
               }
             }
           }
-        }
-      }
-
-      // Feature 6: AI Highlight & Viral Moments
-      item {
-        AIFeatureCard(
-          title = "AI Highlight & Viral Moments",
-          description = "Asks the model for time ranges using the project title and total duration. It does not look at the frames.",
-          icon = Icons.Default.FlashOn
-        ) {
-          Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-            Button(
-              onClick = { viewModel.runAIHighlightAnalysis() },
-              enabled = !isAIBusy && timeline.videoClips.isNotEmpty(),
-              colors = ButtonDefaults.buttonColors(containerColor = StudioSurfaceVariant, contentColor = CyanAccent),
-              shape = RoundedCornerShape(18.dp),
-              modifier = Modifier.testTag("detect_highlights_button")
-            ) {
-              Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(16.dp))
-              Spacer(modifier = Modifier.width(6.dp))
-              Text("Detect Highlights", fontWeight = FontWeight.Bold)
-            }
-
-            if (highlights.isNotEmpty()) {
-              Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                highlights.forEach { h ->
-                  Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.cardColors(containerColor = Color(0xFF0F172A))
-                  ) {
-                    Row(
-                      modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(12.dp),
-                      horizontalArrangement = Arrangement.SpaceBetween,
-                      verticalAlignment = Alignment.CenterVertically
-                    ) {
-                      Column(modifier = Modifier.weight(1f)) {
-                        Text(h.title, style = MaterialTheme.typography.labelMedium.copy(color = CyanAccent, fontWeight = FontWeight.Bold))
-                        Text(h.description, style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontSize = 11.sp))
-                        Text(
-                          "${formatDurationShort(h.startTimeMs)} - ${formatDurationShort(h.endTimeMs)} (Score: ${(h.score * 100).toInt()}%)",
-                          style = MaterialTheme.typography.labelSmall.copy(color = TextTertiary)
-                        )
-                      }
-                      Button(
-                        onClick = {
-                          viewModel.timelineEngine.setPosition(h.startTimeMs)
-                          viewModel.navigateTo(AppScreen.EDITOR)
-                        },
-                        colors = ButtonDefaults.buttonColors(containerColor = CyanAccent, contentColor = Color.Black),
-                        modifier = Modifier.height(32.dp),
-                        contentPadding = PaddingValues(horizontal = 10.dp)
-                      ) {
-                        Text("Jump to Hook", fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                      }
-                    }
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
-
-      // Feature 7: AI Auto-Edit Montage
-      item {
-        AIFeatureCard(
-          title = "AI Auto-Edit Montage",
-          description = "Rebuilds the timeline from fixed slice lengths, a speed step, and a rotating transition list. It does not analyze picture content.",
-          icon = Icons.Default.MovieFilter
-        ) {
-          PrimaryPillButton(
-            text = "Generate Auto Reel",
-            icon = Icons.Default.AutoFixHigh,
-            onClick = {
-              viewModel.runAIAutoEdit()
-              viewModel.navigateTo(AppScreen.EDITOR)
-            },
-            modifier = Modifier.fillMaxWidth().testTag("auto_edit_button")
-          )
         }
       }
 

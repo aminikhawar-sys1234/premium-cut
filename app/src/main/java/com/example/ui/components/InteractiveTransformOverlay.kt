@@ -379,6 +379,7 @@ fun InteractiveTransformOverlay(
         val overlayPlayer = if (isRealVideoOverlay && overlay.id in overlayPlayerIds) {
           getOverlayPlayer?.invoke(overlay.id)
         } else null
+        val bindCompositorSurface = onBindOverlaySurface != null && isRealVideoOverlay && overlay.id in overlayPlayerIds
 
         if (!renderOverlayMedia) {
           // Composited underneath; nothing to draw inside the frame.

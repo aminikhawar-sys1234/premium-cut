@@ -211,7 +211,6 @@ data class TTSVoice(
   val subtitle: String,
   val locale: Locale,
   val iconEmoji: String,
-  val isAi: Boolean = false,
   val pitch: Float = 1.0f,
   val speed: Float = 1.0f
 )
@@ -239,11 +238,5 @@ object TTSVoicesCatalog {
     TTSVoice("ar_arabic_omar", "العربية (Omar)", "Modern Standard Arabic", Locale("ar"), "🇸🇦", pitch = 1.0f, speed = 1.0f),
     TTSVoice("hi_hindi_aarav", "हिन्दी (Aarav)", "Hindi Natural Voice", Locale("hi", "IN"), "🇮🇳", pitch = 1.0f, speed = 1.0f),
     TTSVoice("es_spanish_sofia", "Español (Sofia)", "Castilian Natural Spanish", Locale("es", "ES"), "🇪🇸", pitch = 1.05f, speed = 1.0f),
-
-    // AI Voices
-    TTSVoice("ai_gemini_hyper", "Gemini Neural Natural", "Ultra-High Definition AI Voice", Locale.US, "✨", isAi = true, pitch = 1.0f, speed = 1.0f),
-    TTSVoice("ai_whisper_soft", "AI Soft Whisper", "Subtle ASMR Neural Tone", Locale.US, "🤫", isAi = true, pitch = 1.05f, speed = 0.9f),
-    TTSVoice("ai_podcast_studio", "Podcast Studio Pro", "Compressed Rich Studio Voice", Locale.US, "🎧", isAi = true, pitch = 0.92f, speed = 0.98f),
-    TTSVoice("ai_cinematic_trailer", "AI Cinematic Trailer", "Low Bass Thunder Narration", Locale.US, "🌌", isAi = true, pitch = 0.72f, speed = 0.88f)
   )
 }

@@ -159,6 +159,7 @@ class VideoPlaybackEngine(
   val isScrubbing: Boolean get() = isScrubbingMode
   val isTrimPreview: Boolean get() = isTrimPreviewMode
 
+  val previewCompositor = SingleClockPreviewCompositor(context)
   private val overlayPlayers = ConcurrentHashMap<String, ExoPlayer>()
   private val overlayLoadedUris = ConcurrentHashMap<String, String>()
   private val audioTrackPlayers = ConcurrentHashMap<String, ExoPlayer>()
@@ -677,6 +678,17 @@ class VideoPlaybackEngine(
     }
     overlayPlayers.clear()
     overlayLoadedUris.clear()
+    boundOverlayGrading.clear()
+    lastOverlayGraphSignatures.clear()
+    lastOverlayFilterSignatures.clear()
+  }
+
+  fun resetPlaybackSession() {
+    spatialLookJob?.cancel()
+    spatialLookJob = null
+    try { pause() } catch (_: Throwable) {}
+    releaseOverlayExoPlayers()
+    previewCompositor.release()
     audioTrackPlayers.values.forEach { p ->
       try { p.stop(); p.release() } catch (_: Exception) {}
     }
@@ -803,7 +815,14 @@ class VideoPlaybackEngine(
     }
   }
 
-  fun getOverlayPlayer(clipId: String): ExoPlayer? = try { overlayPlayers[clipId] } catch (_: Exception) { null }
+  fun getOverlayPlayer(clipId: String): ExoPlayer? {
+    if (!PreviewCompositorPolicy.shouldAllocateOverlayExoPlayer()) return null
+    return try { overlayPlayers[clipId] } catch (_: Exception) { null }
+  }
+
+  fun bindOverlaySurface(clipId: String, view: android.view.TextureView) {
+    previewCompositor.bindOverlaySurface(clipId, view)
+  }
 
   /**
    * Decides whether a secondary (overlay/audio) player must be re-seeked while the timeline is playing.

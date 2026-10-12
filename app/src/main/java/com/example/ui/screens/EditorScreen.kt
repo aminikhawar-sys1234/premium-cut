@@ -788,6 +788,7 @@ fun EditorScreen(
           player = previewPlayer,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
+          onBindOverlaySurface = { clipId, view -> viewModel.playbackEngine.bindOverlaySurface(clipId, view) },
           liveLook = livePreviewLook,
           compositorEngine = compositorEngine,
           isPrimarySurface = true,
@@ -1611,6 +1612,7 @@ fun EditorScreen(
           player = previewPlayer,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
+          onBindOverlaySurface = { clipId, view -> viewModel.playbackEngine.bindOverlaySurface(clipId, view) },
           liveLook = livePreviewLook,
           compositorEngine = compositorEngine,
           isPrimarySurface = false,
@@ -1846,6 +1848,7 @@ fun VideoPreviewSurface(
   onGetOverlayPlayer: ((String) -> ExoPlayer?)? = null,
   /** Overlay clips whose ExoPlayer exists (observable so the video layer appears with the player). */
   overlayPlayerIds: Set<String> = emptySet(),
+  onBindOverlaySurface: ((String, android.view.TextureView) -> Unit)? = null,
   liveLook: LivePreviewLook? = null,
   /**
    * Set while the GPU compositor draws the picture: it replaces the player layer, the Compose

@@ -19,6 +19,7 @@ import android.view.Surface
 import com.example.domain.model.*
 import com.example.engine.composition.ComposedOverlay
 import com.example.engine.composition.VideoCompositionEngine
+import com.example.engine.composition.graph.SharedCompositionGraph
 import com.example.engine.composition.gpu.EglCore
 import com.example.engine.composition.gpu.GpuCompositionRenderer
 import com.example.engine.composition.gpu.HardwareVideoTextureSource
@@ -784,7 +785,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
             val ptsUs = (frameIndex * 1_000_000L) / fps
             val timelinePosMs = (ptsUs / 1000L).coerceAtMost(durationMs - 1L)
-            val frame = composition.evaluateFrame(timeline, timelinePosMs)
+            val frame = SharedCompositionGraph.evaluate(timeline, timelinePosMs, fps).composedFrame
             val activeClip = frame.activeClip
 
             val currentNeededClipIds = mutableSetOf<String>()

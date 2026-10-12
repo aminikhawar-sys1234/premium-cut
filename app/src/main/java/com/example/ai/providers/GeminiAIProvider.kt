@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Base64
 import com.example.ai.providers.secure.AISecurityConfig
 import com.example.domain.model.TextClip
-import com.example.domain.model.Timeline
 import com.example.domain.model.WordTiming
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -27,7 +26,7 @@ import java.util.concurrent.TimeUnit
  * Never hardcodes private keys inside the APK.
  */
 class GeminiAIProvider(private val context: Context? = null) :
-  SpeechToTextProvider, TranslationProvider, HighlightDetectionProvider {
+  SpeechToTextProvider, TranslationProvider {
 
   override val providerName: String = "Google Gemini AI (3.5 Flash)"
 
@@ -366,81 +365,5 @@ class GeminiAIProvider(private val context: Context? = null) :
     } catch (e: Exception) {
       Result.failure(e)
     }
-  }
-
-  override suspend fun detectHighlights(videoTitle: String, durationMs: Long): Result<List<VideoHighlightSegment>> = withContext(Dispatchers.IO) {
-    if (!isAvailable) {
-      return@withContext Result.failure(
-        IllegalStateException("Highlight detection unavailable: No AI provider or secure proxy configured.")
-      )
-    }
-
-    try {
-      val durationSec = durationMs / 1000
-      val prompt = """
-        Analyze video metadata for a project titled '$videoTitle' with total duration $durationSec seconds ($durationMs ms).
-        Detect 3 to 4 peak highlight moments or viral hooks for pacing and viewer engagement.
-        Return strictly a JSON array of objects with keys:
-        - title (string): descriptive hook name
-        - startTimeMs (integer): start timestamp within 0 to $durationMs
-        - endTimeMs (integer): end timestamp within startTimeMs to $durationMs
-        - score (float 0.0 to 1.0): engagement rating
-        - description (string): rationale for the highlight
-        
-        Return strictly JSON array:
-        [
-          { "title": "...", "startTimeMs": 0, "endTimeMs": 5000, "score": 0.95, "description": "..." }
-        ]
-      """.trimIndent()
-
-      val jsonPayload = JSONObject().apply {
-        put("contents", JSONArray().apply {
-          put(JSONObject().apply {
-            put("parts", JSONArray().apply {
-              put(JSONObject().apply { put("text", prompt) })
-            })
-          })
-        })
-      }
-
-      val requestBuilder = Request.Builder()
-        .url(getEndpointUrl())
-        .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
-
-      val response = client.newCall(requestBuilder.build()).execute()
-      if (!response.isSuccessful) {
-        return@withContext Result.failure(Exception("AI server error: HTTP ${response.code}"))
-      }
-
-      val body = response.body?.string() ?: ""
-      val json = JSONObject(body)
-      val textResponse = json.getJSONArray("candidates")
-        .getJSONObject(0).getJSONObject("content")
-        .getJSONArray("parts").getJSONObject(0).getString("text")
-
-      val cleaned = textResponse.replace("```json", "").replace("```", "").trim()
-      val array = JSONArray(cleaned)
-      val segments = mutableListOf<VideoHighlightSegment>()
-      for (i in 0 until array.length()) {
-        val item = array.getJSONObject(i)
-        segments.add(
-          VideoHighlightSegment(
-            title = item.getString("title"),
-            startTimeMs = item.getLong("startTimeMs").coerceIn(0L, durationMs),
-            endTimeMs = item.getLong("endTimeMs").coerceIn(0L, durationMs),
-            score = item.getDouble("score").toFloat().coerceIn(0f, 1f),
-            description = item.getString("description")
-          )
-        )
-      }
-      Result.success(segments)
-    } catch (e: Exception) {
-      Result.failure(e)
-    }
-  }
-
-  override suspend fun analyzeTimelineHighlights(timeline: Timeline): Result<List<VideoHighlightSegment>> {
-    val title = timeline.videoClips.firstOrNull()?.name ?: "Video Project"
-    return detectHighlights(title, timeline.totalDurationMs)
   }
 }
