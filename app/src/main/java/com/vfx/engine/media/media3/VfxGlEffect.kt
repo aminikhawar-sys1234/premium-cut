@@ -2,14 +2,11 @@ package com.vfx.engine.media.media3
 
 import android.content.Context
 import androidx.annotation.OptIn
-import androidx.media3.common.VideoFrameProcessingException
 import androidx.media3.common.util.Size
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.BaseGlShaderProgram
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
-import com.vfx.engine.core.Microseconds
-import com.vfx.engine.core.effect.EffectInstance
 import com.vfx.engine.core.stack.EffectStack
 import com.vfx.engine.effects.ColorAdjustmentEffect
 import com.vfx.engine.effects.DualKawaseBlurEffect
@@ -42,7 +39,7 @@ class VfxGlEffect(
 class VfxGlShaderProgram(
   useHdr: Boolean,
   private val effectStack: EffectStack
-) : BaseGlShaderProgram(useHdr, 1) {
+) : BaseGlShaderProgram(useHdr, /* texturePoolCapacity= */ 2) {
 
   private var width: Int = 1080
   private var height: Int = 1920
@@ -69,8 +66,6 @@ class VfxGlShaderProgram(
     try {
       GlStateTracker.saveState()
 
-      val pts = Microseconds(presentationTimeUs)
-
       // Create or reuse input wrapper FBO for inputTexId without runtime allocations
       val inputFbo = getOrCreateInputWrapperFbo(inputTexId, width, height)
 
@@ -90,10 +85,15 @@ class VfxGlShaderProgram(
           val isLast = index == activeEffects.size - 1
           val targetFbo = if (isLast) outputFboWrapper else fboPool.acquire(width, height)
 
-          when (effectInstance.effectId) {
-            "vfx_dual_kawase_blur" -> dualKawaseBlur.render(currentSourceFbo, targetFbo, effectInstance.parameters)
-            "vfx_color_adjustment" -> colorAdjustment.render(currentSourceFbo, targetFbo, effectInstance.parameters)
-            else -> colorAdjustment.render(currentSourceFbo, targetFbo, effectInstance.parameters)
+          try {
+            when (effectInstance.effectId) {
+              "vfx_dual_kawase_blur" -> dualKawaseBlur.render(currentSourceFbo, targetFbo, effectInstance.parameters)
+              "vfx_color_adjustment" -> colorAdjustment.render(currentSourceFbo, targetFbo, effectInstance.parameters)
+              else -> colorAdjustment.render(currentSourceFbo, targetFbo, effectInstance.parameters)
+            }
+          } catch (effectError: Exception) {
+            android.util.Log.e("VfxGlShaderProgram", "Effect ${effectInstance.effectId} failed; passthrough", effectError)
+            colorAdjustment.render(currentSourceFbo, targetFbo, com.vfx.engine.core.params.ParamMap())
           }
 
           if (currentSourceFbo != inputFbo && currentSourceFbo != outputFboWrapper) {
@@ -104,7 +104,7 @@ class VfxGlShaderProgram(
       }
 
     } catch (e: Exception) {
-      throw VideoFrameProcessingException(e, presentationTimeUs)
+      android.util.Log.e("VfxGlShaderProgram", "drawFrame failed at $presentationTimeUs; keeping VideoFrameProcessor alive", e)
     } finally {
       GlStateTracker.restoreState()
     }

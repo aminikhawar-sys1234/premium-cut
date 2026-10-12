@@ -40,6 +40,7 @@ object PreviewVideoSurfaceRegistry {
   private val boundView = java.util.WeakHashMap<ExoPlayer, WeakReference<TextureView>>()
   private val boundPriority = java.util.WeakHashMap<ExoPlayer, Int>()
   private val primaryView = java.util.WeakHashMap<ExoPlayer, WeakReference<TextureView>>()
+  private var lastPrimaryView: WeakReference<TextureView>? = null
 
   /**
    * Invoked on the main thread after a TextureView is (re)bound to a player.
@@ -58,6 +59,7 @@ object PreviewVideoSurfaceRegistry {
   fun bindPrimary(player: ExoPlayer, view: TextureView) {
     synchronized(lock) {
       primaryView[player] = WeakReference(view)
+      lastPrimaryView = WeakReference(view)
     }
     bind(player, view, PRIORITY_PRIMARY)
   }
@@ -115,6 +117,28 @@ object PreviewVideoSurfaceRegistry {
    * and silently drops the output surface; calling this restores live frames without creating
    * a new TextureView.
    */
+  /** Drops every binding for [player] so a released instance cannot keep a TextureView. */
+  fun forget(player: ExoPlayer) {
+    onMain {
+      synchronized(lock) {
+        boundView.remove(player)
+        boundPriority.remove(player)
+        primaryView.remove(player)
+      }
+      try {
+        player.clearVideoSurface()
+      } catch (_: Throwable) {
+      }
+    }
+  }
+
+  /** Attaches the last inline TextureView to a newly created ExoPlayer. */
+  fun attachRememberedPrimary(player: ExoPlayer) {
+    val view = synchronized(lock) { lastPrimaryView?.get() } ?: return
+    if (!view.isAvailable) return
+    bindPrimary(player, view)
+  }
+
   fun rebindCurrent(player: ExoPlayer, afterMs: Long = 0L) {
     val bind: () -> Unit = bind@{
       val view = synchronized(lock) { boundView[player]?.get() } ?: return@bind

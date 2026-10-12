@@ -294,9 +294,9 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       // jumped far forward: cheaper to seek than to decode through
       (targetUs - maxOf(lastShownUs, lastRequestUs) > JUMP_SEEK_THRESHOLD_US)
     if (needSeek) {
+      releaseHeldOutput(c)
       ex.seekTo(targetUs.coerceAtLeast(0L), MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
       c.flush()
-      heldIndex = -1
       frameAvailable.set(false)
       isInputEos = false
       isOutputEos = false
@@ -470,10 +470,25 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
     return transformMatrix
   }
 
+  /**
+   * Returns a held output buffer to the codec before flush/stop. Skipping this starves the
+   * hardware decoder of output slots and the next session stays on a black OES texture.
+   */
+  private fun releaseHeldOutput(c: MediaCodec?) {
+    val index = heldIndex
+    heldIndex = -1
+    if (index < 0 || c == null) return
+    try {
+      c.releaseOutputBuffer(index, false)
+    } catch (t: Throwable) {
+      Log.w(TAG, "Failed to release held output buffer $index: ${t.message}")
+    }
+  }
+
   fun flush() = synchronized(surfaceLock) {
     try {
+      releaseHeldOutput(codec)
       codec?.flush()
-      heldIndex = -1
       hasPicture = false
       lastRenderedPtsUs = Long.MIN_VALUE
       lastRequestUs = Long.MIN_VALUE
@@ -487,7 +502,7 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
 
   fun release() = synchronized(surfaceLock) {
     isInitialized = false
-    heldIndex = -1
+    releaseHeldOutput(codec)
     try { codec?.stop() } catch (_: Throwable) {}
     try { codec?.release() } catch (_: Throwable) {}
     codec = null

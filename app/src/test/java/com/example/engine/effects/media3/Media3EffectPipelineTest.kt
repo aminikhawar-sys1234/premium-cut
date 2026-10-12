@@ -303,4 +303,12 @@ class Media3EffectPipelineTest {
     assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "SketchCharcoalEffect" })
     assertNotEquals(PreviewFilterEffects.signature(clip, Timeline()), PreviewFilterEffects.signature(styled, Timeline()))
   }
+
+  @Test
+  fun testIdentityPassthroughIsInstalledWhenEffectGraphMustStayAlive() {
+    val identity = Media3EffectPipeline.identityEffects()
+    assertEquals(1, identity.size)
+    assertTrue(identity.single() is IdentityPassthroughGlEffect)
+    assertFalse((identity.single() as IdentityPassthroughGlEffect).isNoOp(1280, 720))
+  }
 }

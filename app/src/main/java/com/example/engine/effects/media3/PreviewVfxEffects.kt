@@ -18,7 +18,11 @@ object PreviewVfxEffects {
     val stack = VfxEffectsHost.decode(clip?.vfxStackJson)
     return stack.effects()
       .filter { it.enabled && it.intensity > 0.01f }
-      .mapNotNull { toMedia3(it) }
+      .mapNotNull { instance ->
+        runCatching { toMedia3(instance) }
+          .onFailure { android.util.Log.e("PreviewVfxEffects", "Skipped failing effect ${instance.definition.id}", it) }
+          .getOrNull()
+      }
   }
 
   fun signature(clip: VideoClip?): String = clip?.vfxStackJson.orEmpty()

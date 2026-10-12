@@ -121,6 +121,8 @@ fun EditorScreen(
   // Overlay clips whose video player exists, so PIP layers switch from placeholder to video
   // as soon as the player is created.
   val overlayPlayerIds by viewModel.playbackEngine.overlayPlayerIds.collectAsState()
+  val playerGeneration by viewModel.playbackEngine.playerGeneration.collectAsState()
+  val previewPlayer = remember(playerGeneration) { viewModel.playbackEngine.player }
   val canUndo by viewModel.timelineEngine.canUndo.collectAsState()
   val canRedo by viewModel.timelineEngine.canRedo.collectAsState()
   val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
@@ -782,7 +784,7 @@ fun EditorScreen(
             isTextToolsOpen = true
             activeTextToolModal = TextToolCategory.ADD_TEXT
           },
-          player = viewModel.playbackEngine.player,
+          player = previewPlayer,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
           liveLook = livePreviewLook,
@@ -1604,7 +1606,7 @@ fun EditorScreen(
             isTextToolsOpen = true
             activeTextToolModal = TextToolCategory.ADD_TEXT
           },
-          player = viewModel.playbackEngine.player,
+          player = previewPlayer,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
           liveLook = livePreviewLook,
@@ -2086,6 +2088,7 @@ fun VideoPreviewSurface(
               val videoFilterMatrix = remember(previewAdjustments, previewFilter) {
                 PreviewDisplayFilter.matrixFor(previewAdjustments, previewFilter)
               }
+              key(player) {
               AndroidView(
                 factory = { ctx ->
                   android.view.TextureView(ctx).apply {
@@ -2128,6 +2131,7 @@ fun VideoPreviewSurface(
                 },
                 modifier = Modifier.fillMaxSize()
               )
+              }
             } else if (isMainVideoTrackHidden) {
               // Video track hidden: no picture, but the player keeps running so its audio
               // stays in the mix exactly like the export pipeline does it.
