@@ -208,6 +208,10 @@ class VideoCompositionEngine(private val context: Context) {
     return timelineEvaluator.evaluate(timeline, posMs).toComposedFrame()
   }
 
+  /** Same graph preview and export sample; wraps [evaluateFrame] for the compositor. */
+  fun evaluateSharedGraph(timeline: Timeline, posMs: Long, fps: Int = 30) =
+    com.example.engine.composition.graph.SharedCompositionGraph.evaluate(timeline, posMs, fps)
+
   /**
    * Renders the composed frame onto an Android Canvas for export or preview capture.
    */

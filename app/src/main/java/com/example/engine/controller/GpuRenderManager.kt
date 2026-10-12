@@ -51,7 +51,8 @@ class GpuRenderManager(
   }
 
   fun composeFrame(timeline: Timeline, timelinePosMs: Long): ComposedFrame {
-    return compositionEngine.evaluateFrame(timeline, timelinePosMs)
+    return com.example.engine.composition.graph.SharedCompositionGraph
+      .evaluate(timeline, timelinePosMs).composedFrame
   }
 
   fun invalidateClip(clipId: String) {
