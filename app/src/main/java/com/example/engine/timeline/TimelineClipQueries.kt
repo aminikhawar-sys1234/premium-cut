@@ -11,6 +11,7 @@ import com.example.engine.ClipTrimmedRange
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.TimelineActiveSnapshot
 import com.example.engine.TransitionTimingInfo
+import com.example.engine.audio.AutoDucking
 
 /**
  * Read-only timeline queries used by the editor, preview compositor and export.
@@ -288,6 +289,7 @@ object TimelineClipQueries {
       val progress = (remaining.toFloat() / clip.fadeOutMs).coerceIn(0f, 1f)
       baseVol *= (progress * progress)
     }
+    baseVol *= AutoDucking.gainAt(timeline, clip, posMs)
     return baseVol.coerceAtLeast(0f)
   }
 

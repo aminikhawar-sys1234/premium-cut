@@ -2,6 +2,9 @@ package com.example.engine
 
 import com.example.domain.model.*
 import android.util.Log
+import com.example.engine.audio.AutoDucking
+import com.example.engine.audio.DuckEnvelopePoint
+import com.example.engine.audio.SpeechInterval
 import com.example.engine.history.TimelineAction
 import com.example.engine.history.TimelineActionManager
 import com.example.engine.history.TimelineActionType
@@ -6523,9 +6526,111 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     results
   }
 
+  // --- Auto-Ducking ---
+
+  /**
+   * Ducks audio lane [targetAudioTrackIndex] (background music / BGM) under speech: voiceover and dialogue lanes,
+   * clips flagged as voiceover, and, when [duckUnderVideoAudio] is set, the original sound of main-track video.
+   *
+   * [duckIntensity] is the linear gain the lane drops to while speech plays (0.3 ≈ -10.5 dB, 0.25 ≈ -12 dB).
+   * The duck ramps down over [attackMs] before each speech span and recovers over [releaseMs] after it.
+   * The duck is evaluated live, so later edits to voice clips re-flow it, and it multiplies the lane's own
+   * volume / keyframes / fades instead of rewriting them.
+   *
+   * Calling this again for a lane that is already ducked updates its settings; a burst of such updates
+   * (dragging a slider) collapses into one undo step. Returns false for a negative lane, a lane whose role
+   * is speech, a non-finite intensity, or when nothing changed.
+   */
+  fun enableAutoDucking(
+    targetAudioTrackIndex: Int,
+    duckIntensity: Float = 0.3f,
+    attackMs: Long = 200L,
+    releaseMs: Long = 350L,
+    duckUnderVideoAudio: Boolean = true
+  ): Boolean = withStateLock {
+    if (targetAudioTrackIndex < 0 || !duckIntensity.isFinite()) return false
+    val current = _timeline.value
+    if (AutoDucking.roleOf(current, targetAudioTrackIndex).isSpeech) {
+      Log.w(TAG, "Audio lane $targetAudioTrackIndex carries speech; change its role before ducking it")
+      return false
+    }
+    val existing = AutoDucking.settingsFor(current, targetAudioTrackIndex)
+    val settings = AudioDuckingSettings(
+      targetTrackIndex = targetAudioTrackIndex,
+      duckRatio = duckIntensity,
+      attackMs = attackMs,
+      releaseMs = releaseMs,
+      duckUnderVideoAudio = duckUnderVideoAudio
+    )
+    val updated = AutoDucking.withDucking(current, settings)
+    if (updated === current) return false
+    if (existing == null) {
+      recordHistory(TimelineActionType.AUTO_DUCKING_EDIT, "Enable Auto-Ducking", audioLaneClipIds(current, targetAudioTrackIndex))
+    } else {
+      recordHistoryCoalesced("auto_ducking:$targetAudioTrackIndex", TimelineActionType.AUTO_DUCKING_EDIT)
+    }
+    _timeline.value = updated
+    true
+  }
+
+  /** Turns auto-ducking off for audio lane [targetAudioTrackIndex] as one undoable step. False when it was not on. */
+  fun disableAutoDucking(targetAudioTrackIndex: Int): Boolean = withStateLock {
+    val current = _timeline.value
+    val updated = AutoDucking.withoutDucking(current, targetAudioTrackIndex)
+    if (updated === current) return false
+    recordHistory(TimelineActionType.AUTO_DUCKING_EDIT, "Disable Auto-Ducking", audioLaneClipIds(current, targetAudioTrackIndex))
+    _timeline.value = updated
+    true
+  }
+
+  /**
+   * Marks what audio lane [trackIndex] carries. Speech roles make the lane a ducking trigger; giving a ducked lane a
+   * speech role also turns its ducking off in the same undo step, since a lane cannot duck under itself.
+   */
+  fun setAudioTrackRole(trackIndex: Int, role: AudioTrackRole): Boolean = withStateLock {
+    if (trackIndex < 0) return false
+    val current = _timeline.value
+    var updated = AutoDucking.withRole(current, trackIndex, role)
+    if (role.isSpeech) updated = AutoDucking.withoutDucking(updated, trackIndex)
+    if (updated == current) return false
+    recordHistory(TimelineActionType.TRACK_SETTINGS_EDIT, "Audio Track Role: ${role.displayName}", audioLaneClipIds(current, trackIndex))
+    _timeline.value = updated
+    true
+  }
+
+  fun getAudioTrackRole(trackIndex: Int): AudioTrackRole = AutoDucking.roleOf(_timeline.value, trackIndex)
+
+  fun isAutoDuckingEnabled(targetAudioTrackIndex: Int): Boolean =
+    AutoDucking.settingsFor(_timeline.value, targetAudioTrackIndex) != null
+
+  fun getAutoDuckingSettings(targetAudioTrackIndex: Int): AudioDuckingSettings? =
+    AutoDucking.settingsFor(_timeline.value, targetAudioTrackIndex)
+
+  /** Linear auto-ducking multiplier for [clip] at timeline position [posMs]; 1f when its lane is not ducked. */
+  fun getAutoDuckingGainAt(clip: AudioClip, posMs: Long): Float =
+    AutoDucking.gainAt(_timeline.value, clip, posMs)
+
+  /** Duck curve across an audio clip (times relative to the clip start) for drawing on the clip's volume line. */
+  fun getAutoDuckingEnvelope(clipId: String, rampStepMs: Long = AutoDucking.DEFAULT_RAMP_STEP_MS): List<DuckEnvelopePoint> {
+    val snapshot = _timeline.value
+    val clip = snapshot.audioClips.firstOrNull { it.id == clipId } ?: return emptyList()
+    return AutoDucking.clipEnvelope(snapshot, clip, rampStepMs)
+  }
+
+  /** Merged speech spans currently driving the ducking of lane [targetAudioTrackIndex]; empty when it is not ducked. */
+  fun getAutoDuckingSpeechIntervals(targetAudioTrackIndex: Int): List<SpeechInterval> {
+    val snapshot = _timeline.value
+    val settings = AutoDucking.settingsFor(snapshot, targetAudioTrackIndex) ?: return emptyList()
+    return AutoDucking.speechIntervals(snapshot, settings.normalized())
+  }
+
+  private fun audioLaneClipIds(timeline: Timeline, trackIndex: Int): Set<String> =
+    timeline.audioClips.filter { it.trackIndex == trackIndex }.mapTo(HashSet()) { it.id }
+
   /**
    * Calculates the exact audio volume level of an audio clip at [posMs], taking into account
-   * base volume, track settings (mute/solo), fade in/out envelopes, keyframes, and ducking.
+   * base volume, track settings (mute/solo), fade in/out envelopes, keyframes, and auto-ducking.
+   * Lock-free: it evaluates one immutable timeline snapshot, so audio threads never wait on edits.
    */
   fun getEffectiveAudioVolumeAt(clip: AudioClip, posMs: Long): Float =
     TimelineClipQueries.getEffectiveAudioVolumeAt(_timeline.value, clip, posMs)
