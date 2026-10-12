@@ -4,6 +4,7 @@ import android.graphics.ColorMatrix
 import com.example.domain.model.FilterSettings
 import com.example.domain.model.FilterType
 import com.example.domain.model.VideoAdjustments
+import kotlin.math.pow
 
 object ColorFilterGenerator {
 
@@ -24,12 +25,13 @@ object ColorFilterGenerator {
     satMatrix.setSaturation(adjustments.saturation.coerceIn(0f, 3f))
     result.postConcat(satMatrix)
 
-    // 2. Brightness & Exposure
-    val totalBright = (adjustments.brightness + adjustments.exposure) * 100f
+    // 2. Brightness & Exposure (photographic 2^EV scale, same as the GPU shader)
+    val expScale = 2.0.pow(adjustments.exposure.toDouble()).toFloat().coerceIn(0.25f, 4f)
+    val brightOffset = adjustments.brightness * 255f
     val brightArray = floatArrayOf(
-      1f, 0f, 0f, 0f, totalBright,
-      0f, 1f, 0f, 0f, totalBright,
-      0f, 0f, 1f, 0f, totalBright,
+      expScale, 0f, 0f, 0f, brightOffset,
+      0f, expScale, 0f, 0f, brightOffset,
+      0f, 0f, expScale, 0f, brightOffset,
       0f, 0f, 0f, 1f, 0f
     )
     result.postConcat(ColorMatrix(brightArray))
@@ -196,58 +198,58 @@ object ColorFilterGenerator {
     if (type == FilterType.NONE || intensity <= 0f) return null
 
     val baseMatrix = when (type) {
-      // --- Professional Enhancement Filters ---
+      // --- Selectable Looks (spatial extras are applied by FilterCatalog on the GPU) ---
       FilterType.FOUR_K -> {
-        // 4K Ultra HD: High micro-contrast, crisp midtones, boosted sharpness and pure luminous dynamic range
+        // Mild midtone snap only. Real 4K output is the export-resolution pipeline.
         ColorMatrix(
           floatArrayOf(
-            1.22f, 0.00f, 0.00f, 0f, -8f,
-            0.00f, 1.22f, 0.00f, 0f, -8f,
-            0.00f, 0.00f, 1.22f, 0f, -8f,
+            1.10f, -0.03f, -0.03f, 0f, 2f,
+            -0.03f, 1.10f, -0.03f, 0f, 2f,
+            -0.03f, -0.03f, 1.12f, 0f, 2f,
             0.00f, 0.00f, 0.00f, 1f, 0f
           )
         )
       }
       FilterType.BLACKLIGHT_FIX -> {
-        // Backlight / Blacklight Fix: Shadow lift (+32 offset), controlled highlights, skin-tone warming
+        // Black Light: lift shadows, crush warm reds, push violet / cyan.
         ColorMatrix(
           floatArrayOf(
-            1.08f, 0.00f, 0.00f, 0f, 28f,
-            0.00f, 1.05f, 0.00f, 0f, 24f,
-            0.00f, 0.00f, 1.02f, 0f, 20f,
+            0.78f, 0.06f, 0.22f, 0f, 10f,
+            0.04f, 0.88f, 0.18f, 0f, 8f,
+            0.16f, 0.10f, 1.28f, 0f, 22f,
             0.00f, 0.00f, 0.00f, 1f, 0f
           )
         )
       }
       FilterType.ENHANCE -> {
-        // AI Auto Enhance: Vibrant color pop, enhanced midtone contrast, balanced dynamic clarity
+        // Enhance: vibrance + midtone contrast. GPU also adds unsharp / local contrast.
         ColorMatrix(
           floatArrayOf(
-            1.16f, 0.02f, 0.00f, 0f, 8f,
-            0.01f, 1.18f, 0.01f, 0f, 8f,
-            0.00f, 0.02f, 1.15f, 0f, 10f,
+            1.14f, 0.04f, 0.00f, 0f, 6f,
+            0.02f, 1.16f, 0.02f, 0f, 6f,
+            0.00f, 0.04f, 1.12f, 0f, 8f,
             0.00f, 0.00f, 0.00f, 1f, 0f
           )
         )
       }
       FilterType.HDR -> {
-        // High Dynamic Range: Deep rich blacks, bright luminous highlights, punchy vivid color spectrum
+        // HDR look (SDR): deeper blacks, lifted mids, punchier chroma — not HDR10/HLG.
         ColorMatrix(
           floatArrayOf(
-            1.28f, 0.00f, 0.00f, 0f, -14f,
-            0.00f, 1.28f, 0.00f, 0f, -14f,
-            0.00f, 0.00f, 1.30f, 0f, -12f,
+            1.18f, 0.02f, 0.00f, 0f, -8f,
+            0.01f, 1.16f, 0.01f, 0f, -6f,
+            0.00f, 0.02f, 1.20f, 0f, -4f,
             0.00f, 0.00f, 0.00f, 1f, 0f
           )
         )
       }
       FilterType.GLOW -> {
-        // Dreamy Glow & Bloom: Raised black floor, diffused highlight luminance, ethereal pastel warmth
+        // Soft highlight warmth. Real bloom is the GPU uGlow pass.
         ColorMatrix(
           floatArrayOf(
-            1.08f, 0.05f, 0.02f, 0f, 18f,
-            0.02f, 1.06f, 0.02f, 0f, 16f,
-            0.02f, 0.04f, 1.10f, 0f, 20f,
+            1.06f, 0.04f, 0.02f, 0f, 12f,
+            0.02f, 1.04f, 0.02f, 0f, 10f,
+            0.02f, 0.03f, 1.08f, 0f, 14f,
             0.00f, 0.00f, 0.00f, 1f, 0f
           )
         )
@@ -275,12 +277,12 @@ object ColorFilterGenerator {
         )
       }
       FilterType.GOLDEN_AUTUMN -> {
-        // Golden Autumn: Rich seasonal amber, warm golden honey, auburn and foliage glow
+        // Golden: warm amber highlights, honey mids, restrained cyan in shadows.
         ColorMatrix(
           floatArrayOf(
-            1.26f, 0.08f, 0.00f, 0f, 26f,
-            0.04f, 1.12f, 0.00f, 0f, 12f,
-            0.00f, 0.00f, 0.76f, 0f, -16f,
+            1.22f, 0.10f, 0.00f, 0f, 22f,
+            0.05f, 1.08f, 0.00f, 0f, 8f,
+            0.00f, 0.02f, 0.78f, 0f, -12f,
             0.00f, 0.00f, 0.00f, 1f, 0f
           )
         )

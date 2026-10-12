@@ -2986,7 +2986,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
         toggled = true
         val current = clip.filter
         if (current == null || current.type == FilterType.NONE) {
-          clip.copy(filter = FilterSettings(type = FilterType.CINEMATIC, intensity = 1.0f))
+          clip.copy(filter = FilterSettings(type = FilterType.ENHANCE, intensity = 1.0f))
         } else {
           clip.copy(filter = FilterSettings(type = FilterType.NONE, intensity = 1.0f))
         }
@@ -2997,7 +2997,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
         toggled = true
         val current = clip.filter
         if (current == null || current.type == FilterType.NONE) {
-          clip.copy(filter = FilterSettings(type = FilterType.CINEMATIC, intensity = 1.0f))
+          clip.copy(filter = FilterSettings(type = FilterType.ENHANCE, intensity = 1.0f))
         } else {
           clip.copy(filter = FilterSettings(type = FilterType.NONE, intensity = 1.0f))
         }

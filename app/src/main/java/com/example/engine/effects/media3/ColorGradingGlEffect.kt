@@ -12,14 +12,16 @@ import com.example.domain.model.FilterSettings
 import com.example.domain.model.FilterType
 import com.example.domain.model.VideoAdjustments
 import com.example.engine.composition.ColorFilterGenerator
+import com.example.engine.effects.FilterCatalog
 import kotlin.math.abs
+import kotlin.math.pow
 
 /**
  * OpenGL-based Color Grading effect for Media3 Effect API.
  *
- * Applies professional cinema-grade color adjustments, film grain, vignette,
- * sharpness enhancement, and color matrix transformations (such as Teal & Orange,
- * Golden Autumn, Almond, Vintage, etc.) directly on video frames before they reach the encoder.
+ * Applies color adjustments, film grain, vignette, sharpness, highlight bloom,
+ * and the six selectable look presets (plus legacy matrices for saved projects)
+ * directly on video frames before they reach the encoder.
  */
 @OptIn(UnstableApi::class)
 class ColorGradingGlEffect(
@@ -42,6 +44,7 @@ class ColorGradingGlEffect(
   val hdrBoost: Float = 0f,           // 0f to 1f
   val colorFix: Float = 0f,           // 0f to 1f
   val denoise: Float = 0f,            // 0f to 1f (denoise + anti-flicker)
+  val glow: Float = 0f,               // 0f to 1f (highlight bloom for Glow look)
   val colorMatrix4x4: FloatArray? = null,
   val colorOffset: FloatArray? = null
 ) : GlEffect {
@@ -78,6 +81,7 @@ class ColorGradingGlEffect(
     hdrBoost = hdrBoost,
     colorFix = colorFix,
     denoise = denoise,
+    glow = glow,
     colorMatrix4x4 = colorMatrix4x4,
     colorOffset = colorOffset
   )
@@ -102,6 +106,7 @@ class ColorGradingGlEffect(
         }
       }
 
+      val extras = FilterCatalog.spatialExtras(filterSettings)
       return ColorGradingGlEffect(
         brightness = adjustments.brightness,
         contrast = adjustments.contrast,
@@ -115,13 +120,14 @@ class ColorGradingGlEffect(
         blacks = adjustments.blacks,
         vignette = adjustments.vignette,
         grain = adjustments.grain,
-        sharpness = adjustments.sharpness,
-        clarity = (adjustments.clarity + adjustments.superClarity).coerceIn(0f, 1f),
+        sharpness = (adjustments.sharpness + extras.sharpness).coerceIn(0f, 1f),
+        clarity = (adjustments.clarity + adjustments.superClarity + extras.clarity).coerceIn(0f, 1f),
         fade = adjustments.fade,
-        autoEnhance = adjustments.autoEnhance,
-        hdrBoost = (adjustments.hdrBoost + adjustments.colorCorrect).coerceIn(0f, 1f),
+        autoEnhance = (adjustments.autoEnhance + extras.enhance).coerceIn(0f, 1f),
+        hdrBoost = (adjustments.hdrBoost + adjustments.colorCorrect + extras.hdrLook).coerceIn(0f, 1f),
         colorFix = adjustments.colorFix,
         denoise = (adjustments.denoise + adjustments.antiFlicker * 0.5f).coerceIn(0f, 1f),
+        glow = extras.glow.coerceIn(0f, 1f),
         colorMatrix4x4 = mat4x4,
         colorOffset = offset
       )
@@ -194,6 +200,7 @@ uniform float uAutoEnhance;
 uniform float uHdrBoost;
 uniform float uColorFix;
 uniform float uDenoise;
+uniform float uGlow;
 uniform float uVignette;
 uniform float uGrain;
 uniform float uGrainSeed;
@@ -241,9 +248,8 @@ void main() {
     color.rgb += (color.rgb - cb) * uClarity * 1.5 * (0.35 + 0.65 * cMid);
   }
 
-  // 2. Exposure & Brightness
-  float totalBright = uBrightness + uExposure * 0.5;
-  color.rgb += vec3(totalBright);
+  // 2. Exposure & Brightness (same photographic 2^EV as GpuShaders export)
+  color.rgb = color.rgb * pow(2.0, uExposure) + vec3(uBrightness);
 
   // 3. Contrast
   if (abs(uContrast - 1.0) > 0.001) {
@@ -256,14 +262,11 @@ void main() {
     color.rgb = mix(vec3(lum), color.rgb, uSaturation);
   }
 
-  // 5. Temperature & Tint
+  // 5. Temperature & Tint (same coefficients as GpuShaders export)
   if (abs(uTemperature) > 0.001 || abs(uTint) > 0.001) {
-    vec3 tempTint = vec3(
-      uTemperature * 0.12,
-      uTint * 0.08,
-      -uTemperature * 0.12
-    );
-    color.rgb += tempTint;
+    color.r += uTemperature * 0.15 + uTint * 0.08;
+    color.g -= uTint * 0.12;
+    color.b -= uTemperature * 0.15 - uTint * 0.08;
   }
 
   // 6. Highlights & Shadows
@@ -307,6 +310,18 @@ void main() {
   }
   if (uFade > 0.01) {
     color.rgb = mix(color.rgb, vec3(0.5), uFade * 0.55);
+  }
+
+  // 6d. Glow: real highlight bloom (not a colour-only lift)
+  if (uGlow > 0.01) {
+    vec2 gs = uTexelSize * 3.5;
+    vec3 blur = texture2D(uTexSampler, clamp(uv + vec2(-gs.x, -gs.y), 0.0, 1.0)).rgb * 0.15
+              + texture2D(uTexSampler, clamp(uv + vec2( gs.x, -gs.y), 0.0, 1.0)).rgb * 0.15
+              + texture2D(uTexSampler, clamp(uv + vec2(-gs.x,  gs.y), 0.0, 1.0)).rgb * 0.15
+              + texture2D(uTexSampler, clamp(uv + vec2( gs.x,  gs.y), 0.0, 1.0)).rgb * 0.15
+              + texture2D(uTexSampler, uv).rgb * 0.40;
+    vec3 bloom = max(blur - 0.35, 0.0) * 1.6;
+    color.rgb += bloom * uGlow;
   }
 
   // 7. Color Matrix transformation
@@ -363,6 +378,7 @@ void main() {
       program.setFloatUniform("uHdrBoost", snapshot.hdrBoost)
       program.setFloatUniform("uColorFix", snapshot.colorFix)
       program.setFloatUniform("uDenoise", snapshot.denoise)
+      program.setFloatUniform("uGlow", snapshot.glow)
       program.setFloatUniform("uVignette", snapshot.vignette)
       program.setFloatUniform("uGrain", snapshot.grain)
       program.setFloatUniform("uGrainSeed", (presentationTimeUs / 1000L % 10000).toFloat() / 1000f)
@@ -437,6 +453,7 @@ data class ColorGradingSnapshot(
   val hdrBoost: Float = 0f,
   val colorFix: Float = 0f,
   val denoise: Float = 0f,
+  val glow: Float = 0f,
   val colorMatrix4x4: FloatArray? = null,
   val colorOffset: FloatArray? = null
 ) {
@@ -459,7 +476,8 @@ data class ColorGradingSnapshot(
       autoEnhance < 0.01f &&
       hdrBoost < 0.01f &&
       colorFix < 0.01f &&
-      denoise < 0.01f
+      denoise < 0.01f &&
+      glow < 0.01f
     return isDefaultAdjustments && colorMatrix4x4 == null
   }
 
@@ -472,10 +490,10 @@ data class ColorGradingSnapshot(
     var cr = r
     var cg = g
     var cb = b
-    val totalBright = brightness + exposure * 0.5f
-    cr += totalBright
-    cg += totalBright
-    cb += totalBright
+    val expScale = 2.0.pow(exposure.toDouble()).toFloat()
+    cr = cr * expScale + brightness
+    cg = cg * expScale + brightness
+    cb = cb * expScale + brightness
     if (abs(contrast - 1f) > 0.001f) {
       cr = (cr - 0.5f) * contrast + 0.5f
       cg = (cg - 0.5f) * contrast + 0.5f
@@ -488,9 +506,9 @@ data class ColorGradingSnapshot(
       cb = lum + (cb - lum) * saturation
     }
     if (abs(temperature) > 0.001f || abs(tint) > 0.001f) {
-      cr += temperature * 0.12f
-      cg += tint * 0.08f
-      cb -= temperature * 0.12f
+      cr += temperature * 0.15f + tint * 0.08f
+      cg -= tint * 0.12f
+      cb -= temperature * 0.15f - tint * 0.08f
     }
     if (abs(highlights) > 0.001f || abs(shadows) > 0.001f) {
       val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
