@@ -15,13 +15,12 @@ import android.view.Surface
 import androidx.core.net.toUri
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
-import com.example.engine.composition.ComposedFrame
+import com.example.engine.composition.CompositionRenderGraph
 import com.example.engine.composition.VideoCompositionEngine
 import com.example.engine.composition.gpu.EglCore
 import com.example.engine.composition.gpu.GpuCompositionRenderer
 import com.example.engine.composition.gpu.HardwareVideoTextureSource
 import com.example.engine.composition.gpu.OffscreenSurface
-import com.example.engine.composition.gpu.TransitionSourceTexture
 import com.example.engine.composition.gpu.WindowSurface
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,8 +36,8 @@ import kotlin.math.roundToInt
 
 /**
  * Single-clock GPU preview: every video layer (main track, transition sources, overlays) is decoded
- * to the exact source time for the master clock position and blended in one
- * [GpuCompositionRenderer.render] call, the same renderer and frame evaluation the export uses.
+ * to the exact source time for the master clock position and blended through
+ * [com.example.engine.composition.CompositionRenderGraph], the same assembly the export uses.
  *
  * Threading: all GL, decoder and renderer state lives on one GL thread driven by its own
  * Choreographer. [positionMs] and [isPlaying] are read from that thread and must be thread-safe.
@@ -222,20 +221,24 @@ class PreviewCompositor(
     val tl = timeline
     uploadLoadedImages(rend)
 
-    val plan = PreviewFramePlan.of(composition.evaluateFrame(tl, pos))
+    val evaluated = composition.evaluateFrame(tl, pos)
+    val plan = PreviewFramePlan.of(evaluated)
     val keep = PreviewLayerPlanner.videoDecoderPlan(tl, pos, plan.decodeClipIds, isPlaying())
     PreviewLayerPlanner.evictions(decoders.keys.toList(), keep).forEach(::releaseDecoder)
 
-    val textures = HashMap<String, TransitionSourceTexture>()
-    val decodedSizes = HashMap<String, Pair<Int, Int>>()
+    val decoded = HashMap<String, CompositionRenderGraph.ResolvedLayer>()
     for (req in plan.decodes) {
-      if (req.clip.id !in keep || req.clip.id in textures) continue
+      if (req.clip.id !in keep || req.clip.id in decoded) continue
       val source = decoderFor(req.clip) ?: continue
       try {
         if (source.decodeFrame(req.sourceUs, cancelDecode)) {
-          val matrix = source.updateTexImage().copyOf()
-          textures[req.clip.id] = TransitionSourceTexture(source.oesTextureId, true, matrix)
-          decodedSizes[req.clip.id] = source.width to source.height
+          decoded[req.clip.id] = CompositionRenderGraph.ResolvedLayer(
+            textureId = source.oesTextureId,
+            isOes = true,
+            texMatrix = source.updateTexImage().copyOf(),
+            width = source.width,
+            height = source.height
+          )
         }
       } catch (e: IllegalStateException) {
         Log.w(TAG, "Decoder failed for ${req.clip.name}: ${e.message}")
@@ -245,52 +248,21 @@ class PreviewCompositor(
     for (uri in plan.imageUris) requestImage(uri)
     prerollNext(tl, keep)
 
-    val frame = withDecodedSizes(plan.frame, decodedSizes)
-    val main = frame.activeClip
-    val mainTexture = main?.let { textures[it.id] ?: imageTextures[it.uri]?.let { id -> TransitionSourceTexture(id, false, null) } }
-
-    fun transitionSource(clip: VideoClip): TransitionSourceTexture? =
-      textures[clip.id] ?: imageTextures[clip.uri]?.let { TransitionSourceTexture(it, false, null) }
-
-    val overlayTextures = HashMap<String, Int>()
-    val overlayMatrices = HashMap<String, FloatArray>()
-    for (overlay in frame.activeOverlays) {
-      val tex = transitionSource(overlay.clip) ?: continue
-      overlayTextures[overlay.clip.id] = tex.textureId
-      tex.texMatrix?.let { overlayMatrices[overlay.clip.id] = it }
-    }
-
-    val transition = frame.activeTransition?.takeIf { it.type != com.example.domain.model.TransitionType.NONE }
-    rend.render(
-      frame = frame,
-      mainTextureId = mainTexture?.textureId ?: 0,
-      isMainOes = mainTexture?.isOes ?: false,
-      mainTexMatrix = mainTexture?.texMatrix,
-      overlayTextures = overlayTextures,
-      overlayTexMatrices = overlayMatrices,
+    val assembled = CompositionRenderGraph.assemble(
+      frame = evaluated,
+      decoded = decoded,
+      imageTextureId = { uri -> imageTextures[uri] ?: 0 },
+      drawTextAndStickers = false
+    )
+    CompositionRenderGraph.present(
+      renderer = rend,
+      assembled = assembled,
       viewportWidth = bufferWidth,
       viewportHeight = bufferHeight,
-      timelineAdjustments = tl.adjustments,
-      timelineFilter = tl.filter,
+      adjustments = tl.adjustments,
+      filter = tl.filter,
       chromaKey = tl.chromaKey,
-      flipYForEncoder = false,
-      flipXForEncoder = false,
-      transitionBefore = transition?.let { transitionSource(it.clipBefore) },
-      transitionAfter = transition?.let { transitionSource(it.clipAfter) },
-      deterministicMasks = false
-    )
-  }
-
-  /** The renderer fits layers by their pixel size; clips imported without metadata report 0x0. */
-  private fun withDecodedSizes(frame: ComposedFrame, sizes: Map<String, Pair<Int, Int>>): ComposedFrame {
-    fun VideoClip.sized(): VideoClip {
-      if (width > 0 && height > 0) return this
-      val (w, h) = sizes[id] ?: return this
-      return if (w > 0 && h > 0) copy(width = w, height = h) else this
-    }
-    return frame.copy(
-      activeClip = frame.activeClip?.sized(),
-      activeOverlays = frame.activeOverlays.map { it.copy(clip = it.clip.sized()) }
+      presentation = CompositionRenderGraph.FramePresentation.PREVIEW
     )
   }
 
