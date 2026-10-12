@@ -35,8 +35,8 @@ import kotlin.math.max
 import kotlin.math.roundToInt
 
 /**
- * Single-clock GPU preview: every video layer (main track, transition sources, overlays) is decoded
- * to the exact source time for the master clock position and blended through
+ * Single-clock GPU preview: every video layer (main track, transition sources, overlays) and the
+ * text layers are drawn at the master clock position and blended through
  * [com.example.engine.composition.CompositionRenderGraph], the same assembly the export uses.
  *
  * Threading: all GL, decoder and renderer state lives on one GL thread driven by its own
@@ -252,7 +252,8 @@ class PreviewCompositor(
       frame = evaluated,
       decoded = decoded,
       imageTextureId = { uri -> imageTextures[uri] ?: 0 },
-      drawTextAndStickers = false
+      drawText = true,
+      drawStickers = false
     )
     CompositionRenderGraph.present(
       renderer = rend,

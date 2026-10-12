@@ -850,7 +850,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
               frame = frame,
               decoded = decoded,
               imageTextureId = { uri -> imageTextures[uri] ?: 0 },
-              drawTextAndStickers = true
+              drawText = true,
+              drawStickers = true
             )
             val composeStart = System.nanoTime()
             val rend = gpuRenderer ?: throw IllegalStateException("GPU renderer is not initialised")

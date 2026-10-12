@@ -39,7 +39,7 @@ data class PreviewFramePlan(
     /**
      * Decode and image requests for [frame]. Source times come from [CompositionRenderGraph.layersOf],
      * the same list export samples. The side of a transition that is the main clip is not requested
-     * again. Text and stickers are left out of [PreviewFramePlan.frame]: Compose still draws them.
+     * again. Text is not a decode request: the shared graph rasterises it from the evaluated frame.
      */
     fun of(frame: ComposedFrame): PreviewFramePlan {
       val previewFrame = frame.copy(activeTexts = emptyList(), activeStickers = emptyList())

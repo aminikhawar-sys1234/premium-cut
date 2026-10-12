@@ -146,7 +146,7 @@ class VideoCompositionEngine(private val context: Context) {
       val tex = overlayTextures[overlay.clip.id] ?: continue
       if (tex > 0) decoded[overlay.clip.id] = CompositionRenderGraph.ResolvedLayer(tex, overlay.clip.isVideo, null, 0, 0)
     }
-    val assembled = CompositionRenderGraph.assemble(frame, decoded, imageTextureId = { 0 }, drawTextAndStickers = true)
+    val assembled = CompositionRenderGraph.assemble(frame, decoded, imageTextureId = { 0 }, drawText = true, drawStickers = true)
     CompositionRenderGraph.present(
       renderer = gpuRenderer,
       assembled = assembled,
