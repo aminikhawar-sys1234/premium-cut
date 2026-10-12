@@ -32,22 +32,21 @@ class VideoFiltersTest {
   fun testAllRequestedFilterTypesExist() {
     val requestedNames = listOf(
       "4K",
-      "Blacklight Fix",
+      "Black Light",
       "Enhance",
       "HDR",
       "Glow",
-      "Focus",
-      "Quality Restoration",
-      "Golden Autumn",
-      "Oceanic View",
-      "Almond",
-      "Sunlight Orange Blue"
+      "Golden"
     )
 
     val actualDisplayNames = FilterType.values().map { it.displayName }
     for (name in requestedNames) {
       assertTrue("Filter $name should be present in FilterType", actualDisplayNames.contains(name))
     }
+    assertEquals(
+      requestedNames.toSet(),
+      com.example.engine.effects.FilterCatalog.SELECTABLE.map { it.displayName }.toSet()
+    )
   }
 
   @Test

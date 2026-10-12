@@ -89,6 +89,7 @@ object GpuShaders {
       uniform float uHdrBoost;
       uniform float uColorFix;
       uniform float uDenoise;
+      uniform float uGlow;
       uniform float uVignette;
       uniform float uGrain;
       uniform float uSharpness;
@@ -336,6 +337,18 @@ object GpuShaders {
         }
         if (uFade > 0.01) {
           color.rgb = mix(color.rgb, vec3(0.5), uFade * 0.55);
+        }
+
+        // 6d. Glow bloom (same taps as ColorGradingGlEffect)
+        if (uGlow > 0.01) {
+          vec2 gs = uTexelSize * 3.5;
+          vec3 blur = texture2D(uTexture, clamp(clampedCoord + vec2(-gs.x, -gs.y), 0.0, 1.0)).rgb * 0.15
+                    + texture2D(uTexture, clamp(clampedCoord + vec2( gs.x, -gs.y), 0.0, 1.0)).rgb * 0.15
+                    + texture2D(uTexture, clamp(clampedCoord + vec2(-gs.x,  gs.y), 0.0, 1.0)).rgb * 0.15
+                    + texture2D(uTexture, clamp(clampedCoord + vec2( gs.x,  gs.y), 0.0, 1.0)).rgb * 0.15
+                    + texture2D(uTexture, clampedCoord).rgb * 0.40;
+          vec3 bloom = max(blur - 0.35, 0.0) * 1.6;
+          color.rgb += bloom * uGlow;
         }
         
         // 7. Color Matrix Filter

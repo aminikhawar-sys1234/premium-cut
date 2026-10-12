@@ -18,6 +18,7 @@ import com.example.engine.composition.ComposedText
 import com.example.engine.composition.StickerDisplayMetrics
 import com.example.engine.composition.StickerLayerRenderer
 import com.example.engine.composition.VideoEffectRenderer
+import com.example.engine.effects.FilterCatalog
 import com.example.engine.text.Text3DGlRenderer
 import com.example.engine.text.TextLayerRenderer
 import java.nio.ByteBuffer
@@ -1619,12 +1620,14 @@ class GpuCompositionRenderer(private val context: Context) {
     val uHdrBoostHandle = GLES20.glGetUniformLocation(program, "uHdrBoost")
     val uColorFixHandle = GLES20.glGetUniformLocation(program, "uColorFix")
     val uDenoiseHandle = GLES20.glGetUniformLocation(program, "uDenoise")
+    val uGlowHandle = GLES20.glGetUniformLocation(program, "uGlow")
     val uVignetteHandle = GLES20.glGetUniformLocation(program, "uVignette")
     val uGrainHandle = GLES20.glGetUniformLocation(program, "uGrain")
     val uSharpnessHandle = GLES20.glGetUniformLocation(program, "uSharpness")
     val uClarityHandle = GLES20.glGetUniformLocation(program, "uClarity")
     val uTexelSizeHandle = GLES20.glGetUniformLocation(program, "uTexelSize")
 
+    val extras = FilterCatalog.spatialExtras(filter)
     if (uBrightnessHandle >= 0) GLES20.glUniform1f(uBrightnessHandle, adjustments.brightness)
     if (uContrastHandle >= 0) GLES20.glUniform1f(uContrastHandle, adjustments.contrast)
     if (uSaturationHandle >= 0) GLES20.glUniform1f(uSaturationHandle, adjustments.saturation)
@@ -1636,14 +1639,15 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uWhitesHandle >= 0) GLES20.glUniform1f(uWhitesHandle, adjustments.whites)
     if (uBlacksHandle >= 0) GLES20.glUniform1f(uBlacksHandle, adjustments.blacks)
     if (uFadeHandle >= 0) GLES20.glUniform1f(uFadeHandle, adjustments.fade)
-    if (uAutoEnhanceHandle >= 0) GLES20.glUniform1f(uAutoEnhanceHandle, adjustments.autoEnhance)
-    if (uHdrBoostHandle >= 0) GLES20.glUniform1f(uHdrBoostHandle, (adjustments.hdrBoost + adjustments.colorCorrect).coerceIn(0f, 1f))
+    if (uAutoEnhanceHandle >= 0) GLES20.glUniform1f(uAutoEnhanceHandle, (adjustments.autoEnhance + extras.enhance).coerceIn(0f, 1f))
+    if (uHdrBoostHandle >= 0) GLES20.glUniform1f(uHdrBoostHandle, (adjustments.hdrBoost + adjustments.colorCorrect + extras.hdrLook).coerceIn(0f, 1f))
     if (uColorFixHandle >= 0) GLES20.glUniform1f(uColorFixHandle, adjustments.colorFix)
     if (uDenoiseHandle >= 0) GLES20.glUniform1f(uDenoiseHandle, (adjustments.denoise + adjustments.antiFlicker * 0.5f).coerceIn(0f, 1f))
+    if (uGlowHandle >= 0) GLES20.glUniform1f(uGlowHandle, extras.glow.coerceIn(0f, 1f))
     if (uVignetteHandle >= 0) GLES20.glUniform1f(uVignetteHandle, adjustments.vignette)
     if (uGrainHandle >= 0) GLES20.glUniform1f(uGrainHandle, adjustments.grain)
-    if (uSharpnessHandle >= 0) GLES20.glUniform1f(uSharpnessHandle, adjustments.sharpness)
-    if (uClarityHandle >= 0) GLES20.glUniform1f(uClarityHandle, (adjustments.clarity + adjustments.superClarity).coerceIn(0f, 1f))
+    if (uSharpnessHandle >= 0) GLES20.glUniform1f(uSharpnessHandle, (adjustments.sharpness + extras.sharpness).coerceIn(0f, 1f))
+    if (uClarityHandle >= 0) GLES20.glUniform1f(uClarityHandle, (adjustments.clarity + adjustments.superClarity + extras.clarity).coerceIn(0f, 1f))
     if (uTexelSizeHandle >= 0) GLES20.glUniform2f(uTexelSizeHandle, 1.0f / max(1, viewportWidth), 1.0f / max(1, viewportHeight))
 
     val uChromaEnabledHandle = GLES20.glGetUniformLocation(program, "uChromaEnabled")

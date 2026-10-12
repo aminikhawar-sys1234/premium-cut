@@ -1176,34 +1176,34 @@ data class VideoAdjustments(
 fun VideoClip?.effectiveAdjustments(timeline: Timeline): VideoAdjustments =
   this?.adjustments ?: timeline.adjustments
 
-enum class FilterType(val displayName: String, val category: String = "Pro Enhancements") {
+enum class FilterType(val displayName: String, val category: String = "Looks") {
   NONE("Original", "All"),
-  FOUR_K("4K", "Pro Enhancements"),
-  BLACKLIGHT_FIX("Blacklight Fix", "Pro Enhancements"),
-  ENHANCE("Enhance", "Pro Enhancements"),
-  HDR("HDR", "Pro Enhancements"),
-  GLOW("Glow", "Pro Enhancements"),
-  FOCUS("Focus", "Pro Enhancements"),
-  QUALITY_RESTORATION("Quality Restoration", "Pro Enhancements"),
-  GOLDEN_AUTUMN("Golden Autumn", "Cinematic & Nature"),
-  OCEANIC_VIEW("Oceanic View", "Cinematic & Nature"),
-  ALMOND("Almond", "Aesthetic Looks"),
-  SUNLIGHT_ORANGE_BLUE("Sunlight Orange Blue", "Cinematic & Nature"),
-  
-  // Classic / Creative presets
-  CINEMATIC("Cinematic Teal & Orange", "Cinematic & Nature"),
-  WARM("Golden Warm", "Aesthetic Looks"),
-  COOL("Arctic Cool", "Aesthetic Looks"),
-  PORTRAIT("Portrait Soft", "Aesthetic Looks"),
-  BLACK_AND_WHITE("Black & White", "Aesthetic Looks"),
-  VINTAGE("Vintage 1970s", "Aesthetic Looks"),
-  SATURATION("Saturation Boost", "Pro Enhancements"),
-  FILM("35mm Film Grain", "Cinematic & Nature"),
-  RETRO("80s Retro Synth", "Aesthetic Looks"),
-  NATURE("Vibrant Nature", "Cinematic & Nature"),
-  FOOD("Rich Warm Food", "Aesthetic Looks"),
-  TRAVEL("Mediterranean Travel", "Cinematic & Nature"),
-  SOCIAL_MEDIA("Hyper Vivid", "Pro Enhancements")
+  FOUR_K("4K", "Looks"),
+  BLACKLIGHT_FIX("Black Light", "Looks"),
+  ENHANCE("Enhance", "Looks"),
+  HDR("HDR", "Looks"),
+  GLOW("Glow", "Looks"),
+  FOCUS("Focus", "Legacy"),
+  QUALITY_RESTORATION("Quality Restoration", "Legacy"),
+  GOLDEN_AUTUMN("Golden", "Looks"),
+  OCEANIC_VIEW("Oceanic View", "Legacy"),
+  ALMOND("Almond", "Legacy"),
+  SUNLIGHT_ORANGE_BLUE("Sunlight Orange Blue", "Legacy"),
+  // Legacy presets: kept so saved projects still deserialize and render.
+  // They are not offered in the Filters panel.
+  CINEMATIC("Cinematic Teal & Orange", "Legacy"),
+  WARM("Golden Warm", "Legacy"),
+  COOL("Arctic Cool", "Legacy"),
+  PORTRAIT("Portrait Soft", "Legacy"),
+  BLACK_AND_WHITE("Black & White", "Legacy"),
+  VINTAGE("Vintage 1970s", "Legacy"),
+  SATURATION("Saturation Boost", "Legacy"),
+  FILM("35mm Film Grain", "Legacy"),
+  RETRO("80s Retro Synth", "Legacy"),
+  NATURE("Vibrant Nature", "Legacy"),
+  FOOD("Rich Warm Food", "Legacy"),
+  TRAVEL("Mediterranean Travel", "Legacy"),
+  SOCIAL_MEDIA("Hyper Vivid", "Legacy")
 }
 
 data class FilterSettings(

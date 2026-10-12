@@ -274,8 +274,11 @@ class FilterEngineForensicTest {
   }
 
   @Test
-  fun saturationExistsInShaderButHasNoDedicatedAdjustSlider() {
-    val snapshot = ColorGradingSnapshot.from(VideoAdjustments(saturation = 1.8f), FilterSettings())
+  fun saturationExposureAndTintReachSharedShaderMath() {
+    val snapshot = ColorGradingSnapshot.from(
+      VideoAdjustments(saturation = 1.8f, exposure = 0.35f, tint = -0.4f),
+      FilterSettings()
+    )
     val identity = ColorGradingSnapshot.from(VideoAdjustments(), FilterSettings())
     assertTrue(
       pixelDelta(
@@ -284,5 +287,8 @@ class FilterEngineForensicTest {
       ) > 0.01f
     )
     assertTrue(ColorGradingGlEffect.COLOR_GRADING_FRAGMENT_SHADER.contains("uSaturation"))
+    assertTrue(ColorGradingGlEffect.COLOR_GRADING_FRAGMENT_SHADER.contains("pow(2.0, uExposure)"))
+    assertTrue(ColorGradingGlEffect.COLOR_GRADING_FRAGMENT_SHADER.contains("uTint"))
+    assertTrue(ColorGradingGlEffect.COLOR_GRADING_FRAGMENT_SHADER.contains("uGlow"))
   }
 }
