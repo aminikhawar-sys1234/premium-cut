@@ -22,9 +22,7 @@ open class EglSurfaceBase(protected val eglCore: EglCore) {
     return eglCore.swapBuffers(eglSurface)
   }
 
-  fun setPresentationTime(nsecs: Long) {
-    eglCore.setPresentationTime(eglSurface, nsecs)
-  }
+  fun setPresentationTime(nsecs: Long): Boolean = eglCore.setPresentationTime(eglSurface, nsecs)
 
   open fun release() {
     eglCore.releaseSurface(eglSurface)
