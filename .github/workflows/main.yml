@@ -47,6 +47,14 @@ jobs:
       - name: Run Unit Tests
         run: ./gradlew test --stacktrace
 
+      # Preinstall CMake so parallel ABI configure tasks do not race AGP's
+      # auto-download (that race produced a corrupt ZIP and failed assembleDebug).
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install CMake 3.22.1
+        run: sdkmanager --install "cmake;3.22.1"
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 
