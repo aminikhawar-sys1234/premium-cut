@@ -4,6 +4,7 @@ import android.graphics.ColorMatrix
 import com.example.domain.model.FilterSettings
 import com.example.domain.model.FilterType
 import com.example.domain.model.VideoAdjustments
+import kotlin.math.pow
 
 object ColorFilterGenerator {
 
@@ -25,7 +26,7 @@ object ColorFilterGenerator {
     result.postConcat(satMatrix)
 
     // 2. Brightness & Exposure (photographic 2^EV scale, same as the GPU shader)
-    val expScale = kotlin.math.pow(2.0, adjustments.exposure.toDouble()).toFloat().coerceIn(0.25f, 4f)
+    val expScale = 2.0.pow(adjustments.exposure.toDouble()).toFloat().coerceIn(0.25f, 4f)
     val brightOffset = adjustments.brightness * 255f
     val brightArray = floatArrayOf(
       expScale, 0f, 0f, 0f, brightOffset,
