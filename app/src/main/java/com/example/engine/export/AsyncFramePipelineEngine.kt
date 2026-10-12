@@ -9,6 +9,7 @@ import android.media.MediaFormat
 import android.media.MediaMetadataRetriever
 import android.media.MediaMuxer
 import android.net.Uri
+import android.opengl.EGL14
 import android.opengl.GLES20
 import android.os.Build
 import android.os.Bundle
@@ -570,7 +571,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       outputFile.parentFile?.mkdirs()
       if (outputFile.exists()) outputFile.delete()
       val localMuxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
-      val coordinator = MuxerCoordinator(localMuxer, aenc != null)
+      val coordinator = MuxerCoordinator(localMuxer, aenc != null, videoMime = plan.mime)
       muxerCoordinator = coordinator
       coordinator.setOrientationHint(ExportOrientationPolicy.MUXER_ORIENTATION_HINT_DEGREES)
 
@@ -605,11 +606,19 @@ class AsyncFramePipelineEngine(private val context: Context) {
                   drainedSomething = true
                   lastOutputNs.set(System.nanoTime())
                   val isEos = (vInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                  if ((vInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && vInfo.size > 0) {
+                  // CODEC_CONFIG buffers go to the coordinator too: some encoders put the first IDR
+                  // picture in the same buffer as SPS/PPS, and dropping it leaves no decodable first frame.
+                  if (vInfo.size > 0) {
                     val out = videoEncoder.getOutputBuffer(vIndex)
                       ?: throw IllegalStateException("Video encoder returned a null output buffer")
-                    coordinator.writeVideoSample(out, vInfo)
-                    metrics.encodedFrames.incrementAndGet()
+                    when (coordinator.writeVideoSample(out, vInfo)) {
+                      MuxerCoordinator.VideoSampleResult.WRITTEN -> metrics.encodedFrames.incrementAndGet()
+                      MuxerCoordinator.VideoSampleResult.DROPPED_BEFORE_KEYFRAME -> {
+                        metrics.encodedFrames.incrementAndGet()
+                        requestSyncFrame(videoEncoder, "first encoder output was not a key frame")
+                      }
+                      else -> Unit
+                    }
                   }
                   videoEncoder.releaseOutputBuffer(vIndex, false)
                   if (isEos) {
@@ -777,11 +786,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             while (isPaused() && !stop.get()) Thread.sleep(40)
             if (stop.get()) break
 
-            if (frameIndex == 0L) {
-              try {
-                videoEncoder.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
-              } catch (_: Exception) {}
-            }
+            if (frameIndex == 0L) requestSyncFrame(videoEncoder, "first frame")
 
             val ptsUs = (frameIndex * 1_000_000L) / fps
             val timelinePosMs = (ptsUs / 1000L).coerceAtMost(durationMs - 1L)
@@ -950,7 +955,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
             if (targetPtsNs <= lastEglPtsNs) targetPtsNs = lastEglPtsNs + 1000L
             lastEglPtsNs = targetPtsNs
             val win = windowSurface ?: throw IllegalStateException("Encoder window surface is not initialised")
-            win.setPresentationTime(targetPtsNs)
+            // Without a valid EGL timestamp the encoder stamps frames with the swap time, which breaks
+            // the 0-based monotonic PTS the muxer and the verifier rely on.
+            if (!win.setPresentationTime(targetPtsNs)) {
+              throw ExportPipelineException(
+                "eglPresentationTimeANDROID failed for frame $frameIndex (EGL error 0x${Integer.toHexString(EGL14.eglGetError())})."
+              )
+            }
             val swapStart = System.nanoTime()
             if (!win.swapBuffers()) {
               throw ExportPipelineException("Submitting frame $frameIndex to the video encoder failed (eglSwapBuffers).")
@@ -1057,6 +1068,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
       if (!outputFile.exists() || outputFile.length() <= 0L) {
         throw ExportPipelineException("The exported file is missing or empty.")
       }
+      if (!coordinator.hasWrittenKeyFrame) {
+        throw ExportPipelineException("The video encoder never produced a key frame; the exported file could not be decoded.")
+      }
+      if (coordinator.droppedLeadingVideoSamples > 0L) {
+        Log.w(tag, "Dropped ${coordinator.droppedLeadingVideoSamples} non-key frame(s) the encoder emitted before its first key frame")
+      }
       if (coordinator.timestampCorrections > 0L) {
         Log.w(tag, "Muxer corrected ${coordinator.timestampCorrections} non-monotonic timestamp(s)")
       }
@@ -1110,6 +1127,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
       glThread.quitSafely()
       decoderThread.quitSafely()
+    }
+  }
+
+  private fun requestSyncFrame(encoder: MediaCodec, reason: String) {
+    try {
+      encoder.setParameters(Bundle().apply { putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0) })
+    } catch (e: Exception) {
+      Log.w(tag, "Sync frame request failed ($reason): ${e.message}")
     }
   }
 
