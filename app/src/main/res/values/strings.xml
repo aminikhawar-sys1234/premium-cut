@@ -20,6 +20,8 @@
     <string name="auto_save">Auto Save</string>
     <string name="save_projects_automatically">Save projects automatically</string>
     <string name="manage_app_notifications">Manage app notifications</string>
+    <string name="gpu_preview_compositor">GPU preview compositor (beta)</string>
+    <string name="gpu_preview_compositor_desc">Blend all tracks on one clock with the export renderer</string>
     <string name="video_quality">Video Quality</string>
     <string name="choose_default_video_quality">Choose default video quality</string>
     <string name="help_and_support">Help &amp; Support</string>

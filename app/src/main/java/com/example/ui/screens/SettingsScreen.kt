@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.sp
 import com.example.BuildConfig
 import com.example.R
 import com.example.domain.StudioPreferencesManager
+import com.example.engine.preview.PreviewCompositorSettings
 import com.example.ui.AppScreen
 import com.example.ui.StudioViewModel
 import com.example.ui.components.home.PremierHeader
@@ -40,6 +41,7 @@ fun SettingsScreen(
 ) {
   val context = LocalContext.current
   val settings by viewModel.settings.collectAsState()
+  remember { PreviewCompositorSettings.load(context) }
 
   var showLanguageDialog by remember { mutableStateOf(false) }
   var showThemeDialog by remember { mutableStateOf(false) }
@@ -120,6 +122,18 @@ fun SettingsScreen(
               checked = settings.notificationsEnabled,
               onCheckedChange = { StudioPreferencesManager.updateNotifications(it) },
               testTag = "settings_notifications_switch"
+            )
+
+            HorizontalDivider(color = LightDivider, modifier = Modifier.padding(horizontal = 16.dp))
+
+            val gpuPreviewEnabled by PreviewCompositorSettings.enabled.collectAsState()
+            SettingsSwitchRow(
+              icon = Icons.Outlined.Layers,
+              title = stringResource(R.string.gpu_preview_compositor),
+              subtitle = stringResource(R.string.gpu_preview_compositor_desc),
+              checked = gpuPreviewEnabled,
+              onCheckedChange = { PreviewCompositorSettings.setEnabled(context, it) },
+              testTag = "settings_gpu_preview_switch"
             )
 
             HorizontalDivider(color = LightDivider, modifier = Modifier.padding(horizontal = 16.dp))
