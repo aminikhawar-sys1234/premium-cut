@@ -92,7 +92,8 @@ class CompositionRenderGraphTest {
       frame = evaluated,
       decoded = mapOf("a" to layer(11, w = 1280, h = 720), "pip" to layer(22, oes = false, w = 640, h = 360)),
       imageTextureId = { 0 },
-      drawTextAndStickers = true
+      drawText = true,
+      drawStickers = true
     )
     assertEquals(11, assembled.mainTextureId)
     assertTrue(assembled.isMainOes)
@@ -110,11 +111,11 @@ class CompositionRenderGraphTest {
   fun stillImagesComeFromTheImageLookupAndVideoMissesStayEmpty() {
     val photo = clip("photo", 0, 3000, uri = "content://media/photo.jpg", isVideo = false)
     val video = clip("vid", 0, 3000)
-    val photoFrame = CompositionRenderGraph.assemble(frame(0, photo), emptyMap(), { uri -> if (uri.endsWith("jpg")) 9 else 0 }, true)
+    val photoFrame = CompositionRenderGraph.assemble(frame(0, photo), emptyMap(), { uri -> if (uri.endsWith("jpg")) 9 else 0 }, drawText = true, drawStickers = true)
     assertEquals(9, photoFrame.mainTextureId)
     assertFalse(photoFrame.isMainOes)
 
-    val missed = CompositionRenderGraph.assemble(frame(0, video), emptyMap(), { 9 }, true)
+    val missed = CompositionRenderGraph.assemble(frame(0, video), emptyMap(), { 9 }, drawText = true, drawStickers = true)
     assertEquals(0, missed.mainTextureId)
   }
 
@@ -122,8 +123,8 @@ class CompositionRenderGraphTest {
   fun textAndStickersAreADestinationChoice() {
     val main = clip("a", 0, 1000)
     val evaluated = frame(0, main, texts = listOf(ComposedText(TextClip(text = "Hi"), 0f, 0f, 1f, 0f, 1f)))
-    val preview = CompositionRenderGraph.assemble(evaluated, mapOf("a" to layer(1)), { 0 }, drawTextAndStickers = false)
-    val export = CompositionRenderGraph.assemble(evaluated, mapOf("a" to layer(1)), { 0 }, drawTextAndStickers = true)
+    val preview = CompositionRenderGraph.assemble(evaluated, mapOf("a" to layer(1)), { 0 }, drawText = false, drawStickers = false)
+    val export = CompositionRenderGraph.assemble(evaluated, mapOf("a" to layer(1)), { 0 }, drawText = true, drawStickers = true)
     assertTrue(preview.frame.activeTexts.isEmpty())
     assertEquals("Hi", export.frame.activeTexts.single().clip.text)
   }

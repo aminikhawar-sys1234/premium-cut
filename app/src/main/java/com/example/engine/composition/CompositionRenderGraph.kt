@@ -14,7 +14,8 @@ import com.example.engine.composition.gpu.TransitionSourceTexture
  * [layersOf] decides which clip is sampled and at which source time. [assemble] turns those
  * already-decoded pictures into the arguments of [GpuCompositionRenderer.render]. Preview and
  * export differ only by [FramePresentation] (encoder orientation, deterministic masks) and by
- * whether text and stickers are drawn here or by the editor overlay.
+ * whether text and stickers are drawn here. The GPU preview draws text here, the same way export
+ * does, and leaves stickers to the editor overlay so their handles stay on the sprite.
  */
 object CompositionRenderGraph {
 
@@ -86,14 +87,15 @@ object CompositionRenderGraph {
    * [imageTextureId]. Clips imported without a pixel size take the decoded size, because the
    * renderer fits layers by it.
    *
-   * Text and stickers are dropped when [drawTextAndStickers] is false. The editor draws them in
-   * Compose so they stay editable; export draws them in this graph.
+   * Text is dropped when [drawText] is false, stickers when [drawStickers] is false. Export draws
+   * both. The GPU preview draws text (so it matches export) and leaves stickers to the editor.
    */
   fun assemble(
     frame: ComposedFrame,
     decoded: Map<String, ResolvedLayer>,
     imageTextureId: (String) -> Int,
-    drawTextAndStickers: Boolean
+    drawText: Boolean,
+    drawStickers: Boolean
   ): AssembledFrame {
     fun VideoClip.sized(): VideoClip {
       if (width > 0 && height > 0) return this
@@ -104,8 +106,8 @@ object CompositionRenderGraph {
     val presented = frame.copy(
       activeClip = frame.activeClip?.sized(),
       activeOverlays = frame.activeOverlays.map { it.copy(clip = it.clip.sized()) },
-      activeTexts = if (drawTextAndStickers) frame.activeTexts else emptyList(),
-      activeStickers = if (drawTextAndStickers) frame.activeStickers else emptyList()
+      activeTexts = if (drawText) frame.activeTexts else emptyList(),
+      activeStickers = if (drawStickers) frame.activeStickers else emptyList()
     )
 
     fun picture(clip: VideoClip): ResolvedLayer? {

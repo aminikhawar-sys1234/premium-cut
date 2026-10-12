@@ -220,6 +220,8 @@ fun InteractiveTransformOverlay(
   overlayPlayerIds: Set<String> = emptySet(),
   /** False when the GPU compositor already draws the overlay pixels: only the edit frame is shown. */
   renderOverlayMedia: Boolean = true,
+  /** False when the GPU compositor already draws text with the export renderer. Handles stay. */
+  renderText: Boolean = true,
   timeline: Timeline = Timeline(),
   liveLook: LivePreviewLook? = null,
   modifier: Modifier = Modifier
@@ -620,7 +622,7 @@ fun InteractiveTransformOverlay(
 
     // 3. Render Active Text Layers (Single unified high-performance Canvas pass for 50+ layers)
     val visibleTexts = activeTexts.filter { !it.isHidden }
-    if (visibleTexts.isNotEmpty()) {
+    if (renderText && visibleTexts.isNotEmpty()) {
       Canvas(modifier = Modifier.fillMaxSize()) {
         drawIntoCanvas { canvas ->
           visibleTexts.forEach { textClip ->
