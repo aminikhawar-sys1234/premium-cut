@@ -72,6 +72,13 @@ object PreviewEffectApplyPolicy {
     return graphChanged || force
   }
 
+  /**
+   * `setVideoEffects` on a freshly recreated player with no TextureView builds a dead
+   * VideoFrameProcessor: playhead and text overlays keep moving, picture stays black,
+   * and source audio is silenced. Wait for a bound surface (or STATE_READY) first.
+   */
+  fun shouldDeferLookApply(surfaceBound: Boolean): Boolean = !surfaceBound
+
   @OptIn(UnstableApi::class)
   fun isVideoProcessingFailure(error: PlaybackException): Boolean {
     return error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED ||

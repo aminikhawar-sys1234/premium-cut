@@ -12,6 +12,7 @@ import androidx.media3.common.Player
 import com.example.domain.model.Timeline
 import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
+import com.example.engine.media.MediaPlayableUri
 import com.example.engine.media.MediaRelinkManager
 import com.example.engine.playback.ProxyMediaEngine
 import kotlinx.coroutines.CoroutineScope
@@ -375,7 +376,14 @@ class PlaybackController(
 
     if (clip != null && clip.isVideo && isPlayableInPlayer(clip.uri)) {
       val sourcePos = clip.timelineToSourceMs(state.positionMs)
-      ensureClipLoaded(clip, sourcePos)
+      val needsReload = try {
+        playbackManager.player.mediaItemCount == 0 ||
+          playbackManager.playbackState == Player.STATE_IDLE ||
+          playbackManager.player.playerError != null
+      } catch (_: Throwable) {
+        true
+      }
+      ensureClipLoaded(clip, sourcePos, force = needsReload)
       playbackManager.setPlaybackSpeed(clip.speed)
       playbackManager.setVolume(mainVideoGain(clip))
 
@@ -402,27 +410,26 @@ class PlaybackController(
     }
   }
 
-  private fun ensureClipLoaded(clip: VideoClip, targetSeekMs: Long = clip.sourceStartMs) {
+  private fun ensureClipLoaded(clip: VideoClip, targetSeekMs: Long = clip.sourceStartMs, force: Boolean = false) {
     val resolvedUri = resolveClipUri(clip)
-    if (resolvedUri == currentLoadedUri && playbackManager.playbackState != Player.STATE_IDLE) {
+    val playable = MediaPlayableUri.toExoPlayerUri(appContext, resolvedUri)
+    val key = playable.toString()
+    val playerEmpty = try { playbackManager.player.mediaItemCount == 0 } catch (_: Throwable) { true }
+    val idle = playbackManager.playbackState == Player.STATE_IDLE
+    if (!force && key == currentLoadedUri && !idle && !playerEmpty) {
       currentLoadedClipId = clip.id
       return
     }
     currentLoadedClipId = clip.id
-    currentLoadedUri = resolvedUri
-    val parsedUri = try {
-      Uri.parse(resolvedUri)
-    } catch (e: Exception) {
-      Log.e(TAG, "Invalid clip URI: $resolvedUri", e)
-      return
-    }
-    playbackManager.loadMedia(normalizeUri(parsedUri), targetSeekMs.coerceAtLeast(0L), autoPlay = false)
+    currentLoadedUri = key
+    playbackManager.loadMedia(playable, targetSeekMs.coerceAtLeast(0L), autoPlay = false)
   }
 
   private fun resolveClipUri(clip: VideoClip): String {
-    return proxyMediaEngine?.getProxyUri(clip)
+    val raw = proxyMediaEngine?.getProxyUri(clip)
       ?: uriResolver?.invoke(clip)
       ?: clip.uri
+    return MediaPlayableUri.resolvePlayableString(appContext, raw)
   }
 
   private fun isPlayableInPlayer(uriString: String?): Boolean {
@@ -622,12 +629,8 @@ class PlaybackController(
     }
     playbackManager.resetPlaybackSession()
     _state.value = EnginePlaybackState.IDLE
-    _timelineState.value = _timelineState.value.copy(
-      isPlaying = false,
-      isSeeking = false,
-      isScrubbing = false,
-      playbackState = EnginePlaybackState.IDLE
-    )
+    _timelineState.value = TimelineState()
+    _timelinePositionMs.value = 0L
   }
 
   fun release() {
@@ -653,18 +656,5 @@ class PlaybackController(
     }
   }
 
-  private fun normalizeUri(uri: Uri): Uri = when {
-    uri.scheme == "asset" -> {
-      var path = uri.path ?: ""
-      if (path.startsWith("/")) path = path.substring(1)
-      if (path.isEmpty()) path = uri.authority ?: ""
-      Uri.parse("asset:///$path")
-    }
-    uri.scheme == null || uri.scheme == "file" -> {
-      val path = uri.path ?: uri.toString()
-      val file = java.io.File(path)
-      if (file.exists()) Uri.fromFile(file) else uri
-    }
-    else -> uri
-  }
+  private fun normalizeUri(uri: Uri): Uri = MediaPlayableUri.toExoPlayerUri(appContext, uri.toString())
 }

@@ -139,6 +139,12 @@ object PreviewVideoSurfaceRegistry {
     bindPrimary(player, view)
   }
 
+  /** True when [player] currently has an on-screen TextureView as its video output. */
+  fun hasBoundSurface(player: ExoPlayer): Boolean {
+    val view = synchronized(lock) { boundView[player]?.get() } ?: return false
+    return try { view.isAvailable } catch (_: Throwable) { false }
+  }
+
   fun rebindCurrent(player: ExoPlayer, afterMs: Long = 0L) {
     val bind: () -> Unit = bind@{
       val view = synchronized(lock) { boundView[player]?.get() } ?: return@bind

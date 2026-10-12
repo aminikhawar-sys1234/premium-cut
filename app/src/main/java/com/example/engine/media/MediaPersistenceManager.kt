@@ -93,23 +93,15 @@ object MediaPersistenceManager {
       }
     }
 
-    // If it's already an existing file in our internal media store, return its path
+    // If it's already an existing file in our internal media store, return a playable file:// URI
     val internalStoreDir = getMediaStoreDir(context)
-    if (sourceUriString.startsWith(internalStoreDir.absolutePath)) {
-      val existingFile = File(sourceUriString)
-      if (existingFile.exists() && existingFile.length() > 0L) {
-        return@withContext existingFile.absolutePath
-      }
+    existingInternalFile(internalStoreDir, sourceUriString, parsedUri)?.let { existing ->
+      return@withContext MediaPlayableUri.toStoredUri(existing)
     }
 
-    if (parsedUri != null && parsedUri.scheme == "file") {
-      val path = parsedUri.path ?: ""
-      if (path.startsWith(internalStoreDir.absolutePath)) {
-        val existingFile = File(path)
-        if (existingFile.exists() && existingFile.length() > 0L) {
-          return@withContext existingFile.absolutePath
-        }
-      }
+    val uniqueHash = md5(sourceUriString).take(8)
+    findPersistedCopy(internalStoreDir, uniqueHash)?.let { existing ->
+      return@withContext MediaPlayableUri.toStoredUri(existing)
     }
 
     // Determine clean filename and extension
@@ -122,7 +114,6 @@ object MediaPersistenceManager {
       .replace("[^a-zA-Z0-9_-]".toRegex(), "_")
       .take(40)
 
-    val uniqueHash = md5(sourceUriString).take(8)
     val targetFileName = "clip_${System.currentTimeMillis()}_${uniqueHash}_$sanitizedBase.$extension"
     val targetFile = File(internalStoreDir, targetFileName)
 
@@ -154,8 +145,9 @@ object MediaPersistenceManager {
         inputStream.close()
 
         if (targetFile.exists() && targetFile.length() > 0L) {
-          Log.d(TAG, "Successfully persisted media to ${targetFile.absolutePath} (${targetFile.length()} bytes)")
-          return@withContext targetFile.absolutePath
+          val stored = MediaPlayableUri.toStoredUri(targetFile)
+          Log.d(TAG, "Successfully persisted media to $stored (${targetFile.length()} bytes)")
+          return@withContext stored
         }
       }
     } catch (e: Exception) {
@@ -175,6 +167,63 @@ object MediaPersistenceManager {
   ): List<String> = withContext(Dispatchers.IO) {
     sourceUris.map { uri ->
       persistMedia(context, uri)
+    }
+  }
+
+  /**
+   * Copies any remaining `content://` (or other non-internal) clip URIs into the
+   * project media store and rewrites the timeline to playable `file://` URIs.
+   */
+  suspend fun persistTimelineMedia(
+    context: Context,
+    timeline: com.example.domain.model.Timeline
+  ): com.example.domain.model.Timeline = withContext(Dispatchers.IO) {
+    val hydrated = MediaPlayableUri.hydrateTimeline(context, timeline)
+    val videos = hydrated.videoClips.map { clip ->
+      clip.copy(uri = persistMedia(context, clip.uri))
+    }
+    val overlays = hydrated.overlayClips.map { clip ->
+      clip.copy(uri = persistMedia(context, clip.uri))
+    }
+    val audios = hydrated.audioClips.map { clip ->
+      clip.copy(uri = persistMedia(context, clip.uri))
+    }
+    val bg = hydrated.chromaKey.backgroundUri
+    val persistedBg = if (bg.isNullOrBlank()) bg else persistMedia(context, bg)
+    hydrated.copy(
+      videoClips = videos,
+      overlayClips = overlays,
+      audioClips = audios,
+      chromaKey = hydrated.chromaKey.copy(backgroundUri = persistedBg)
+    )
+  }
+
+  fun findPersistedCopy(context: Context, sourceUriString: String): File? {
+    if (sourceUriString.isBlank()) return null
+    return findPersistedCopy(getMediaStoreDir(context), md5(sourceUriString).take(8))
+  }
+
+  internal fun findPersistedCopy(storeDir: File, uniqueHash: String): File? {
+    if (!storeDir.exists() || uniqueHash.isBlank()) return null
+    val needle = "_${uniqueHash}_"
+    return storeDir.listFiles()?.firstOrNull { file ->
+      file.isFile && file.length() > 0L && file.name.contains(needle)
+    }
+  }
+
+  private fun existingInternalFile(storeDir: File, sourceUriString: String, parsedUri: Uri?): File? {
+    val candidates = buildList {
+      add(File(sourceUriString))
+      parsedUri?.path?.let { add(File(it)) }
+      MediaPlayableUri.resolveLocalFile(sourceUriString)?.let { add(it) }
+    }
+    val storeCanonical = try { storeDir.canonicalFile } catch (_: Exception) { storeDir }
+    return candidates.firstOrNull { file ->
+      try {
+        file.exists() && file.length() > 0L && file.canonicalFile.path.startsWith(storeCanonical.path)
+      } catch (_: Exception) {
+        false
+      }
     }
   }
 

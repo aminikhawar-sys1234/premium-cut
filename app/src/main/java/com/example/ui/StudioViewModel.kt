@@ -41,6 +41,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.data.local.CrashRecoveryEntity
 import com.example.engine.media.MediaPersistenceManager
+import com.example.engine.media.MediaPlayableUri
 import com.example.engine.media.MediaRelinkManager
 import com.ahstudio.captions.android.CaptionsGraph
 import com.ahstudio.captions.engine.AutoCaptionOptions
@@ -462,6 +463,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       // Initialize the media pipeline immediately when the editor is opened.
       try {
         playbackEngine.updateTimeline(timelineEngine.timeline.value)
+        playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
         playbackEngine.prepareForEditorEntry()
       } catch (t: Throwable) {
         android.util.Log.w("StudioViewModel", "Editor entry playback initialization error", t)
@@ -1756,7 +1758,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _activeCanvasColor.value = project.canvasColor
 
     val pkg = parsedPackage
-    val loadedTimeline = parsedTimeline
+    val appContext = getApplication<Application>().applicationContext
+    val loadedTimeline = MediaPlayableUri.hydrateTimeline(appContext, parsedTimeline)
     if (pkg != null && pkg.settings.sampleRateHz > 0) {
       _activeSampleRate.value = pkg.settings.sampleRateHz
       _activeCanvasColor.value = pkg.settings.canvasBackgroundColor
@@ -1780,6 +1783,38 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _saveState.value = ProjectSaveState(ProjectSaveStatus.SAVED, project.lastEditedTime)
     navigateTo(AppScreen.EDITOR)
     checkMissingMedia()
+    persistLoadedProjectMedia()
+  }
+
+  /**
+   * Copies any leftover PhotoPicker `content://` grants into app storage and reloads
+   * the player so a later reopen still has video + audio.
+   */
+  private fun persistLoadedProjectMedia() {
+    val projectId = _activeProjectId.value
+    if (projectId.isBlank()) return
+    viewModelScope.launch(Dispatchers.IO) {
+      val current = timelineEngine.timeline.value
+      val persisted = try {
+        MediaPersistenceManager.persistTimelineMedia(getApplication(), current)
+      } catch (t: Throwable) {
+        android.util.Log.w("StudioViewModel", "persistTimelineMedia failed", t)
+        return@launch
+      }
+      if (!MediaPlayableUri.hasUriChanges(current, persisted)) return@launch
+      withContext(Dispatchers.Main) {
+        if (_activeProjectId.value != projectId) return@withContext
+        timelineEngine.replaceTimelineKeepingState(persisted)
+        try {
+          playbackEngine.updateTimeline(persisted)
+          playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+          playbackEngine.prepareForEditorEntry()
+        } catch (t: Throwable) {
+          android.util.Log.w("StudioViewModel", "Playback reload after media persist failed", t)
+        }
+        saveCurrentProject()
+      }
+    }
   }
 
   // Template Creator Mode
@@ -1882,6 +1917,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun restoreCrashRecoverySession() {
     viewModelScope.launch {
       val session: CrashRecoveryEntity = repository.getActiveRecoverySession() ?: return@launch
+      resetPlaybackForNewProject()
+      val appContext = getApplication<Application>().applicationContext
       _activeProjectId.value = session.projectId.ifBlank { UUID.randomUUID().toString() }
       _activeProjectName.value = session.projectName.ifBlank { "Recovered Project" }
       val pkg = TimelineSerializer.fromPackageJson(session.timelineJson)
@@ -1894,16 +1931,20 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         timelineEngine.setTimelineFps(pkg.settings.fps.fps)
         timelineEngine.setAspectRatio(pkg.settings.aspectRatio)
         timelineEngine.setCanvasBackgroundColor(pkg.settings.canvasBackgroundColor)
-        timelineEngine.loadTimeline(pkg.timeline.copy(
+        val hydrated = MediaPlayableUri.hydrateTimeline(appContext, pkg.timeline)
+        timelineEngine.loadTimeline(hydrated.copy(
           aspectRatio = pkg.settings.aspectRatio,
           canvasBackgroundColor = pkg.settings.canvasBackgroundColor
         ))
-        val recoveredPlayhead = pkg.settings.playheadMs.coerceIn(0L, pkg.timeline.totalDurationMs.coerceAtLeast(0L))
+        val recoveredPlayhead = pkg.settings.playheadMs.coerceIn(0L, hydrated.totalDurationMs.coerceAtLeast(0L))
         if (recoveredPlayhead > 0L) {
           timelineEngine.setPosition(recoveredPlayhead, snap = false)
         }
       } else {
-        val recoveredTimeline = TimelineSerializer.fromJson(session.timelineJson)
+        val recoveredTimeline = MediaPlayableUri.hydrateTimeline(
+          appContext,
+          TimelineSerializer.fromJson(session.timelineJson)
+        )
         timelineEngine.setTimelineFps(_activeFps.value.fps)
         timelineEngine.setAspectRatio(_activeAspectRatio.value)
         timelineEngine.setCanvasBackgroundColor(_activeCanvasColor.value)
@@ -1912,6 +1953,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _saveState.value = ProjectSaveState(ProjectSaveStatus.UNSAVED, session.timestamp)
       navigateTo(AppScreen.EDITOR)
       checkMissingMedia()
+      persistLoadedProjectMedia()
     }
   }
 
@@ -1959,10 +2001,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun relinkMedia(clipId: String, newUri: String) {
     viewModelScope.launch(Dispatchers.IO) {
+      val persistentUri = MediaPersistenceManager.persistMedia(getApplication(), newUri)
       val currentTimeline = timelineEngine.timeline.value
-      val updated = MediaRelinkManager.relinkClip(getApplication(), currentTimeline, clipId, newUri)
+      val updated = MediaRelinkManager.relinkClip(getApplication(), currentTimeline, clipId, persistentUri)
       withContext(Dispatchers.Main) {
         timelineEngine.replaceTimelineKeepingState(updated)
+        try {
+          playbackEngine.updateTimeline(updated)
+          playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+        } catch (t: Throwable) {
+          android.util.Log.w("StudioViewModel", "Playback reload after relink failed", t)
+        }
         saveCurrentProject(isManual = true)
         checkMissingMedia()
       }
@@ -2917,12 +2966,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val sourceUs = clip.timelineToSourceMs(timelineMs) * 1000L
     val retriever = MediaMetadataRetriever()
     return try {
-      val parsed = Uri.parse(clip.uri)
+      val parsed = MediaPlayableUri.toExoPlayerUri(context, clip.uri)
       if (parsed.scheme == "content" || parsed.scheme == "android.resource") {
         retriever.setDataSource(context, parsed)
       } else {
-        val file = File(clip.uri)
-        if (file.isFile) retriever.setDataSource(file.absolutePath)
+        val file = MediaPlayableUri.resolveLocalFile(clip.uri)
+        if (file != null && file.isFile) retriever.setDataSource(file.absolutePath)
         else retriever.setDataSource(context, parsed)
       }
       if (Build.VERSION.SDK_INT >= 27) {
@@ -2939,12 +2988,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   private fun decodeStill(context: android.content.Context, uri: String): Bitmap? {
     fun open() = runCatching {
-      val parsed = Uri.parse(uri)
+      val parsed = MediaPlayableUri.toExoPlayerUri(context, uri)
       if (parsed.scheme == "content" || parsed.scheme == "android.resource") {
         context.contentResolver.openInputStream(parsed)
       } else {
-        val file = File(uri)
-        if (file.isFile) file.inputStream() else context.contentResolver.openInputStream(parsed)
+        val file = MediaPlayableUri.resolveLocalFile(uri)
+        if (file != null && file.isFile) file.inputStream() else context.contentResolver.openInputStream(parsed)
       }
     }.getOrNull()
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -2966,8 +3015,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         var audioFile: File? = null
         val firstAudio = timeline.audioClips.firstOrNull()
         if (firstAudio != null && firstAudio.uri.isNotBlank()) {
-          val candidate = File(firstAudio.uri)
-          if (candidate.exists() && candidate.length() > 0L) audioFile = candidate
+          val candidate = MediaPlayableUri.resolveLocalFile(firstAudio.uri)
+          if (candidate != null && candidate.exists() && candidate.length() > 0L) audioFile = candidate
         }
         if (audioFile == null && timeline.videoClips.isNotEmpty()) {
           audioFile = audioEngine.extractAudioFromVideo(timeline.videoClips.first().uri)

@@ -33,6 +33,12 @@ class PreviewEffectApplyPolicyTest {
   )
 
   @Test
+  fun looksAreDeferredUntilAPreviewSurfaceIsBound() {
+    assertTrue(PreviewEffectApplyPolicy.shouldDeferLookApply(surfaceBound = false))
+    assertFalse(PreviewEffectApplyPolicy.shouldDeferLookApply(surfaceBound = true))
+  }
+
+  @Test
   fun emptyGraphMustNotEnableEffectsRenderer() {
     assertFalse(
       PreviewEffectApplyPolicy.shouldCallSetVideoEffects(

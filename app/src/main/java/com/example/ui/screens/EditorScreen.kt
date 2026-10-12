@@ -79,7 +79,6 @@ import com.example.domain.model.*
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.SelectedTrackElement
 import com.example.engine.export.ExportState
-import com.example.engine.media.MediaRelinkManager
 import com.example.engine.text.TextLayerRenderer
 import com.example.ui.components.InteractiveTransformOverlay
 import com.example.ui.components.player.PreviewVideoSurfaceRegistry
@@ -2079,10 +2078,10 @@ fun VideoPreviewSurface(
               },
             contentAlignment = Alignment.Center
           ) {
-            val isRealPlayable = remember(activeClip.uri) {
-              MediaRelinkManager.isRealPlayableMedia(context, activeClip.uri)
-            }
-            if (activeClip.isVideo && isRealPlayable && player != null && !isMainVideoTrackHidden) {
+            // Always attach the TextureView for a video clip that has a player. Gating on a
+            // remembered isRealPlayableMedia() check left reopened projects without a surface
+            // (black picture, no audio) even after the clip URI was hydrated to a local file.
+            if (activeClip.isVideo && player != null && !isMainVideoTrackHidden) {
               val clipRot = if (activeClip.naturalRotation != 0) activeClip.naturalRotation else activeClip.rotationDegrees
               val (clipW, clipH) = AspectRatio.resolveEffectiveDimensions(activeClip.width, activeClip.height, clipRot)
               val videoFilterMatrix = remember(previewAdjustments, previewFilter) {
