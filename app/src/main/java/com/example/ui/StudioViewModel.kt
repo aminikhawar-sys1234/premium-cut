@@ -435,6 +435,19 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
+  /**
+   * Drops the previous project's ExoPlayer / MediaCodec / VideoFrameProcessor so a dead
+   * effect graph cannot paint every later session black.
+   */
+  private fun resetPlaybackForNewProject() {
+    if (!playbackEngineDelegate.isInitialized()) return
+    try {
+      playbackEngine.resetPlaybackSession()
+    } catch (t: Throwable) {
+      android.util.Log.w("StudioViewModel", "Playback session reset failed", t)
+    }
+  }
+
   fun navigateTo(screen: AppScreen) {
     if (screen != AppScreen.EDITOR && screen != AppScreen.EXPORT) {
       timelineEngine.pause()
@@ -1534,6 +1547,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       canvasBackgroundColor = 0xFF000000
     )
 
+    resetPlaybackForNewProject()
     timelineEngine.setTimelineFps(fps.fps)
     timelineEngine.loadTimeline(initialTimeline)
     saveCurrentProject()
@@ -1732,6 +1746,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       return
     }
     _projectLoadError.value = null
+    resetPlaybackForNewProject()
     _activeProjectId.value = project.id
     _activeProjectName.value = project.name
     _activeAspectRatio.value = AspectRatio.values().find { it.label == project.aspectRatio } ?: AspectRatio.RATIO_9_16

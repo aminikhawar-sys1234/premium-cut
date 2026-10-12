@@ -135,6 +135,15 @@ class CustomVideoEngineControllerTest {
     assertNotNull(controller.engineState.value); assertNull(controller.engineState.value.error)
   }
 
+  @Test fun resetPlaybackSessionRecreatesExoPlayerAndClearsError() {
+    val before = controller.player
+    controller.resetPlaybackSession()
+    val after = controller.player
+    assertNotSame("New project must not keep the previous ExoPlayer instance", before, after)
+    assertNull(controller.engineState.value.error)
+    assertFalse(controller.isPlaying)
+  }
+
   @Test fun test50PlusLayersStressTest() {
     val textClips = (1..60).map { idx -> com.example.domain.model.TextClip("text_$idx","Layer $idx Title",0L,10000L,fontSizeSp=24f,posX=(idx%10)*0.1f,posY=(idx%10)*0.1f) }
     val stickerClips = (1..30).map { idx -> com.example.domain.model.StickerClip("sticker_$idx","🔥",0L,10000L,posX=0.5f,posY=0.5f) }

@@ -78,6 +78,13 @@ object PreviewEffectApplyPolicy {
       error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSOR_INIT_FAILED
   }
 
+  /** Last graph that rendered a frame, or the identity passthrough when none exists. */
+  fun recoveryEffects(lastGood: List<androidx.media3.common.Effect>): List<androidx.media3.common.Effect> =
+    if (lastGood.isNotEmpty()) lastGood else Media3EffectPipeline.identityEffects()
+
+  fun shouldRecreatePlayer(applyFailed: Boolean, playerHasError: Boolean): Boolean =
+    applyFailed || playerHasError
+
   /**
    * Video SurfaceTextures often carry A=0. A ColorMatrix that preserves alpha then
    * composites as fully transparent — the user sees a black preview. Force opaque.

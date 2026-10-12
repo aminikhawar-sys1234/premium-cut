@@ -305,6 +305,26 @@ class CustomVideoEngineController(
     seekTo(currentPosMs)
   }
 
+  /**
+   * Completely releases the previous ExoPlayer / MediaCodec / VideoFrameProcessor chain
+   * so opening a new project cannot inherit a deadlocked decoder surface.
+   */
+  fun resetPlaybackSession() {
+    timelineSyncManager.stopSyncLoop()
+    loadedClipId = null
+    loadedUri = null
+    decoderManager.reset()
+    playbackController.resetPlaybackSession()
+    surfaceManager.rebind()
+    _engineState.value = _engineState.value.copy(
+      playbackState = EnginePlaybackState.IDLE,
+      isPlaying = false,
+      error = null,
+      decoderState = decoderManager.decoderState
+    )
+    Log.i(TAG, "Playback session reset; player recreated")
+  }
+
   fun release() {
     timelineSyncManager.release()
     surfaceManager.release()

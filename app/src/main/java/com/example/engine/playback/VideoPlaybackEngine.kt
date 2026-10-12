@@ -95,6 +95,12 @@ class VideoPlaybackEngine(
    */
   private val _overlayPlayerIds = MutableStateFlow<Set<String>>(emptySet())
   val overlayPlayerIds: StateFlow<Set<String>> = _overlayPlayerIds.asStateFlow()
+  /**
+   * Increments whenever the preview ExoPlayer is recreated. Compose must observe this so
+   * AndroidView / TextureView re-binds to the new instance instead of a released player.
+   */
+  private val _playerGeneration = MutableStateFlow(0)
+  val playerGeneration: StateFlow<Int> = _playerGeneration.asStateFlow()
 
   private var currentTimeline = Timeline()
   private var currentPosMs = 0L
@@ -148,6 +154,7 @@ class VideoPlaybackEngine(
   private val lastOverlayGraphSignatures = ConcurrentHashMap<String, String>()
   private val lastOverlayFilterSignatures = ConcurrentHashMap<String, String>()
   @Volatile private var applyingEffects = false
+  @Volatile private var recreatingPlayer = false
   private var lastPresentAtElapsedMs = 0L
   private var lastPresentPosMs = -1L
   private var spatialLookJob: Job? = null
@@ -308,25 +315,40 @@ class VideoPlaybackEngine(
     val volume = try { player.volume } catch (_: Throwable) { 1f }
     applyingEffects = true
     pendingMedia3Effects = effects
-    val accepted = try {
-      Media3EffectPipeline.applyRealtimeEffects(player, effects)
+    val result = try {
+      Media3EffectPipeline.applyRealtimeEffectsDetailed(player, effects)
     } finally {
       applyingEffects = false
     }
-    if (accepted) {
-      lastMedia3GraphSignature = graphSig
-      lastMedia3Signature = valueSig
-      PreviewVideoSurfaceRegistry.rebindCurrent(player)
-      PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
-      restorePlaybackAfterGraphChange(playWhenReady, volume)
-      Log.i(
-        TAG,
-        "Rebuilt Media3 preview graph lut=${lut?.first ?: "none"} effects=${effects.size} force=$force playWhenReady=$playWhenReady"
-      )
-    } else {
-      pendingMedia3Effects = null
-      _playerError.value = "Preview look could not be applied (${effects.size} effects). Last valid preview was kept."
-      Log.e(TAG, "Preview look apply failed; keeping last valid Media3 effects count=${lastGoodMedia3Effects.size}")
+    when (result) {
+      Media3EffectPipeline.ApplyResult.APPLIED -> {
+        lastMedia3GraphSignature = graphSig
+        lastMedia3Signature = valueSig
+        PreviewVideoSurfaceRegistry.rebindCurrent(player)
+        PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
+        restorePlaybackAfterGraphChange(playWhenReady, volume)
+        Log.i(
+          TAG,
+          "Rebuilt Media3 preview graph lut=${lut?.first ?: "none"} effects=${effects.size} force=$force playWhenReady=$playWhenReady"
+        )
+      }
+      Media3EffectPipeline.ApplyResult.FALLBACK_IDENTITY -> {
+        pendingMedia3Effects = Media3EffectPipeline.identityEffects()
+        lastMedia3GraphSignature = graphSig
+        lastMedia3Signature = valueSig
+        boundMainGrading = null
+        PreviewVideoSurfaceRegistry.rebindCurrent(player)
+        PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
+        restorePlaybackAfterGraphChange(playWhenReady, volume)
+        _playerError.value = "Preview effect failed to initialize. Showing unfiltered video."
+        Log.e(TAG, "Preview look fell back to identity passthrough (requested ${effects.size} effects)")
+      }
+      Media3EffectPipeline.ApplyResult.FAILED -> {
+        pendingMedia3Effects = null
+        _playerError.value = "Preview look could not be applied (${effects.size} effects). Recreating the player."
+        Log.e(TAG, "Preview look apply failed; recreating player (lastGood=${lastGoodMedia3Effects.size})")
+        if (!recreatingPlayer) recreatePreviewPlayer("setVideoEffects_failed")
+      }
     }
     applyOverlayLooks(force)
   }
@@ -407,11 +429,13 @@ class VideoPlaybackEngine(
         TAG,
         "Preview pipeline not ready on play (state=$state error=${error?.errorCodeName}: ${error?.message}); recovering"
       )
-      val fallback = lastGoodMedia3Effects
+      val fallback = PreviewEffectApplyPolicy.recoveryEffects(lastGoodMedia3Effects)
       applyingEffects = true
       try {
-        if (fallback.isNotEmpty() || lastMedia3GraphSignature != null) {
-          Media3EffectPipeline.applyRealtimeEffects(player, fallback)
+        val result = Media3EffectPipeline.applyRealtimeEffectsDetailed(player, fallback)
+        if (result == Media3EffectPipeline.ApplyResult.FAILED && !recreatingPlayer) {
+          recreatePreviewPlayer("pipeline_not_ready")
+          return
         }
         if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
           player.prepare()
@@ -433,29 +457,101 @@ class VideoPlaybackEngine(
     applyingEffects = true
     try {
       pendingMedia3Effects = null
-      val fallback = lastGoodMedia3Effects
-      if (PreviewEffectApplyPolicy.shouldCallSetVideoEffects(
-          newEffectCount = fallback.size,
-          previousHadEffects = true,
-          graphChanged = true,
-          force = true
-        ) && Media3EffectPipeline.applyRealtimeEffects(player, fallback)
-      ) {
+      val fallback = PreviewEffectApplyPolicy.recoveryEffects(lastGoodMedia3Effects)
+      val result = Media3EffectPipeline.applyRealtimeEffectsDetailed(player, fallback)
+      if (result != Media3EffectPipeline.ApplyResult.FAILED && player.playerError == null) {
         lastMedia3GraphSignature = null
         boundMainGrading = fallback.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
         PreviewVideoSurfaceRegistry.rebindCurrent(player)
         PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
         restorePlaybackAfterGraphChange(shouldResume, volume)
         if (!shouldResume) presentCurrentFrame(rebindSurface = false)
-        _playerError.value = "Preview GPU look failed (${error.errorCodeName}). Last valid preview was kept."
-        Log.e(TAG, "Rolled back preview effects after ${error.errorCodeName} to ${fallback.size} effects")
-      } else {
-        Log.e(TAG, "Preview effect rollback skipped; no last-good graph to restore")
+        _playerError.value = if (result == Media3EffectPipeline.ApplyResult.FALLBACK_IDENTITY) {
+          "Preview GPU look failed (${error.errorCodeName}). Showing unfiltered video."
+        } else {
+          "Preview GPU look failed (${error.errorCodeName}). Last valid preview was kept."
+        }
+        Log.e(TAG, "Rolled back preview effects after ${error.errorCodeName} result=$result count=${fallback.size}")
+        return
       }
     } catch (t: Throwable) {
       Log.e(TAG, "Preview effect rollback failed", t)
     } finally {
       applyingEffects = false
+    }
+    if (PreviewPipelinePolicy.shouldRecreatePlayer(error, applyFailed = true)) {
+      recreatePreviewPlayer("effect_error_${error.errorCodeName}")
+    }
+  }
+
+  /**
+   * Releases overlay players, the main ExoPlayer / MediaCodec / VideoFrameProcessor chain,
+   * and re-binds the remembered TextureView to the new instance.
+   */
+  fun resetPlaybackSession() {
+    spatialLookJob?.cancel()
+    spatialLookJob = null
+    try { pause() } catch (_: Throwable) {}
+    overlayPlayers.values.forEach { p ->
+      PreviewVideoSurfaceRegistry.forget(p)
+      try { p.stop(); p.clearVideoSurface(); p.release() } catch (_: Exception) {}
+    }
+    overlayPlayers.clear()
+    overlayLoadedUris.clear()
+    audioTrackPlayers.values.forEach { p ->
+      try { p.stop(); p.release() } catch (_: Exception) {}
+    }
+    audioTrackPlayers.clear()
+    audioLoadedUris.clear()
+    secondaryCorrectionAtMs.clear()
+    lastOverlayGraphSignatures.clear()
+    lastOverlayFilterSignatures.clear()
+    boundOverlayGrading.clear()
+    lastMedia3Signature = null
+    lastMedia3GraphSignature = null
+    lastPreviewFilterSignature = null
+    pendingMedia3Effects = null
+    lastGoodMedia3Effects = emptyList()
+    boundMainGrading = null
+    applyingEffects = false
+    _playerError.value = null
+    _overlayPlayerIds.value = emptySet()
+    val previous = try { player } catch (_: Throwable) { null }
+    previous?.let { PreviewVideoSurfaceRegistry.forget(it) }
+    engineController.resetPlaybackSession()
+    _playerGeneration.value = _playerGeneration.value + 1
+    PreviewVideoSurfaceRegistry.attachRememberedPrimary(player)
+    Log.i(TAG, "Preview playback session reset generation=${_playerGeneration.value}")
+  }
+
+  private fun recreatePreviewPlayer(reason: String) {
+    if (recreatingPlayer) {
+      Log.e(TAG, "Already recreating preview player; skipping $reason")
+      return
+    }
+    recreatingPlayer = true
+    Log.e(TAG, "Recreating preview player ($reason)")
+    val shouldResume = engineController.timelineSyncManager.isPlaying
+    val pos = currentPosMs
+    try {
+    resetPlaybackSession()
+    try {
+      if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
+        player.prepare()
+      }
+    } catch (t: Throwable) {
+      Log.e(TAG, "prepare after recreate failed", t)
+    }
+    applyActiveLookToPlayers(force = true)
+    engineController.updateTimeline(currentTimeline)
+    engineController.seekTo(pos)
+    if (shouldResume) {
+      try { play(pos) } catch (t: Throwable) { Log.e(TAG, "resume after recreate failed", t) }
+    } else {
+      presentCurrentFrame()
+    }
+    } finally {
+      recreatingPlayer = false
     }
   }
 

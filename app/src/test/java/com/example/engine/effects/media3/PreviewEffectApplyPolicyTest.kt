@@ -7,6 +7,7 @@ import com.example.domain.model.FilterType
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoAdjustments
 import com.example.domain.model.VideoClip
+import com.example.engine.effects.media3.IdentityPassthroughGlEffect
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -142,6 +143,15 @@ class PreviewEffectApplyPolicyTest {
     assertEquals(0f, a[15], 0.001f)
     assertEquals(0f, a[18], 0.001f)
     assertEquals(255f, a[19], 0.001f)
+  }
+
+  @Test
+  fun recoveryEffectsFallBackToIdentityWhenLastGoodIsEmpty() {
+    val recovered = PreviewEffectApplyPolicy.recoveryEffects(emptyList())
+    assertEquals(1, recovered.size)
+    assertTrue(recovered.single() is IdentityPassthroughGlEffect)
+    assertTrue(PreviewEffectApplyPolicy.shouldRecreatePlayer(applyFailed = true, playerHasError = false))
+    assertFalse(PreviewEffectApplyPolicy.shouldRecreatePlayer(applyFailed = false, playerHasError = false))
   }
 
   @Test

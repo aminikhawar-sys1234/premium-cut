@@ -604,6 +604,32 @@ class PlaybackController(
 
   fun sampleClockPositionMs(): Long = if (disposed) _timelinePositionMs.value else playbackManager.currentPosition
 
+  /**
+   * Drops the current ExoPlayer, MediaCodec and VideoFrameProcessor so a new project
+   * cannot inherit a dead decoder surface. The controller itself stays alive.
+   */
+  fun resetPlaybackSession() {
+    if (disposed) return
+    trimPreviewActive = false
+    currentLoadedUri = null
+    currentLoadedClipId = null
+    lastMixSignature = null
+    pendingCommand?.cancel()
+    pendingCommand = null
+    try {
+      playbackManager.pause()
+    } catch (_: Exception) {
+    }
+    playbackManager.resetPlaybackSession()
+    _state.value = EnginePlaybackState.IDLE
+    _timelineState.value = _timelineState.value.copy(
+      isPlaying = false,
+      isSeeking = false,
+      isScrubbing = false,
+      playbackState = EnginePlaybackState.IDLE
+    )
+  }
+
   fun release() {
     if (disposed) return
     disposed = true

@@ -39,39 +39,66 @@ enum class StyleTransferType(val displayName: String) {
 @OptIn(UnstableApi::class)
 object Media3EffectPipeline {
 
-  /**
-   * Applies the generated list of Media3 effects to ExoPlayer in real-time.
-   */
+  enum class ApplyResult {
+    APPLIED,
+    FALLBACK_IDENTITY,
+    FAILED
+  }
+
+  fun identityEffects(): List<Effect> = listOf(IdentityPassthroughGlEffect)
+
   /**
    * Pushes [effects] onto ExoPlayer without dropping audio or the current play/pause state.
    * `setVideoEffects` rebuilds the video graph; callers must re-bind the TextureView afterwards.
-   * @return true when ExoPlayer accepted the new effect list.
+   *
+   * A failing custom effect is replaced with [IdentityPassthroughGlEffect] so VideoFrameProcessor
+   * stays alive and MediaCodec can keep calling releaseOutputBuffer(). Returning false means the
+   * player itself is unusable and must be recreated.
    */
   fun applyRealtimeEffects(exoPlayer: ExoPlayer, effects: List<Effect>): Boolean {
+    return applyRealtimeEffectsDetailed(exoPlayer, effects) != ApplyResult.FAILED
+  }
+
+  fun applyRealtimeEffectsDetailed(exoPlayer: ExoPlayer, effects: List<Effect>): ApplyResult {
+    val playWhenReady = runCatching { exoPlayer.playWhenReady }.getOrDefault(false)
+    val volume = runCatching { exoPlayer.volume }.getOrDefault(1f)
+    val state = runCatching { exoPlayer.playbackState }.getOrDefault(-1)
+    android.util.Log.i(
+      "Media3EffectPipeline",
+      "setVideoEffects count=${effects.size} playWhenReady=$playWhenReady volume=$volume state=$state"
+    )
     return try {
-      val playWhenReady = exoPlayer.playWhenReady
-      val volume = exoPlayer.volume
-      val state = exoPlayer.playbackState
-      android.util.Log.i(
-        "Media3EffectPipeline",
-        "setVideoEffects count=${effects.size} playWhenReady=$playWhenReady volume=$volume state=$state"
-      )
-      exoPlayer.setVideoEffects(effects)
-      if (exoPlayer.volume != volume) {
-        android.util.Log.w("Media3EffectPipeline", "setVideoEffects changed volume $volume -> ${exoPlayer.volume}; restoring")
-        exoPlayer.volume = volume
-      }
-      if (exoPlayer.playWhenReady != playWhenReady) {
-        android.util.Log.w(
-          "Media3EffectPipeline",
-          "setVideoEffects changed playWhenReady $playWhenReady -> ${exoPlayer.playWhenReady}; restoring"
-        )
-        exoPlayer.playWhenReady = playWhenReady
-      }
-      true
+      pushEffects(exoPlayer, effects, playWhenReady, volume)
+      ApplyResult.APPLIED
     } catch (e: Exception) {
-      android.util.Log.e("Media3EffectPipeline", "Failed to apply real-time video effects to ExoPlayer", e)
-      false
+      android.util.Log.e("Media3EffectPipeline", "Failed to apply real-time video effects; installing identity passthrough", e)
+      try {
+        pushEffects(exoPlayer, identityEffects(), playWhenReady, volume)
+        ApplyResult.FALLBACK_IDENTITY
+      } catch (fallback: Exception) {
+        android.util.Log.e("Media3EffectPipeline", "Identity passthrough also failed; player must be recreated", fallback)
+        ApplyResult.FAILED
+      }
+    }
+  }
+
+  private fun pushEffects(
+    exoPlayer: ExoPlayer,
+    effects: List<Effect>,
+    playWhenReady: Boolean,
+    volume: Float
+  ) {
+    exoPlayer.setVideoEffects(effects)
+    if (exoPlayer.volume != volume) {
+      android.util.Log.w("Media3EffectPipeline", "setVideoEffects changed volume $volume -> ${exoPlayer.volume}; restoring")
+      exoPlayer.volume = volume
+    }
+    if (exoPlayer.playWhenReady != playWhenReady) {
+      android.util.Log.w(
+        "Media3EffectPipeline",
+        "setVideoEffects changed playWhenReady $playWhenReady -> ${exoPlayer.playWhenReady}; restoring"
+      )
+      exoPlayer.playWhenReady = playWhenReady
     }
   }
 
