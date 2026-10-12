@@ -1297,6 +1297,58 @@ fun defaultTrackSettings(): Map<TrackType, TrackSettings> {
   return TrackType.values().associateWith { TrackSettings(it) }
 }
 
+/** What an audio lane carries. Auto-ducking uses it to tell speech (the ducking trigger) from background beds. */
+enum class AudioTrackRole(val displayName: String) {
+  UNSPECIFIED("Audio"),
+  VOICEOVER("Voiceover"),
+  DIALOGUE("Dialogue"),
+  MUSIC("Music / BGM"),
+  SFX("Sound Effects");
+
+  val isSpeech: Boolean get() = this == VOICEOVER || this == DIALOGUE
+}
+
+/** Role assigned to one audio lane ([AudioClip.trackIndex]). A list instead of a map keeps Moshi reflection happy. */
+data class AudioLaneRole(
+  val trackIndex: Int,
+  val role: AudioTrackRole
+)
+
+/**
+ * Auto-ducking of one background audio lane under speech.
+ *
+ * [duckRatio] is the linear gain the lane is pulled down to while speech plays (0.25 ≈ -12 dB, 0.3 ≈ -10.5 dB).
+ * The duck ramps down during the [attackMs] *before* speech starts (the timeline is known, so it looks ahead and
+ * never masks the first syllable) and recovers during the [releaseMs] after speech ends.
+ * When [duckUnderVideoAudio] is set, the original audio of main-track video clips also counts as speech.
+ */
+data class AudioDuckingSettings(
+  val targetTrackIndex: Int,
+  val duckRatio: Float = DEFAULT_DUCK_RATIO,
+  val attackMs: Long = DEFAULT_ATTACK_MS,
+  val releaseMs: Long = DEFAULT_RELEASE_MS,
+  val duckUnderVideoAudio: Boolean = true
+) {
+  /** Attenuation applied at full duck, in dB (negative). -inf for a ratio of 0 is reported as [MIN_DUCK_DB]. */
+  val duckDb: Float
+    get() = if (duckRatio <= MIN_DUCK_RATIO) MIN_DUCK_DB else (20.0 * kotlin.math.log10(duckRatio.toDouble())).toFloat()
+
+  fun normalized(): AudioDuckingSettings = copy(
+    duckRatio = duckRatio.coerceIn(0f, 1f),
+    attackMs = attackMs.coerceIn(0L, MAX_RAMP_MS),
+    releaseMs = releaseMs.coerceIn(0L, MAX_RAMP_MS)
+  )
+
+  companion object {
+    const val DEFAULT_DUCK_RATIO = 0.3f
+    const val DEFAULT_ATTACK_MS = 200L
+    const val DEFAULT_RELEASE_MS = 350L
+    const val MAX_RAMP_MS = 5_000L
+    const val MIN_DUCK_RATIO = 0.001f
+    const val MIN_DUCK_DB = -60f
+  }
+}
+
 data class Timeline(
   val videoClips: List<VideoClip> = emptyList(),
   val overlayClips: List<VideoClip> = emptyList(),
@@ -1316,7 +1368,11 @@ data class Timeline(
   val markers: List<TimelineMarker> = emptyList(),
   val version: Int = 1,
   /** Speakers found by caption diarization (label + colour). Persisted so speaker cards survive save / reload. */
-  val captionSpeakers: List<TimelineSpeaker> = emptyList()
+  val captionSpeakers: List<TimelineSpeaker> = emptyList(),
+  /** Explicit voice / music roles of audio lanes. Lanes without an entry are [AudioTrackRole.UNSPECIFIED]. */
+  val audioLaneRoles: List<AudioLaneRole> = emptyList(),
+  /** Auto-ducking per background audio lane; at most one entry per [AudioDuckingSettings.targetTrackIndex]. */
+  val audioDucking: List<AudioDuckingSettings> = emptyList()
 ) {
   val totalDurationMs: Long
     get() {

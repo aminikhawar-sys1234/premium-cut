@@ -1008,6 +1008,7 @@ class VideoPlaybackEngine(
           if (audio.fadeOutMs > 0L && timeFromEnd < audio.fadeOutMs) {
             calculatedVol *= (timeFromEnd.toFloat() / audio.fadeOutMs.toFloat()).coerceIn(0f, 1f)
           }
+          calculatedVol *= com.example.engine.audio.AutoDucking.gainAt(currentTimeline, audio, posMs)
           p.volume = if (audio.isMuted) 0f else calculatedVol
           val active = posMs >= audio.timelineStartMs && posMs < audio.timelineStartMs + audio.durationMs
           val source = audio.timelineToSourceMs(posMs)

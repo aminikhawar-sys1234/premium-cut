@@ -47,7 +47,9 @@ data class AudioTrackDescriptor(
   val isMuted: Boolean,
   val isReversed: Boolean = false,
   val keyframes: List<com.example.domain.model.ClipKeyframe> = emptyList(),
-  val audioEffects: com.example.domain.model.AudioEffectsSettings = com.example.domain.model.AudioEffectsSettings()
+    val audioEffects: com.example.domain.model.AudioEffectsSettings = com.example.domain.model.AudioEffectsSettings(),
+    /** Auto-ducking curve of this clip's lane, evaluated in timeline time; null = not ducked. */
+    val duckEnvelope: com.example.engine.audio.AutoDucking.DuckEnvelope? = null
 )
 
 class AudioExportProcessor(
@@ -392,6 +394,7 @@ class AudioExportProcessor(
         }
         if (audioAudible) {
             val hasClipSolo = timeline.audioClips.any { it.isSolo }
+            val duckEnvelopes = com.example.engine.audio.AutoDucking.envelopesFor(timeline)
             timeline.audioClips.filter {
                 PreviewMixPolicy.audioClipGain(it, timeline, hasClipSolo) > 0f && isExportableAudioUri(it.uri)
             }.forEach {
@@ -410,7 +413,10 @@ class AudioExportProcessor(
                     isMuted = it.isMuted,
                     isReversed = it.isReversed,
                     keyframes = it.keyframes,
-                    audioEffects = it.audioEffects
+                    audioEffects = it.audioEffects,
+                    duckEnvelope = duckEnvelopes[it.trackIndex]?.takeIf { env ->
+                        env.affects(it.timelineStartMs, it.timelineStartMs + it.durationMs)
+                    }
                 ))
             }
         }
@@ -829,7 +835,8 @@ internal fun exportMixLinearGain(
     if (fadeOutFrames > 0 && (durationFrames - relativeFrame) < fadeOutFrames) {
         fade *= ((durationFrames - relativeFrame).toFloat() / fadeOutFrames).coerceIn(0f, 1f)
     }
-    return envelope * 10f.pow(track.gainDb / 20f) * fade
+    val duck = track.duckEnvelope?.gainAt(track.timelineStartMs + relativeMs) ?: 1f
+    return envelope * 10f.pow(track.gainDb / 20f) * fade * duck
 }
 
 /**
