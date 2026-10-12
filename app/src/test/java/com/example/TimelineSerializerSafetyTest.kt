@@ -93,4 +93,39 @@ class TimelineSerializerSafetyTest {
     assertEquals(2_400L, restoredPkg.settings.playheadMs)
     assertFalse(json.contains("textureId") || json.contains("egl") || json.contains("framebuffer"))
   }
+
+  @Test
+  fun roundTrip_preservesCompoundNest_andSkipsShellUriAsMedia() {
+    val nested = Timeline(
+      videoClips = listOf(
+        com.example.domain.model.VideoClip(
+          id = "inner", uri = "file:///inner.mp4", name = "inner", durationMs = 2000L, sourceEndMs = 2000L
+        )
+      )
+    )
+    val shell = com.example.domain.model.VideoClip(
+      id = "compound",
+      uri = com.example.domain.model.compoundClipUri("compound"),
+      name = "Scene",
+      durationMs = 2000L,
+      sourceEndMs = 2000L,
+      mimeType = com.example.domain.model.COMPOUND_CLIP_MIME
+    )
+    val timeline = Timeline(
+      videoClips = listOf(shell),
+      compoundClips = listOf(
+        com.example.domain.model.CompoundClip(id = "compound", name = "Scene", nested = nested, contentDurationMs = 2000L)
+      )
+    )
+    val json = TimelineSerializer.toJson(timeline)
+    val restored = TimelineSerializer.fromJsonOrNull(json)
+    assertNotNull(restored)
+    assertEquals("inner", restored!!.compoundClips.single().nested.videoClips.single().id)
+    assertEquals("file:///inner.mp4", restored.compoundClips.single().nested.videoClips.single().uri)
+    val pkg = TimelineSerializer.buildProjectPackage(
+      projectId = "p", projectName = "P", settings = com.example.domain.model.ProjectSettings(), timeline = timeline
+    )
+    assertEquals(listOf("inner"), pkg.mediaReferences.map { it.clipId })
+    assertFalse(pkg.mediaReferences.any { it.uri.startsWith("compound://") })
+  }
 }
