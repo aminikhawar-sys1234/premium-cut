@@ -740,6 +740,257 @@ vec4 process(vec4 c, vec2 uv){
     const val MOTION_TRAIL = TRAILS
     const val FRAME_ACCUMULATE = ACCUMULATE
 
+    // =========================================================================================
+    // VIDEO EFFECTS — the ten catalog assets in EffectCategory.VIDEO_EFFECTS.
+    // Same body contract as every other effect (`process`, optional `warpUV`), so preview,
+    // thumbnail and export share one implementation per asset.
+    // =========================================================================================
+
+    /** Motion Blur: jittered directional accumulation. */
+    const val MOTION_BLUR = """
+uniform float u_distance;
+uniform float u_angle;
+uniform int u_samples;
+vec4 process(vec4 c, vec2 uv){
+    if (u_distance <= 0.0005 || u_samples < 2) return c;
+    float a = radians(u_angle);
+    vec2 dir = vec2(cos(a), sin(a));
+    // Stable per-pixel jitter: keeps the streak from banding without flickering every frame.
+    float jitter = hash21(uv * u_resolution) - 0.5;
+    vec4 acc = vec4(0.0);
+    for (int i = 0; i < 64; i++) {
+        if (i >= u_samples) break;
+        float t = (float(i) + jitter) / float(u_samples - 1) - 0.5;
+        acc += texture(u_tex, clampUv(uv + dir * t * u_distance));
+    }
+    return acc / float(u_samples);
+}"""
+
+    /** VHS Tape: colour-under chroma bleed, transport jitter, tracking band, hiss, scanlines. */
+    const val VHS_TAPE = """
+uniform float u_bleed;
+uniform float u_noise;
+uniform float u_tracking;
+uniform float u_scanline;
+vec4 process(vec4 c, vec2 uv){
+    float line = floor(uv.y * max(u_resolution.y, 1.0));
+    float frame = floor(u_time * 24.0);
+    float bandPhase = fract(uv.y - u_time * 0.22);
+    float band = smoothstep(0.10, 0.0, abs(bandPhase - 0.5));
+    float jitter = (hash21(vec2(line, frame)) - 0.5) * (0.0015 + 0.012 * u_tracking * band);
+    vec2 juv = clampUv(uv + vec2(jitter, 0.0));
+    vec4 sharp = texture(u_tex, juv);
+    // Chroma bleed: horizontal smear of the colour difference signal only.
+    vec3 chroma = vec3(0.0);
+    for (int i = 0; i < 8; i++) {
+        float t = float(i) / 7.0;
+        chroma += texture(u_tex, clampUv(juv + vec2(t * u_bleed, 0.0))).rgb;
+    }
+    chroma /= 8.0;
+    float sharpLuma = luma709(sharp.rgb);
+    vec3 rgb = vec3(sharpLuma) + (chroma - vec3(luma709(chroma)));
+    // Tape hiss and head dropouts.
+    float hiss = (hash21(vec2(line * 1.37, frame * 2.11)) - 0.5) * u_noise;
+    float dropout = step(0.996 - 0.004 * u_tracking, hash21(vec2(frame, line * 0.73)));
+    rgb += hiss * 0.55 + dropout * 0.22;
+    // Interlaced scanlines and the washed-out VHS chroma.
+    float scan = 1.0 - u_scanline * 0.30 * (0.5 + 0.5 * sin(uv.y * max(u_resolution.y, 1.0) * 3.14159265));
+    rgb *= scan;
+    rgb = mix(rgb, vec3(luma709(rgb)), 0.32);
+    return vec4(rgb, sharp.a);
+}"""
+
+    /** CRT: curved tube, aperture grille, scanlines, mains flicker, phosphor bloom, tube vignette. */
+    const val CRT_SCANLINES = """
+uniform float u_curvature;
+uniform float u_scanline;
+uniform float u_grille;
+uniform float u_flicker;
+uniform float u_vignette;
+vec2 warpUV(vec2 uv){
+    vec2 p = (uv - 0.5) * 2.0;
+    float r2 = dot(p, p);
+    return clampUv(p * (1.0 + u_curvature * r2) * 0.5 + 0.5);
+}
+vec4 process(vec4 c, vec2 uv){
+    vec2 s = clampUv(mix(uv, warpUV(uv), clamp(u_warpIntensity, 0.0, 1.0)));
+    float resX = max(u_resolution.x, 1.0);
+    float resY = max(u_resolution.y, 1.0);
+    float triad = fract(s.x * resX / 3.0);
+    vec3 grille = vec3(
+        step(triad, 0.3333),
+        step(0.3333, triad) * step(triad, 0.6667),
+        step(0.6667, triad));
+    grille = mix(vec3(1.0), grille * 1.55 + 0.35, clamp(u_grille, 0.0, 1.0));
+    float scan = 1.0 - u_scanline * 0.45 * (0.5 + 0.5 * sin(s.y * resY * 3.14159265));
+    float flicker = 1.0 - u_flicker * 0.10 * (0.5 + 0.5 * sin(u_time * 41.0));
+    float vig = 1.0 - u_vignette * smoothstep(0.25, 0.85, length(s - 0.5));
+    vec3 rgb = c.rgb * grille * scan * flicker * vig;
+    // Phosphor bleed from the neighbouring line, strongest where the scanline is dark.
+    rgb += texture(u_tex, clampUv(s + vec2(0.0, u_texel.y))).rgb * (1.0 - scan) * 0.35;
+    return vec4(rgb, c.a);
+}"""
+
+    /** Datamosh: time-varying macroblock displacement, flat blocks and channel tear. */
+    const val DATAMOSH = """
+uniform float u_amount;
+uniform float u_blockSize;
+uniform float u_smear;
+vec4 process(vec4 c, vec2 uv){
+    float bs = max(u_blockSize, 6.0);
+    vec2 blocks = max(u_resolution / bs, vec2(2.0));
+    vec2 cell = floor(uv * blocks);
+    float tick = floor(u_time * 6.0);
+    float h = hash21(cell + vec2(tick * 0.37, tick * 0.11));
+    float active = step(1.0 - clamp(u_smear, 0.0, 1.0), h);
+    vec2 dir = vec2(hash21(cell + 2.3) - 0.5, hash21(cell + 7.9) - 0.5) * 2.0;
+    vec2 cellCenter = (cell + 0.5) / blocks;
+    // Pull the block colour from a neighbour: the classic datamosh smear.
+    vec3 pulled = texture(u_tex, clampUv(cellCenter + dir * u_amount * active)).rgb;
+    vec3 rgb = mix(c.rgb, pulled, active * 0.85);
+    // Channel tear on the strongest blocks.
+    float tear = step(0.86, h);
+    rgb.r = texture(u_tex, clampUv(uv + vec2(u_amount * 0.5 * tear, 0.0))).r;
+    rgb.b = texture(u_tex, clampUv(uv - vec2(u_amount * 0.5 * tear, 0.0))).b;
+    return vec4(rgb, c.a);
+}"""
+
+    /** Anamorphic Streak: horizontal highlight streak (lens flare family). */
+    const val ANAMORPHIC_STREAK = """
+uniform float u_amount;
+uniform float u_threshold;
+uniform float u_length;
+uniform vec3 u_tint;
+vec4 process(vec4 c, vec2 uv){
+    vec3 streak = vec3(0.0);
+    float total = 0.0;
+    for (int i = 0; i < 33; i++) {
+        float t = float(i) / 32.0 - 0.5;
+        float w = exp(-abs(t) * 6.0);
+        vec3 s = texture(u_tex, clampUv(uv + vec2(t * u_length * 2.0, 0.0))).rgb;
+        streak += s * w * smoothstep(u_threshold, u_threshold + 0.30, luma709(s));
+        total += w;
+    }
+    streak /= max(total, 1.0e-4);
+    c.rgb += streak * u_tint * u_amount * 2.4;
+    return c;
+}"""
+
+    /** Film Grain: sized, luminance-shaped grain with optional chroma noise. */
+    const val FILM_GRAIN_PRO = """
+uniform float u_amount;
+uniform float u_size;
+uniform float u_shadow;
+uniform float u_chroma;
+vec4 process(vec4 c, vec2 uv){
+    float frame = floor(u_time * 24.0);
+    vec2 p = uv * max(u_resolution, vec2(1.0)) / max(u_size, 0.25);
+    float n = hash21(floor(p) + vec2(frame * 7.13, frame * 3.71)) - 0.5;
+    float n2 = hash21(floor(p * 1.7) + vec2(frame * 2.9, frame * 5.1)) - 0.5;
+    float l = luma709(c.rgb);
+    float shape = mix(1.0, 1.6 - 1.4 * smoothstep(0.0, 0.7, l), clamp(u_shadow, 0.0, 1.0));
+    float amt = u_amount * shape;
+    c.rgb += n * amt;
+    c.rgb += vec3(n2 - n) * amt * clamp(u_chroma, 0.0, 1.0) * 0.5;
+    return c;
+}"""
+
+    /** Halation: red-weighted highlight bleed around bright edges (film stock look). */
+    const val HALATION = """
+uniform float u_amount;
+uniform float u_radius;
+uniform float u_threshold;
+uniform vec3 u_tint;
+vec4 process(vec4 c, vec2 uv){
+    vec3 glow = vec3(0.0);
+    float total = 0.0;
+    for (int i = 0; i < 16; i++) {
+        float a = float(i) * 0.39269908;
+        float w = 1.0 - float(i) / 24.0;
+        vec3 s = texture(u_tex, clampUv(uv + vec2(cos(a), sin(a)) * u_radius)).rgb;
+        glow += s * w * smoothstep(u_threshold, u_threshold + 0.30, luma709(s));
+        total += w;
+    }
+    for (int i = 0; i < 8; i++) {
+        float a = float(i) * 0.78539816 + 0.4;
+        vec3 s = texture(u_tex, clampUv(uv + vec2(cos(a), sin(a)) * u_radius * 2.2)).rgb;
+        glow += s * 0.4 * smoothstep(u_threshold, u_threshold + 0.30, luma709(s));
+        total += 0.4;
+    }
+    glow = glow / max(total, 1.0e-4) * u_tint;
+    c.rgb = 1.0 - (1.0 - c.rgb) * (1.0 - clamp(glow * u_amount * 2.4, 0.0, 1.0));
+    return c;
+}"""
+
+    /** Lens Flare: halo + mirrored ghosts + anamorphic bar around a light position. */
+    const val LENS_FLARE = """
+uniform vec2 u_position;
+uniform float u_amount;
+uniform float u_halo;
+uniform float u_ghosts;
+uniform vec3 u_tint;
+vec4 process(vec4 c, vec2 uv){
+    vec2 toCenter = vec2(0.5) - u_position;
+    vec2 luv = uv - u_position;
+    vec3 flare = u_tint * exp(-length(luv) * 4.0) * u_halo;
+    // Ghost elements mirrored through the frame centre.
+    vec3 ghosts = vec3(0.0);
+    for (int i = 1; i <= 3; i++) {
+        float k = float(i) * 0.55;
+        vec2 gp = u_position + toCenter * (2.0 * k);
+        ghosts += u_tint * exp(-length(uv - gp) * 22.0) * (0.65 / float(i));
+    }
+    float bar = exp(-abs(luv.y) * 60.0) * exp(-abs(luv.x) * 6.0);
+    flare += ghosts * u_ghosts + u_tint * bar * u_ghosts * 0.7;
+    c.rgb += flare * u_amount * 1.8;
+    return c;
+}"""
+
+    /** Speed Lines: anime-style radial streaks that animate outward from a centre. */
+    const val SPEED_LINES = """
+uniform vec2 u_center;
+uniform float u_amount;
+uniform float u_lines;
+uniform float u_speed;
+uniform float u_reach;
+vec4 process(vec4 c, vec2 uv){
+    vec2 d = uv - u_center;
+    float r = length(d);
+    if (r < 1.0e-4) return c;
+    float angle = atan(d.y, d.x) / 6.2831853 + 0.5;
+    float seg = floor(angle * max(u_lines, 2.0));
+    float seed = hash21(vec2(seg, floor(u_time * max(u_speed, 0.0) * 6.0)));
+    float line = smoothstep(0.55, 1.0, seed);
+    vec3 streak = vec3(0.0);
+    for (int i = 0; i < 12; i++) {
+        float t = float(i) / 11.0;
+        streak += texture(u_tex, clampUv(uv - d * t * u_reach)).rgb;
+    }
+    streak /= 12.0;
+    float mask = line * clamp(u_amount, 0.0, 1.0) * smoothstep(0.02, 0.32, r);
+    vec3 rgb = mix(c.rgb, streak, mask);
+    rgb += line * mask * 0.05;
+    return vec4(rgb, c.a);
+}"""
+
+    /** Kaleidoscope: polar wedge fold with rotation and zoom. */
+    const val KALEIDOSCOPE = """
+uniform vec2 u_center;
+uniform float u_segments;
+uniform float u_rotation;
+uniform float u_zoom;
+vec2 warpUV(vec2 uv){
+    vec2 p = uv - u_center;
+    float r = length(p) / max(u_zoom, 0.05);
+    if (r < 1.0e-5) return uv;
+    float wedge = 6.2831853 / max(u_segments, 2.0);
+    float a = atan(p.y, p.x) + radians(u_rotation);
+    a = mod(a, wedge);
+    a = abs(a - wedge * 0.5);
+    return clampUv(u_center + vec2(cos(a), sin(a)) * r);
+}
+vec4 process(vec4 c, vec2 uv){ return c; }"""
+
     // ---------------- MASK COMBINE (single shared program; masks are UNIFORMS, never baked source) ----------------
     const val MASK_COMBINE = """
 uniform sampler2D u_effect;

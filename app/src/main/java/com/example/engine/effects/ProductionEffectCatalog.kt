@@ -14,12 +14,25 @@ import com.example.engine.effects.registry.RegisteredEffect
  */
 object ProductionEffectCatalog {
 
-  val effects: List<RegisteredEffect> = listOf(
-    fx("video.motion_blur", "Motion Blur", EffectCategory.VIDEO_EFFECTS, "vfx:blur.directional", listOf("intensity", "distance")),
-    fx("video.glitch", "Glitch", EffectCategory.VIDEO_EFFECTS, "vfx:distort.glitch", listOf("intensity", "amount")),
-    fx("video.chromatic", "Chromatic Aberration", EffectCategory.VIDEO_EFFECTS, "vfx:chromatic.aberration", listOf("intensity", "amount")),
-    fx("video.film_grain", "Film Grain", EffectCategory.VIDEO_EFFECTS, "vfx:noise.filmGrain", listOf("intensity", "amount")),
-    fx("video.light_leak", "Light Leak", EffectCategory.VIDEO_EFFECTS, "vfx:light.leak", listOf("intensity", "amount")),
+  /**
+   * Video Effects: ten GPU assets. Every entry is a real engine definition registered through
+   * [com.vfx.engine.effects.VideoEffects] (`vfx:` key = `EffectDefinition.id`), so the same asset
+   * renders in the live Media3 preview, in the GPU compositor and in export.
+   */
+  private val videoEffects: List<RegisteredEffect> = listOf(
+    fx("video.motion_blur", "Motion Blur", EffectCategory.VIDEO_EFFECTS, "vfx:blur.motion", listOf("intensity", "distance", "angle", "samples")),
+    fx("video.vhs", "VHS Tape", EffectCategory.VIDEO_EFFECTS, "vfx:video.vhs", listOf("intensity", "bleed", "noise", "tracking", "scanline")),
+    fx("video.crt", "CRT Scanlines", EffectCategory.VIDEO_EFFECTS, "vfx:video.crt", listOf("intensity", "curvature", "scanline", "grille", "flicker", "vignette")),
+    fx("video.datamosh", "Datamosh", EffectCategory.VIDEO_EFFECTS, "vfx:distort.datamosh", listOf("intensity", "amount", "blockSize", "smear")),
+    fx("video.anamorphic", "Anamorphic Streaks", EffectCategory.VIDEO_EFFECTS, "vfx:light.anamorphic", listOf("intensity", "amount", "threshold", "length", "tint")),
+    fx("video.film_grain", "Film Grain", EffectCategory.VIDEO_EFFECTS, "vfx:noise.grain", listOf("intensity", "amount", "size", "shadow", "chroma")),
+    fx("video.halation", "Halation", EffectCategory.VIDEO_EFFECTS, "vfx:light.halation", listOf("intensity", "amount", "radius", "threshold", "tint")),
+    fx("video.lens_flare", "Lens Flare", EffectCategory.VIDEO_EFFECTS, "vfx:light.flare", listOf("intensity", "position", "amount", "halo", "ghosts", "tint")),
+    fx("video.speed_lines", "Speed Lines", EffectCategory.VIDEO_EFFECTS, "vfx:stylize.speedLines", listOf("intensity", "center", "amount", "lines", "speed", "reach")),
+    fx("video.kaleidoscope", "Kaleidoscope", EffectCategory.VIDEO_EFFECTS, "vfx:distort.kaleidoscope", listOf("intensity", "segments", "rotation", "zoom", "center")),
+  )
+
+  val effects: List<RegisteredEffect> = videoEffects + listOf(
 
     fx("face.reshape", "Face Reshape", EffectCategory.FACE_EFFECTS, "face:reshape", listOf("intensity")),
     fx("face.skin", "Skin Smooth", EffectCategory.FACE_EFFECTS, "face:skin", listOf("intensity")),

@@ -1,6 +1,8 @@
 package com.example.engine.effects
 
 import android.graphics.Bitmap
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.exp
 import kotlin.math.hypot
 import kotlin.math.max
@@ -75,6 +77,142 @@ object EffectThumbnailRaster {
     val u = x / (w - 1f).coerceAtLeast(1f)
     val v = y / (h - 1f).coerceAtLeast(1f)
     return when (key) {
+      // ---- Video Effects assets: icon-resolution previews of the GPU shaders. ----
+      "vfx:blur.motion" -> average(src, x, y, w, h, 6, 1, 0)
+
+      "vfx:video.vhs" -> {
+        val c = src[y * w + x]
+        val bleed = sample(src, x - 2, y, w, h)
+        val hiss = (hash(y.toFloat(), 3.7f) - 0.5f) * 0.22f
+        val scan = if (y % 2 == 0) 0.84f else 1f
+        pack(
+          mix(red(c), red(bleed), 0.35f) * scan + hiss,
+          mix(green(c), green(bleed), 0.35f) * scan + hiss,
+          mix(blue(c), blue(bleed), 0.35f) * scan + hiss
+        )
+      }
+
+      "vfx:video.crt" -> {
+        val c = src[y * w + x]
+        val scan = if (y % 2 == 0) 0.70f else 1.06f
+        val triad = x % 3
+        val maskR = if (triad == 0) 1.25f else 0.45f
+        val maskG = if (triad == 1) 1.25f else 0.45f
+        val maskB = if (triad == 2) 1.25f else 0.45f
+        val vig = 1f - 0.35f * (hypot(u - 0.5f, v - 0.5f) * 1.6f).coerceIn(0f, 1f)
+        pack(red(c) * scan * maskR * vig, green(c) * scan * maskG * vig, blue(c) * scan * maskB * vig)
+      }
+
+      "vfx:distort.datamosh" -> {
+        val blocks = 6
+        val cellW = (w / blocks).coerceAtLeast(1)
+        val cellH = (h / blocks).coerceAtLeast(1)
+        val bx = (x / cellW).coerceIn(0, blocks - 1)
+        val by = (y / cellH).coerceIn(0, blocks - 1)
+        val shift = ((hash(bx.toFloat(), by.toFloat()) - 0.5f) * w * 0.22f).toInt()
+        val torn = sample(src, x + shift, y, w, h)
+        val flat = sample(src, bx * cellW + cellW / 2, by * cellH + cellH / 2, w, h)
+        pack(
+          mix(red(torn), red(flat), 0.5f),
+          mix(green(torn), green(flat), 0.5f),
+          mix(blue(torn), blue(flat), 0.5f)
+        )
+      }
+
+      "vfx:light.anamorphic" -> {
+        val c = src[y * w + x]
+        var r = 0f
+        var g = 0f
+        var b = 0f
+        var weight = 0f
+        for (i in -8..8) {
+          val p = sample(src, x + i, y, w, h)
+          val l = 0.2126f * red(p) + 0.7152f * green(p) + 0.0722f * blue(p)
+          val wgt = exp(-kotlin.math.abs(i) / 4f) * smooth(0.35f, 0.95f, l)
+          r += red(p) * wgt; g += green(p) * wgt; b += blue(p) * wgt; weight += wgt
+        }
+        if (weight < 1e-4f) c else pack(
+          red(c) + (r / weight) * 0.55f * 0.9f,
+          green(c) + (g / weight) * 0.75f * 0.9f,
+          blue(c) + (b / weight) * 1.0f * 0.9f
+        )
+      }
+
+      "vfx:noise.grain" -> {
+        val c = src[y * w + x]
+        val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
+        val shape = 1f + 0.5f * (1f - l)
+        val n = (hash(x * 1.7f, y * 2.3f) - 0.5f) * 0.30f
+        val chroma = (hash(x * 3.1f, y * 1.3f) - 0.5f) * 0.14f
+        pack(red(c) + n * shape, green(c) + n * shape, blue(c) + n * shape + chroma)
+      }
+
+      "vfx:light.halation" -> {
+        val c = src[y * w + x]
+        var weight = 0f
+        var r = 0f
+        var g = 0f
+        var b = 0f
+        for (i in -3..3) {
+          for (j in -3..3) {
+            val p = sample(src, x + i, y + j, w, h)
+            val l = 0.2126f * red(p) + 0.7152f * green(p) + 0.0722f * blue(p)
+            val wgt = smooth(0.30f, 0.90f, l)
+            r += red(p) * wgt; g += green(p) * wgt; b += blue(p) * wgt; weight += wgt
+          }
+        }
+        if (weight < 1e-4f) {
+          c
+        } else {
+          val bleedR = (r / weight * 1.5f).coerceIn(0f, 1f)
+          val bleedG = (g / weight * 0.55f).coerceIn(0f, 1f)
+          val bleedB = (b / weight * 0.40f).coerceIn(0f, 1f)
+          pack(
+            1f - (1f - red(c)) * (1f - bleedR),
+            1f - (1f - green(c)) * (1f - bleedG),
+            1f - (1f - blue(c)) * (1f - bleedB)
+          )
+        }
+      }
+
+      "vfx:light.flare" -> {
+        val c = src[y * w + x]
+        val halo = exp(-hypot(u - 0.25f, v - 0.75f) * 4f) * 0.7f
+        val ghost = exp(-hypot(u - 0.75f, v - 0.25f) * 6f) * 0.5f
+        val flare = (halo + ghost) * 0.9f
+        pack(red(c) + flare, green(c) + flare * 0.82f, blue(c) + flare * 0.55f)
+      }
+
+      "vfx:stylize.speedLines" -> {
+        val c = src[y * w + x]
+        val dx = u - 0.5f
+        val dy = v - 0.5f
+        val r = hypot(dx, dy)
+        val angle = atan2(dy, dx) / 6.2831855f + 0.5f
+        val seg = (angle * 90f).toInt()
+        val line = if (hash(seg.toFloat(), 4f) > 0.55f) 1f else 0f
+        val toward = sample(src, (mix(u, 0.5f, 0.35f) * (w - 1)).toInt(), (mix(v, 0.5f, 0.35f) * (h - 1)).toInt(), w, h)
+        val m = line * smooth(0.02f, 0.32f, r) * 0.75f
+        pack(
+          mix(red(c), red(toward), m) + line * m * 0.05f,
+          mix(green(c), green(toward), m) + line * m * 0.05f,
+          mix(blue(c), blue(toward), m) + line * m * 0.05f
+        )
+      }
+
+      "vfx:distort.kaleidoscope" -> {
+        val wedge = 6.2831855f / 6f
+        val px = u - 0.5f
+        val py = v - 0.5f
+        val r = hypot(px, py)
+        var a = atan2(py, px)
+        a -= kotlin.math.floor(a / wedge) * wedge
+        a = kotlin.math.abs(a - wedge * 0.5f)
+        val su = 0.5f + cos(a) * r
+        val sv = 0.5f + sin(a) * r
+        sample(src, (su * (w - 1)).toInt(), (sv * (h - 1)).toInt(), w, h)
+      }
+
       "vfx:blur.directional" -> average(src, x, y, w, h, 5, 1, 0)
       "vfx:distort.glitch" -> {
         val band = (v * 14f).toInt()

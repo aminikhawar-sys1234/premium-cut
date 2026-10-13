@@ -148,11 +148,62 @@ object ProductionEffectApplicator {
       if (inst.hasParam(pid)) runCatching { inst.setParam(pid, value) }
     }
     when (effectId) {
-      "blur.directional" -> set("distance", 0.012f + 0.07f * intensity)
-      "distort.glitch" -> set("amount", 0.012f + 0.045f * intensity)
-      "chromatic.aberration" -> set("amount", 0.004f + 0.02f * intensity)
-      "noise.filmGrain" -> set("amount", 0.04f + 0.22f * intensity)
-      "light.leak" -> set("amount", 0.25f + 0.9f * intensity)
+      // ---- Video Effects assets: intensity -> the params the shader actually reads. ----
+      "blur.motion" -> {
+        set("distance", 0.006f + 0.075f * intensity)
+        set("angle", 0f)
+      }
+      "video.vhs" -> {
+        set("bleed", 0.004f + 0.024f * intensity)
+        set("noise", 0.03f + 0.12f * intensity)
+        set("tracking", 0.15f + 0.65f * intensity)
+        set("scanline", 0.10f + 0.35f * intensity)
+      }
+      "video.crt" -> {
+        set("curvature", 0.08f + 0.24f * intensity)
+        set("scanline", 0.25f + 0.50f * intensity)
+        set("grille", 0.30f + 0.50f * intensity)
+        set("flicker", 0.10f + 0.30f * intensity)
+        set("vignette", 0.15f + 0.35f * intensity)
+      }
+      "distort.datamosh" -> {
+        set("amount", 0.02f + 0.14f * intensity)
+        set("blockSize", 64f - 32f * intensity)
+        set("smear", 0.15f + 0.60f * intensity)
+      }
+      "light.anamorphic" -> {
+        set("amount", 0.25f + 1.10f * intensity)
+        set("threshold", 0.75f - 0.28f * intensity)
+        set("length", 0.08f + 0.28f * intensity)
+      }
+      "noise.grain" -> {
+        set("amount", 0.03f + 0.14f * intensity)
+        set("size", 1.40f - 0.60f * intensity)
+        set("shadow", 0.30f + 0.30f * intensity)
+        set("chroma", 0.20f + 0.40f * intensity)
+      }
+      "light.halation" -> {
+        set("amount", 0.30f + 1.10f * intensity)
+        set("radius", 0.008f + 0.020f * intensity)
+        set("threshold", 0.75f - 0.28f * intensity)
+      }
+      "light.flare" -> {
+        set("amount", 0.25f + 1.10f * intensity)
+        set("halo", 0.45f + 0.45f * intensity)
+        set("ghosts", 0.20f + 0.60f * intensity)
+      }
+      "stylize.speedLines" -> {
+        set("amount", 0.20f + 0.70f * intensity)
+        set("lines", 150f - 70f * intensity)
+        set("speed", 2f + 5f * intensity)
+        set("reach", 0.15f + 0.35f * intensity)
+      }
+      "distort.kaleidoscope" -> {
+        set("segments", (4f + 8f * intensity).toInt().coerceIn(2, 16).toFloat())
+        set("rotation", 45f * intensity)
+        set("zoom", 1.15f - 0.30f * intensity)
+      }
+      // ---- Photo / AI assets on the same vfx stack. ----
       "color.hdr" -> set("amount", 0.35f + 0.9f * intensity)
       "color.pop" -> set("amount", intensity.coerceAtLeast(0.05f))
       "sharpen.unsharp" -> set("amount", 0.45f + 1.4f * intensity)

@@ -19,6 +19,8 @@ object BuiltinEffects {
             addAll(StylizeEffects.all())
             addAll(LutEffects.all())
             addAll(TemporalEffects.all())
+            // The production catalog's Video Effects assets (video.vhs, light.halation, ...).
+            addAll(VideoEffects.all())
         }.distinctBy { it.id }
     }
 

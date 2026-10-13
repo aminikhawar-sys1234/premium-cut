@@ -45,3 +45,13 @@ View your app in AI Studio: https://ai.studio/apps/bccd2e77-a292-4cfc-8b39-b9c4c
 - The sensor readout time defaults to an estimate of 20 ms. Phones differ, so it is adjustable: use the
   "Sensor readout" slider in the Stabilize dialog, or pass `readoutUs` to `Stabilizer.solve(...)`
   (`engine/ai/tracking/TrackPostProcessing.kt`). Values are clamped to 1-60 ms.
+
+## Video effects assets
+
+The Video Effects tab ships ten GPU effects (Motion Blur, VHS Tape, CRT Scanlines, Datamosh,
+Anamorphic Streaks, Film Grain, Halation, Lens Flare, Speed Lines, Kaleidoscope). Each one is a
+single-pass GLSL body in `com.vfx.engine.gpu.glsl.EffectGlsl`, registered by
+`com.vfx.engine.effects.VideoEffects`, mirrored for the live Media3 preview in
+`com.example.engine.effects.media3.PreviewVfxEffects`, and rendered into the clip thumbnail by
+`EffectThumbnailRaster`. Preview, shading and export share the same parameters and the same
+`mix(base, result, u_intensity)` blend rule — see `docs/video-effects-assets.md`.
