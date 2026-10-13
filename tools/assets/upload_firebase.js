@@ -52,11 +52,32 @@ async function main() {
   const bucket = admin.storage().bucket();
   const ts = admin.firestore.FieldValue.serverTimestamp();
 
+  // Phase 1 — Storage bucket must exist. Projects that never opened Firebase
+  // Storage in the console have no default bucket ("The specified bucket does
+  // not exist"). Try to create it; if Google reserves the *.firebasestorage.app
+  // name for console provisioning, fail with the exact one-click fix.
+  phase = `Storage bucket '${bucket.name}' check/create`;
+  const [bucketExists] = await bucket.exists();
+  if (!bucketExists) {
+    console.log(`Bucket ${bucket.name} does not exist yet - creating it...`);
+    try {
+      await bucket.create({ location: "US", storageClass: "STANDARD" });
+      console.log("Bucket created.");
+    } catch (createErr) {
+      throw new Error(
+        `Storage bucket '${bucket.name}' mojood nahi hai aur auto-create nahi ho saka (${createErr.message}). ` +
+        `FIX: Firebase Console -> Storage -> 'Get started' (defaults) ek dafa click karen, phir workflow dobara chalayen.`
+      );
+    }
+  }
+
+  phase = "Firestore write (categories)";
   for (const c of seed.categories) {
     await db.collection("categories").doc(c.id).set({ ...c, createdAt: ts, updatedAt: ts }, { merge: true });
   }
   console.log("categories: 11 written");
 
+  phase = "Storage upload + Firestore publish (assets)";
   let done = 0;
   for (const a of seed.assets) {
     const { createdAt, updatedAt, ...rest } = a;
