@@ -12,7 +12,9 @@ data class RegisteredTextTemplate(
   val name: String,
   val category: String = "General",
   val templateClip: TextClip,
-  val previewThumbnailUrl: String? = null
+  val previewThumbnailUrl: String? = null,
+  /** True when this template was downloaded from Firebase (Firestore or Storage). */
+  val isRemote: Boolean = false
 )
 
 /**

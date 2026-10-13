@@ -313,15 +313,20 @@ private fun TemplatesSubToolView(
 ) {
   val installedTemplates = rememberInstalledTextTemplates()
 
-  TextTemplateGridViewport {
-    TextTemplateCardGrid(
-      templates = installedTemplates,
-      selectedClip = currentClip,
-      showNone = true,
-      onNone = { onApplyTemplate(null) },
-      onApply = { onApplyTemplate(it) },
-      modifier = Modifier.fillMaxSize()
-    )
+  Column(modifier = Modifier.fillMaxSize()) {
+    // Firebase download starts as soon as Add Text opens; cloud templates merge into
+    // this same grid (cloud badge on their cards) while built-in ones stay tappable.
+    TextTemplateSyncBar()
+    TextTemplateGridViewport {
+      TextTemplateCardGrid(
+        templates = installedTemplates,
+        selectedClip = currentClip,
+        showNone = true,
+        onNone = { onApplyTemplate(null) },
+        onApply = { onApplyTemplate(it) },
+        modifier = Modifier.fillMaxSize()
+      )
+    }
   }
 }
 

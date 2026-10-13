@@ -11,32 +11,90 @@ import com.example.engine.plugin.PluginManager
 import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
+import com.google.firebase.storage.FirebaseStorage
 import com.ute.model.PaintSpec
 import com.ute.templates.TemplateEngine
 import com.ute.templates.TextTemplate
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.json.JSONArray
 import org.json.JSONObject
 
+/** Download state of the Firebase (Firestore + Storage) text-template catalog. */
+sealed interface TextTemplateSyncState {
+  /** No Firebase download has been attempted yet. */
+  data object Idle : TextTemplateSyncState
+
+  /** A Firebase download / live sync is in progress. */
+  data object Loading : TextTemplateSyncState
+
+  /** Firebase answered; [remoteCount] cloud templates are merged into the registry. */
+  data class Ready(val remoteCount: Int, val updatedAtMs: Long) : TextTemplateSyncState
+
+  /** Firebase could not be reached; built-in templates keep working and Retry re-downloads. */
+  data class Error(val message: String) : TextTemplateSyncState
+}
+
 /**
- * Loads real text templates from packaged JSON, installed plugins, and the public Firestore catalog.
+ * Loads real text templates from packaged JSON, installed plugins, and Firebase.
+ *
+ * Firebase sources, all merged into the same live [TextAssetRegistry] (cloud entries first):
+ *  1. Firestore collection `text_templates` (plus the `textTemplates` alias collection) —
+ *     live snapshot listeners plus a one-shot download on every panel open / refresh.
+ *  2. Firebase Storage catalog files (`text/templates/catalog.json` and aliases) —
+ *     a JSON array in the exact format of `assets/text/templates/catalog.json`.
+ *
  * The UI never hardcodes a catalog; uploaded templates are parsed into the same live registry.
- * Duplicate ids are skipped so assets, plugins, and Firestore entries cannot register twice.
+ * Duplicate ids are skipped so assets, plugins, and cloud entries cannot register twice.
  */
 object TextTemplateCatalog {
 
   private const val TAG = "TextTemplateCatalog"
   private const val REMOTE_COLLECTION = "text_templates"
+  private const val REMOTE_COLLECTION_ALIAS = "textTemplates"
+  private val REMOTE_COLLECTIONS = listOf(REMOTE_COLLECTION, REMOTE_COLLECTION_ALIAS)
+
+  /** Well-known Firebase Storage paths for a downloadable JSON text-template catalog. */
+  val STORAGE_CATALOG_PATHS = listOf(
+    "text/templates/catalog.json",
+    "text_templates/catalog.json",
+    "text-templates/catalog.json",
+    "text/templates.json"
+  )
+  private const val STORAGE_CATALOG_MAX_BYTES = 4L * 1024L * 1024L
+
+  /** Preview text used for style-only cloud templates that carry no sample text. */
+  const val DEFAULT_PREVIEW_TEXT = "Aa"
   const val ASSET_DIR = "text/templates"
   const val UTE_DIR = "ute/templates"
 
   @Volatile
   private var loaded = false
-  @Volatile
-  private var firestoreListener: ListenerRegistration? = null
   private val lock = Any()
   private val remoteLock = Any()
   private val mainHandler = Handler(Looper.getMainLooper())
-  private val remoteTemplateIds = mutableSetOf<String>()
+  private val firestoreListeners = mutableMapOf<String, ListenerRegistration>()
+
+  // Remote bookkeeping is per source key ("firestore:<collection>", "storage:<path>") so
+  // one source refreshing can never wipe the templates another source provided.
+  private val remoteIdsBySource = mutableMapOf<String, MutableSet<String>>()
+
+  private fun firestoreSourceKey(collection: String) = "firestore:$collection"
+  private fun storageSourceKey(path: String) = "storage:$path"
+
+  @Volatile
+  private var storageFetchAttempted = false
+
+  private val _syncState = MutableStateFlow<TextTemplateSyncState>(TextTemplateSyncState.Idle)
+
+  /** Observable Firebase download state for the text-template panels. */
+  val syncState: StateFlow<TextTemplateSyncState> = _syncState.asStateFlow()
+
+  /** How many Firebase (Firestore + Storage) templates are currently merged in. */
+  fun remoteTemplateCount(): Int = synchronized(remoteLock) {
+    remoteIdsBySource.values.flatten().toSet().size
+  }
 
   /** Loads the packaged/plugin fallback without starting a network request. */
   fun ensureLocalLoaded(context: Context) {
@@ -51,11 +109,59 @@ object TextTemplateCatalog {
     }
   }
 
-  /** Loads local fallback styles and subscribes to live Firestore templates. */
+  /** Loads local fallback styles, subscribes to live Firestore templates, and downloads the cloud catalog. */
   fun ensureLoaded(context: Context) {
     val app = context.applicationContext
     ensureLocalLoaded(app)
     startFirestoreSync(app)
+    refreshRemoteTemplates(app)
+  }
+
+  /**
+   * One-shot Firebase download of every cloud text template (Firestore `get()` for both
+   * collections + the Storage catalog JSON). Safe to call on every panel open and from the
+   * Retry button: results are merged into the registry and [syncState] is updated so the UI
+   * can show downloading / loaded / error states. Live snapshot listeners keep the catalog
+   * updated afterwards, so templates uploaded later appear without restarting the app.
+   */
+  fun refreshRemoteTemplates(context: Context) {
+    val app = context.applicationContext
+    ensureLocalLoaded(app)
+    startFirestoreSync(app)
+    downloadStorageCatalog(app, force = true)
+    try {
+      FirebaseBootstrap.ensure(app)
+      if (FirebaseApp.getApps(app).isEmpty()) {
+        markSyncError("Firebase is not configured for this build")
+        return
+      }
+      if (_syncState.value !is TextTemplateSyncState.Ready) {
+        _syncState.value = TextTemplateSyncState.Loading
+      }
+      val db = FirebaseFirestore.getInstance()
+      REMOTE_COLLECTIONS.forEach { collection ->
+        db.collection(collection).get()
+          .addOnSuccessListener { snapshot ->
+            val templates = templatesFromDocuments(snapshot.documents.map { it.id to (it.data ?: emptyMap()) })
+            mainHandler.post {
+              replaceRemoteTemplates(firestoreSourceKey(collection), templates)
+              markSyncReady()
+            }
+          }
+          .addOnFailureListener { error ->
+            Log.w(TAG, "Firestore $collection download failed: ${error.message}")
+            // Keep live listeners as a fallback; only surface an error when nothing remote loaded.
+            if (remoteTemplateCount() == 0) {
+              markSyncError(error.message ?: "Could not download text templates from Firebase")
+            }
+          }
+      }
+    } catch (error: Exception) {
+      Log.w(TAG, "Could not download Firestore text templates: ${error.message}", error)
+      if (remoteTemplateCount() == 0) {
+        markSyncError(error.message ?: "Could not download text templates from Firebase")
+      }
+    }
   }
 
   fun reload(context: Context) {
@@ -65,30 +171,202 @@ object TextTemplateCatalog {
     ensureLocalLoaded(context)
   }
 
+  private fun markSyncReady() {
+    _syncState.value = TextTemplateSyncState.Ready(
+      remoteCount = remoteTemplateCount(),
+      updatedAtMs = System.currentTimeMillis()
+    )
+  }
+
+  private fun markSyncError(message: String) {
+    _syncState.value = TextTemplateSyncState.Error(message)
+  }
+
+  /**
+   * Parses Firestore documents into templates, ordered by the optional
+   * `sortOrder` / `order` / `priority` / `displayOrder` field when uploads provide one.
+   */
+  internal fun templatesFromDocuments(
+    documents: List<Pair<String, Map<String, Any?>>>
+  ): List<RegisteredTextTemplate> {
+    val sorted = documents.sortedBy { (_, data) -> sortKeyOf(data) ?: Double.MAX_VALUE }
+    return sorted.flatMap { (id, data) -> parseFirestoreDocuments(id, data) }
+  }
+
+  private fun sortKeyOf(data: Map<String, Any?>): Double? {
+    for (key in listOf("sortOrder", "order", "priority", "displayOrder")) {
+      when (val value = data[key]) {
+        is Number -> return value.toDouble()
+        is String -> value.toDoubleOrNull()?.let { return it }
+      }
+    }
+    return null
+  }
+
+  /**
+   * Downloads a JSON text-template catalog from Firebase Storage (same array format as
+   * `assets/text/templates/catalog.json`). Missing files are ignored — Firestore remains
+   * the primary source — but a found catalog is merged at the top of the panel grid.
+   */
+  private fun downloadStorageCatalog(context: Context, force: Boolean) {
+    if (storageFetchAttempted && !force) return
+    storageFetchAttempted = true
+    try {
+      FirebaseBootstrap.ensure(context)
+      if (FirebaseApp.getApps(context).isEmpty()) return
+      val storage = FirebaseStorage.getInstance()
+      STORAGE_CATALOG_PATHS.forEach { path ->
+        runCatching {
+          storage.reference.child(path).getBytes(STORAGE_CATALOG_MAX_BYTES)
+            .addOnSuccessListener { bytes ->
+              val templates = runCatching {
+                parseArray(String(bytes, Charsets.UTF_8)).map { it.copy(isRemote = true) }
+              }.getOrElse { error ->
+                Log.w(TAG, "Skipped Storage text-template catalog $path: ${error.message}")
+                emptyList()
+              }
+              if (templates.isNotEmpty()) {
+                mainHandler.post {
+                  replaceRemoteTemplates(storageSourceKey(path), templates)
+                  markSyncReady()
+                }
+                Log.d(TAG, "Downloaded ${templates.size} text templates from Storage $path")
+              }
+            }
+            .addOnFailureListener { error ->
+              Log.d(TAG, "No Storage text-template catalog at $path: ${error.message}")
+            }
+        }.onFailure { error ->
+          Log.w(TAG, "Storage text-template catalog $path skipped: ${error.message}")
+        }
+      }
+    } catch (error: Exception) {
+      Log.w(TAG, "Could not download Storage text templates: ${error.message}", error)
+    }
+  }
+
   fun parseObject(json: JSONObject): RegisteredTextTemplate? =
     parseNormalizedObject(normalizeTemplateObject(json, fallbackId = null))
 
   /**
    * Parses a Firestore document using its document ID as the stable app-side template ID.
    * Supports both flat fields (name/text/fontSizeSp) and common uploaded shapes such as
-   * { title, content, style: { fontSize, color } } or { clip: { text, ... } }.
+   * { title, content, style: { fontSize, color } }, { clip: { text, ... } },
+   * { templateClip: { ... } }, a JSON-string payload ({ templateJson: "{...}" }), and
+   * style-only documents (no sample text — the preview falls back to [DEFAULT_PREVIEW_TEXT]).
+   * Use [parseFirestoreDocuments] when a document may hold a whole catalog.
    */
-  fun parseFirestoreDocument(documentId: String, data: Map<String, Any?>): RegisteredTextTemplate? {
-    if (documentId.isBlank()) return null
+  fun parseFirestoreDocument(documentId: String, data: Map<String, Any?>): RegisteredTextTemplate? =
+    parseFirestoreDocuments(documentId, data).firstOrNull()
+
+  /**
+   * Parses one Firestore document into zero or more templates. A single document may also
+   * be an uploaded catalog — { templates: [ {...}, {...} ] } — in which case every entry is
+   * returned. Documents explicitly disabled (enabled/published/visible/isActive = false, or
+   * status draft/archived/hidden) are skipped so unpublished uploads never leak into the app.
+   */
+  fun parseFirestoreDocuments(documentId: String, data: Map<String, Any?>): List<RegisteredTextTemplate> {
+    if (documentId.isBlank()) return emptyList()
+    if (isExplicitlyHidden(data)) return emptyList()
     return runCatching {
       val source = JSONObject()
       data.forEach { (key, value) -> source.put(key, toJsonValue(value)) }
-      parseNormalizedObject(normalizeTemplateObject(source, fallbackId = documentId))
+
+      // Catalog document: one Firestore doc holding an array of templates.
+      val catalogArray = sequenceOf("templates", "items", "textTemplates", "templatesList")
+        .mapNotNull { source.optJSONArray(it) }
+        .firstOrNull()
+      if (catalogArray != null) {
+        return@runCatching (0 until catalogArray.length()).mapNotNull { index ->
+          val element = catalogArray.optJSONObject(index) ?: return@mapNotNull null
+          val elementId = element.optString("id").trim()
+            .ifBlank { "$documentId-${index + 1}" }
+          parseFirestoreElement(element, fallbackId = elementId)
+        }
+      }
+
+      // JSON-string payload: the whole template (or catalog) stored as a string field.
+      val payload = sequenceOf("templateJson", "json", "payload", "data", "template")
+        .mapNotNull { key -> (data[key] as? String)?.trim()?.takeIf { it.startsWith("{") || it.startsWith("[") } }
+        .firstOrNull()
+      if (payload != null) {
+        return@runCatching if (payload.startsWith("[")) {
+          val array = JSONArray(payload)
+          (0 until array.length()).mapNotNull { index ->
+            val element = array.optJSONObject(index) ?: return@mapNotNull null
+            val elementId = element.optString("id").trim().ifBlank { "$documentId-${index + 1}" }
+            parseFirestoreElement(element, fallbackId = elementId)
+          }
+        } else {
+          listOfNotNull(parseFirestoreElement(JSONObject(payload), fallbackId = documentId))
+        }
+      }
+
+      listOfNotNull(parseFirestoreElement(source, fallbackId = documentId))
     }.onFailure { error ->
       Log.w(TAG, "Skipped Firestore text template $documentId: ${error.message}")
-    }.getOrNull()
+    }.getOrDefault(emptyList())
+  }
+
+  /**
+   * Parses a single template object coming from Firestore. Unlike packaged assets, cloud
+   * templates may be style-only (a font/color/3D/animation preset with no sample text) —
+   * those stay valid and preview with [DEFAULT_PREVIEW_TEXT] instead of being dropped.
+   */
+  private fun parseFirestoreElement(source: JSONObject, fallbackId: String): RegisteredTextTemplate? {
+    if (isExplicitlyHidden(source)) return null
+    val normalized = normalizeTemplateObject(source, fallbackId)
+    val clipObj = normalized.optJSONObject("clip") ?: normalized.optJSONObject("templateClip")
+    if (stringValue(normalized, "text").isNullOrBlank() &&
+      stringValue(clipObj ?: JSONObject(), "text").isNullOrBlank() &&
+      (clipObj != null || hasStyleSignal(normalized))
+    ) {
+      // Style-only cloud template: keep it, previewed with the sample text. A document with
+      // nothing but a name carries no style at all and is still rejected as before.
+      normalized.put("text", DEFAULT_PREVIEW_TEXT)
+    }
+    return parseNormalizedObject(normalized)?.copy(isRemote = true)
+  }
+
+  /** True when a document carries at least one real text-style field. */
+  private fun hasStyleSignal(json: JSONObject): Boolean {
+    val styleKeys = listOf(
+      "fontFamily", "fontSizeSp", "fontWeight", "letterSpacing", "lineSpacing",
+      "textColor", "hasGradient", "gradientColorStart", "gradientColorEnd",
+      "strokeWidth", "strokeColor", "hasShadow", "shadowColor", "hasGlow", "glowColor",
+      "hasBackground", "backgroundColor", "is3D", "depth3D", "material3D", "color3D",
+      "animationIn", "animationType", "animation3D", "effectStyle"
+    )
+    return styleKeys.any { key -> json.has(key) && !json.isNull(key) && hasScalarValue(json, key) } ||
+      json.has("clip") || json.has("templateClip")
+  }
+
+  private fun isExplicitlyHidden(data: Map<String, Any?>): Boolean {
+    for (key in listOf("enabled", "isEnabled", "published", "isPublished", "visible", "isVisible", "isActive", "active")) {
+      val value = data[key]
+      if (value is Boolean && !value) return true
+      if (value is String && (value.equals("false", true) || value.equals("no", true))) return true
+    }
+    val status = (data["status"] as? String)?.trim()?.lowercase()
+    return status in setOf("draft", "archived", "hidden", "unpublished", "disabled")
+  }
+
+  private fun isExplicitlyHidden(json: JSONObject): Boolean {
+    for (key in listOf("enabled", "isEnabled", "published", "isPublished", "visible", "isVisible", "isActive", "active")) {
+      if (!json.has(key) || json.isNull(key)) continue
+      val value = json.opt(key)
+      if (value is Boolean && !value) return true
+      if (value is String && (value.equals("false", true) || value.equals("no", true))) return true
+    }
+    val status = json.optString("status").trim().lowercase()
+    return status in setOf("draft", "archived", "hidden", "unpublished", "disabled")
   }
 
   private fun parseNormalizedObject(json: JSONObject): RegisteredTextTemplate? {
     val id = json.optString("id").trim()
     val name = json.optString("name").trim()
     if (id.isEmpty() || name.isEmpty()) return null
-    val clipObj = json.optJSONObject("clip")
+    val clipObj = json.optJSONObject("clip") ?: json.optJSONObject("templateClip")
     val explicitText = sequenceOf(
       clipObj?.optString("text"),
       clipObj?.optString("content"),
@@ -155,6 +433,7 @@ object TextTemplateCatalog {
 
     normalizeStyleAliases(normalized)
     normalized.optJSONObject("clip")?.let(::normalizeStyleAliases)
+    normalized.optJSONObject("templateClip")?.let(::normalizeStyleAliases)
 
     val resolvedId = fallbackId?.takeIf { it.isNotBlank() } ?: stringValue(normalized, "id")
     if (!resolvedId.isNullOrBlank()) normalized.put("id", resolvedId)
@@ -167,7 +446,7 @@ object TextTemplateCatalog {
       if (!name.isNullOrBlank()) normalized.put("name", name)
     }
 
-    val clip = normalized.optJSONObject("clip")
+    val clip = normalized.optJSONObject("clip") ?: normalized.optJSONObject("templateClip")
     if (stringValue(normalized, "text").isNullOrBlank()) {
       val text = sequenceOf(
         clip?.let { stringValue(it, "text") ?: stringValue(it, "content") },
@@ -189,9 +468,9 @@ object TextTemplateCatalog {
     }
 
     alias("name", "title")
-    alias("text", "content", "defaultText")
-    alias("fontFamily", "font")
-    alias("fontSizeSp", "fontSize")
+    alias("text", "content", "defaultText", "sampleText", "previewText", "textContent", "captionText")
+    alias("fontFamily", "font", "fontName")
+    alias("fontSizeSp", "fontSize", "textSize")
     alias("textColor", "color", "textColorHex")
     alias("strokeColor", "strokeColorHex")
     alias("animationIn", "animation", "entranceAnimation")
@@ -228,52 +507,78 @@ object TextTemplateCatalog {
 
   private fun startFirestoreSync(context: Context) {
     synchronized(lock) {
-      if (firestoreListener != null) return
       try {
         FirebaseBootstrap.ensure(context)
         if (FirebaseApp.getApps(context).isEmpty()) return
 
-        firestoreListener = FirebaseFirestore.getInstance()
-          .collection(REMOTE_COLLECTION)
-          .addSnapshotListener { snapshot, error ->
-            if (error != null) {
-              // Firestore listeners terminate on permission/configuration errors; allow a later
-              // ensureLoaded() (for example after rules are deployed) to attach again.
-              firestoreListener = null
-              Log.w(TAG, "Firestore $REMOTE_COLLECTION listener failed: ${error.message}")
-              return@addSnapshotListener
+        val db = FirebaseFirestore.getInstance()
+        REMOTE_COLLECTIONS.forEach { collection ->
+          if (firestoreListeners.containsKey(collection)) return@forEach
+          val registration = db.collection(collection)
+            .addSnapshotListener { snapshot, error ->
+              if (error != null) {
+                // Firestore listeners terminate on permission/configuration errors; clear the
+                // slot so a later ensureLoaded()/refresh (e.g. after rules deploy) re-attaches.
+                synchronized(lock) { firestoreListeners.remove(collection) }
+                Log.w(TAG, "Firestore $collection listener failed: ${error.message}")
+                if (remoteTemplateCount() == 0) {
+                  markSyncError(error.message ?: "Could not load text templates from Firebase")
+                }
+                return@addSnapshotListener
+              }
+              val documents = snapshot?.documents ?: return@addSnapshotListener
+              val templates = templatesFromDocuments(
+                documents.map { it.id to (it.data ?: emptyMap()) }
+              )
+              mainHandler.post {
+                replaceRemoteTemplates(firestoreSourceKey(collection), templates)
+                markSyncReady()
+              }
             }
-            val documents = snapshot?.documents ?: return@addSnapshotListener
-            val templates = documents.mapNotNull { document ->
-              parseFirestoreDocument(document.id, document.data ?: emptyMap())
-            }
-            mainHandler.post { replaceRemoteTemplates(templates) }
-          }
+          firestoreListeners[collection] = registration
+        }
       } catch (error: Exception) {
         Log.w(TAG, "Could not start Firestore text-template sync: ${error.message}", error)
       }
     }
   }
 
-  private fun replaceRemoteTemplates(templates: List<RegisteredTextTemplate>) {
+  /** Stops the live Firestore listeners. Remote templates stay merged in the registry. */
+  fun stopFirestoreSync() {
+    synchronized(lock) {
+      firestoreListeners.values.forEach { runCatching { it.remove() } }
+      firestoreListeners.clear()
+    }
+  }
+
+  private fun replaceRemoteTemplates(
+    source: String,
+    templates: List<RegisteredTextTemplate>
+  ) {
     synchronized(remoteLock) {
       val nextById = templates.associateBy { it.id }
-      val removedIds = remoteTemplateIds.filterNot { it in nextById.keys }
+      val previousIds = remoteIdsBySource[source].orEmpty()
+      val removedIds = previousIds.filterNot { id ->
+        id in nextById.keys ||
+          // Another cloud source still provides this id — keep it in the registry.
+          remoteIdsBySource.any { (other, ids) -> other != source && id in ids }
+      }
       removedIds.forEach(TextAssetRegistry::removeTemplate)
-      remoteTemplateIds.removeAll(removedIds.toSet())
 
-      // Reverse insertion at the front preserves Firestore's snapshot order while making
+      val updatedIds = previousIds.intersect(nextById.keys) + nextById.keys
+      remoteIdsBySource[source] = updatedIds.toMutableSet()
+
+      // Reverse insertion at the front preserves the cloud snapshot order while making
       // uploaded templates immediately visible above the packaged catalog in the grid.
       nextById.values.toList().asReversed().forEach { template ->
-        val alreadyRemote = template.id in remoteTemplateIds
+        val alreadyRemote = remoteIdsBySource.values.any { template.id in it }
         val alreadyRegistered = TextAssetRegistry.getTemplates().any { it.id == template.id }
-        // A Firestore item should not silently replace an asset/plugin template with the same id.
+        // A cloud item should not silently replace an asset/plugin template with the same id.
         if (alreadyRemote || !alreadyRegistered) {
           TextAssetRegistry.upsertTemplateAtFront(template)
-          remoteTemplateIds.add(template.id)
         }
       }
-      Log.d(TAG, "Loaded ${remoteTemplateIds.size} Firestore text templates")
+      Log.d(TAG, "Loaded ${remoteIdsBySource.values.flatten().toSet().size} Firebase text templates")
     }
   }
 

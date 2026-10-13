@@ -7,7 +7,13 @@ service cloud.firestore {
     }
 
     // Text styles are published by trusted tooling and read directly by the editor.
+    // The app syncs both collection names, so uploads land in the panel either way.
     match /text_templates/{textTemplateId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /textTemplates/{textTemplateId} {
       allow read: if true;
       allow write: if false;
     }
