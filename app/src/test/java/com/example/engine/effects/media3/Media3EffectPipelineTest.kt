@@ -292,14 +292,14 @@ class Media3EffectPipelineTest {
   @Test
   fun testPreviewFilterEffects_includesCatalogVfxOnTheLivePreviewPath() {
     val clip = VideoClip(name = "Fx")
-    val glitch = com.example.engine.effects.ProductionEffectCatalog.byId("video.glitch")!!
-    val looked = com.example.engine.effects.ProductionEffectApplicator.apply(clip, glitch, 0.8f)
+    val moshed = com.example.engine.effects.ProductionEffectCatalog.byId("video.datamosh")!!
+    val looked = com.example.engine.effects.ProductionEffectApplicator.apply(clip, moshed, 0.8f)
     val effects = PreviewFilterEffects.effectsFor(looked, Timeline())
-    assertTrue(effects.any { it is CustomShaderGlEffect && it.name == "GlitchEffect" })
+    assertTrue(effects.any { it is CustomShaderGlEffect && it.name == "PreviewDatamosh" })
     val sketch = com.example.engine.effects.ProductionEffectCatalog.byId("ai.sketch")!!
     val styled = com.example.engine.effects.ProductionEffectApplicator.apply(looked, sketch, 1f)
     val styledEffects = PreviewFilterEffects.effectsFor(styled, Timeline())
-    assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "GlitchEffect" })
+    assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "PreviewDatamosh" })
     assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "SketchCharcoalEffect" })
     assertNotEquals(PreviewFilterEffects.signature(clip, Timeline()), PreviewFilterEffects.signature(styled, Timeline()))
   }

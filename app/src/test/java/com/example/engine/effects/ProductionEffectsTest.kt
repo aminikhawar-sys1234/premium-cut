@@ -31,10 +31,10 @@ class ProductionEffectsTest {
   @Test
   fun catalogHasUniqueRealEffectsInEveryCategory() {
     val all = ProductionEffectCatalog.effects
-    assertEquals(25, all.size)
-    assertEquals(25, all.map { it.id }.toSet().size)
-    assertEquals(25, all.map { it.shaderKey }.toSet().size)
-    assertEquals(5, all.count { it.category == EffectCategory.VIDEO_EFFECTS })
+    assertEquals(30, all.size)
+    assertEquals(30, all.map { it.id }.toSet().size)
+    assertEquals(30, all.map { it.shaderKey }.toSet().size)
+    assertEquals(10, all.count { it.category == EffectCategory.VIDEO_EFFECTS })
     assertEquals(5, all.count { it.category == EffectCategory.FACE_EFFECTS })
     assertEquals(5, all.count { it.category == EffectCategory.BODY_EFFECTS })
     assertEquals(5, all.count { it.category == EffectCategory.PHOTO_EFFECTS })
@@ -47,7 +47,8 @@ class ProductionEffectsTest {
       assertTrue(effect.supportsExport)
       assertEquals(null, effect.effectType)
     }
-    assertEquals(25, EffectsAssetRegistry.getAllEffects().size)
+    assertEquals(30, EffectsAssetRegistry.getAllEffects().size)
+    assertEquals(10, EffectsAssetRegistry.getEffects(EffectCategory.VIDEO_EFFECTS).size)
     assertEquals(5, EffectsAssetRegistry.getEffects(EffectCategory.FACE_EFFECTS).size)
     assertEquals(5, EffectsAssetRegistry.getEffects(EffectCategory.AI_EFFECTS).size)
   }
@@ -55,21 +56,22 @@ class ProductionEffectsTest {
   @Test
   fun videoEffectsUpsertIntoTheRealVfxStack() {
     val clip = VideoClip(id = "v", name = "v")
-    val glitch = ProductionEffectCatalog.byId("video.glitch")!!
+    val moshed = ProductionEffectCatalog.byId("video.datamosh")!!
     val grain = ProductionEffectCatalog.byId("video.film_grain")!!
-    val once = ProductionEffectApplicator.apply(clip, glitch, 0.8f)
-    val twice = ProductionEffectApplicator.apply(once, glitch, 0.4f)
+    val once = ProductionEffectApplicator.apply(clip, moshed, 0.8f)
+    val twice = ProductionEffectApplicator.apply(once, moshed, 0.4f)
     val both = ProductionEffectApplicator.apply(twice, grain, 1f)
     val stack = VfxEffectsHost.decode(both.vfxStackJson)
     assertEquals(2, stack.size)
-    assertEquals("distort.glitch", stack.effectAt(0).definition.id)
+    assertEquals("distort.datamosh", stack.effectAt(0).definition.id)
     assertEquals(0.4f, stack.effectAt(0).intensity, 1e-4f)
-    assertEquals(0.012f + 0.045f * 0.4f, stack.effectAt(0).getParam<Float>("amount"), 1e-4f)
-    assertEquals("noise.filmGrain", stack.effectAt(1).definition.id)
+    assertEquals(0.02f + 0.14f * 0.4f, stack.effectAt(0).getParam<Float>("amount"), 1e-4f)
+    assertEquals("noise.grain", stack.effectAt(1).definition.id)
     listOf(
-      "blur.directional", "chromatic.aberration", "light.leak", "color.hdr", "color.pop",
-      "sharpen.unsharp", "stylize.sketch", "stylize.halftone", "stylize.posterize",
-      "stylize.pixelate", "stylize.duotone"
+      "blur.motion", "video.vhs", "video.crt", "distort.datamosh", "light.anamorphic",
+      "noise.grain", "light.halation", "light.flare", "stylize.speedLines", "distort.kaleidoscope",
+      "color.hdr", "color.pop", "sharpen.unsharp", "stylize.sketch", "stylize.halftone",
+      "stylize.posterize", "stylize.pixelate", "stylize.duotone"
     ).forEach { id ->
       assertNotNull(VfxEffectsHost.registry.createEffect(id))
     }
@@ -176,26 +178,26 @@ class ProductionEffectsTest {
   @Test
   fun appliedOnReadsTheSameFieldsPreviewAndExportUse() {
     val clip = VideoClip(id = "v", name = "v")
-    val glitch = ProductionEffectCatalog.byId("video.glitch")!!
+    val moshed = ProductionEffectCatalog.byId("video.datamosh")!!
     val sketch = ProductionEffectCatalog.byId("ai.sketch")!!
     val slim = ProductionEffectCatalog.byId("face.slim")!!
     val looked = ProductionEffectApplicator.apply(
       ProductionEffectApplicator.apply(
-        ProductionEffectApplicator.apply(clip, glitch, 0.6f),
+        ProductionEffectApplicator.apply(clip, moshed, 0.6f),
         sketch,
         0.8f
       ),
       slim,
       0.5f
     )
-    assertEquals("video.glitch", ProductionEffectApplicator.appliedOn(looked, EffectCategory.VIDEO_EFFECTS)?.id)
+    assertEquals("video.datamosh", ProductionEffectApplicator.appliedOn(looked, EffectCategory.VIDEO_EFFECTS)?.id)
     assertEquals("ai.sketch", ProductionEffectApplicator.appliedOn(looked, EffectCategory.AI_EFFECTS)?.id)
     assertEquals("face.slim", ProductionEffectApplicator.appliedOn(looked, EffectCategory.FACE_EFFECTS)?.id)
-    assertEquals(0.6f, ProductionEffectApplicator.intensityOn(looked, glitch), 1e-4f)
+    assertEquals(0.6f, ProductionEffectApplicator.intensityOn(looked, moshed), 1e-4f)
     assertEquals(0.8f, ProductionEffectApplicator.intensityOn(looked, sketch), 1e-4f)
     val clearedAi = ProductionEffectApplicator.clearCategory(looked, EffectCategory.AI_EFFECTS)
     assertNull(ProductionEffectApplicator.appliedOn(clearedAi, EffectCategory.AI_EFFECTS))
-    assertEquals("video.glitch", ProductionEffectApplicator.appliedOn(clearedAi, EffectCategory.VIDEO_EFFECTS)?.id)
+    assertEquals("video.datamosh", ProductionEffectApplicator.appliedOn(clearedAi, EffectCategory.VIDEO_EFFECTS)?.id)
   }
 
   @Test
@@ -257,13 +259,13 @@ class ProductionEffectsTest {
     val main = VideoClip(id = "main", name = "main", timelineStartMs = 0, durationMs = 5_000, sourceEndMs = 5_000)
     val pip = VideoClip(id = "pip", name = "pip", timelineStartMs = 0, durationMs = 5_000, sourceEndMs = 5_000)
     engine.loadTimeline(Timeline(videoClips = listOf(main), overlayClips = listOf(pip)))
-    val pipLook = ProductionEffectApplicator.apply(pip, ProductionEffectCatalog.byId("video.chromatic")!!, 1f)
+    val pipLook = ProductionEffectApplicator.apply(pip, ProductionEffectCatalog.byId("video.anamorphic")!!, 1f)
     assertTrue(engine.setClipProductionLook("pip", pipLook))
     val tl = engine.timeline.value
     assertNull(tl.videoClips.first().vfxStackJson)
     assertNotNull(tl.overlayClips.first().vfxStackJson)
     assertNotEquals(tl.videoClips.first().vfxStackJson, tl.overlayClips.first().vfxStackJson)
     val stack = VfxEffectsHost.decode(tl.overlayClips.first().vfxStackJson)
-    assertEquals("chromatic.aberration", stack.effectAt(0).definition.id)
+    assertEquals("light.anamorphic", stack.effectAt(0).definition.id)
   }
 }
