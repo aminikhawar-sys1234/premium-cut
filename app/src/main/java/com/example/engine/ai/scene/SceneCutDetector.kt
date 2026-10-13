@@ -96,7 +96,6 @@ object SceneCutDetector {
     for (i in candidates) {
       val refined = refine(sampleTimesMs[i], sampleTimesMs[i + 1], sigs[i], sigs[i + 1], refineToMs, signatureAt)
       if (cuts.isEmpty() || refined - cuts.last() >= minShotMs) cuts.add(refined)
-      else if (d[i] > 0f) { /* a closer cut in the same flash is the same event */ }
     }
     return cuts.filter { it - sampleTimesMs.first() >= minShotMs / 2 }
   }
