@@ -2,6 +2,7 @@ package com.example.data.repository
 
 import android.util.Log
 import com.example.domain.model.EditorToolItem
+import com.example.domain.model.isHiddenFromNavigation
 import com.google.firebase.FirebaseApp
 import com.google.firebase.firestore.FirebaseFirestore
 import kotlinx.coroutines.channels.awaitClose
@@ -77,17 +78,14 @@ class EditorToolsRepository {
                   val name = doc.getString("name") ?: ""
                   val actionKey = doc.getString("actionKey") ?: ""
                   val category = doc.getString("category") ?: "general"
-                  val orderNum = (doc.getLong("order") ?: doc.getString("order")?.toLongOrNull() ?: 0L).toInt()
+                  val orderNum = when (val raw = doc.get("order")) {
+                    is Number -> raw.toInt()
+                    is String -> raw.trim().toDoubleOrNull()?.toInt() ?: 0
+                    else -> 0
+                  }
                   val isActive = doc.getBoolean("isActive") ?: true
 
-                  // Exclude Asset Packs, AI Tools, and Emojis from editor navigation tools
-                  val isExcluded = id == "tool_asset_packs" || id == "tool_ai_tools" || id == "tool_emojis" ||
-                    actionKey == "TOOL_ASSET_PACKS" || actionKey == "TOOL_AI_TOOLS" || actionKey == "TOOL_EMOJIS" ||
-                    name.equals("Asset Packs", ignoreCase = true) ||
-                    name.equals("Assets Packs", ignoreCase = true) ||
-                    name.equals("Assets packs", ignoreCase = true) ||
-                    name.equals("AI Tools", ignoreCase = true) ||
-                    name.equals("Emojis", ignoreCase = true)
+                  val isExcluded = EditorToolItem(id, name, actionKey, category, orderNum, isActive).isHiddenFromNavigation
 
                   if (name.isNotBlank() && !isExcluded) {
                     EditorToolItem(
@@ -108,13 +106,14 @@ class EditorToolsRepository {
               }.sortedBy { it.order }
 
               // Deduplicate Firestore tools to prevent repeated identical tabs
+              // Active tools win over inactive duplicates so a disabled copy never shadows a live tool.
               val distinctItems = mutableListOf<EditorToolItem>()
               val seenActionKeys = mutableSetOf<String>()
               val seenNames = mutableSetOf<String>()
-              for (item in items) {
+              for (item in items.sortedWith(compareBy<EditorToolItem> { !it.isActive }.thenBy { it.order })) {
                 val actionNorm = item.actionKey.uppercase().trim()
                 val nameNorm = item.name.lowercase().trim()
-                if (actionNorm.isNotBlank() && !seenActionKeys.contains(actionNorm) && !seenNames.contains(nameNorm)) {
+                if ((actionNorm.isBlank() || !seenActionKeys.contains(actionNorm)) && !seenNames.contains(nameNorm)) {
                   seenActionKeys.add(actionNorm)
                   seenNames.add(nameNorm)
                   distinctItems.add(item)
@@ -123,7 +122,7 @@ class EditorToolsRepository {
 
               if (distinctItems.isNotEmpty()) {
                 Log.d(TAG, "Loaded ${distinctItems.size} distinct editor tools from Firestore '$COLLECTION_NAME'")
-                trySend(withRequiredTools(distinctItems))
+                trySend(withRequiredTools(distinctItems.sortedBy { it.order }))
               } else {
                 trySend(withRequiredTools(getDefaultEditorTools()))
               }
