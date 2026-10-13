@@ -599,60 +599,39 @@ fun EditorScreen(
   }
 
   val handleToolClick: (EditorToolItem) -> Unit = { tool ->
-    when {
-      tool.actionKey.contains("SPLIT", ignoreCase = true) -> {
-        viewModel.timelineEngine.splitAtPlayhead()
-      }
-      tool.actionKey.equals("TOOL_EXPORT_PRESETS", ignoreCase = true) -> {
+    when (val route = tool.resolveRoute()) {
+      EditorToolRoute.Split -> viewModel.timelineEngine.splitAtPlayhead()
+      EditorToolRoute.Export -> {
         viewModel.saveCurrentProject()
         showExportConfigDialog = true
       }
-      tool.actionKey.equals("TOOL_VIDEO_TEMPLATES", ignoreCase = true) ||
-        tool.actionKey.equals("TOOL_TRENDING_PACKS", ignoreCase = true) -> {
-        viewModel.setActiveToolbarTab(EditorToolbarTab.ASSET_STORE)
-      }
-      tool.actionKey.equals("TOOL_OVERLAYS", ignoreCase = true) ||
-        tool.id.equals("tool_overlays", ignoreCase = true) ||
-        tool.name.equals("Overlay", ignoreCase = true) ||
-        tool.name.equals("Overlays", ignoreCase = true) -> {
-        isEffectsToolsOpen = false
-        isTextToolsOpen = false
-        isEditToolsOpen = false
-        val tab = EditorToolbarTab.OVERLAY
-        viewModel.setActiveToolbarTab(if (activeTab == tab) null else tab)
-      }
-      tool.actionKey.equals("TOOL_EFFECTS", ignoreCase = true) ||
-        tool.id.equals("tool_effects", ignoreCase = true) ||
-        tool.name.equals("Effects", ignoreCase = true) -> {
-        // Close/hide main editor bottom nav, open dedicated Effects sub-navigation
+      EditorToolRoute.EffectsMenu -> {
         isEffectsToolsOpen = true
         isTextToolsOpen = false
         isEditToolsOpen = false
         activeEffectsCategoryModal = null
         viewModel.setActiveToolbarTab(null)
       }
-      tool.actionKey.equals("TOOL_TEXT", ignoreCase = true) ||
-        tool.id.equals("tool_text", ignoreCase = true) ||
-        tool.name.contains("Text", ignoreCase = true) -> {
-        // Close/hide main editor bottom nav, open text tools + the lightweight Add Text panel
+      EditorToolRoute.TextMenu -> {
         isTextToolsOpen = true
         isEffectsToolsOpen = false
         isEditToolsOpen = false
         activeTextToolModal = TextToolCategory.ADD_TEXT
         viewModel.setActiveToolbarTab(null)
       }
-      tool.actionKey.equals("TOOL_EDIT", ignoreCase = true) -> {
+      EditorToolRoute.EditMenu -> {
         isEditToolsOpen = true
         isTextToolsOpen = false
         isEffectsToolsOpen = false
         viewModel.setActiveToolbarTab(null)
       }
-      else -> {
-        val tab = tool.mappedTab
-        if (tab != null) {
-          viewModel.setActiveToolbarTab(if (activeTab == tab) null else tab)
-        }
+      is EditorToolRoute.Panel -> {
+        isEffectsToolsOpen = false
+        isTextToolsOpen = false
+        isEditToolsOpen = false
+        viewModel.setActiveToolbarTab(if (activeTab == route.tab) null else route.tab)
       }
+      EditorToolRoute.None -> {}
     }
   }
 
@@ -3250,52 +3229,7 @@ private fun EditorBottomToolbar(
     )
   } else {
     // Standard Bottom Toolbar Mode: "Edit Tools" is the FIRST item on the left
-    val activeTools = remember(tools) {
-      val seenMappedTabs = mutableSetOf<EditorToolbarTab>()
-      val seenActionKeys = mutableSetOf<String>()
-      val seenNames = mutableSetOf<String>()
-
-      tools.filter { tool ->
-        tool.isActive &&
-          tool.id != "tool_asset_packs" &&
-          tool.id != "tool_ai_tools" &&
-          tool.id != "tool_emojis" &&
-          tool.actionKey != "TOOL_ASSET_PACKS" &&
-          tool.actionKey != "TOOL_AI_TOOLS" &&
-          tool.actionKey != "TOOL_EMOJIS" &&
-          !tool.name.contains("Asset Pack", ignoreCase = true) &&
-          !tool.name.contains("Assets Pack", ignoreCase = true) &&
-          !tool.name.equals("AI Tools", ignoreCase = true) &&
-          !tool.name.equals("Emojis", ignoreCase = true)
-      }.filter { tool ->
-        val tab = tool.mappedTab
-        val action = tool.actionKey.uppercase().trim()
-        val nameNorm = tool.name.lowercase().trim()
-
-        if (seenNames.contains(nameNorm)) {
-          false
-        } else if (tab != null) {
-          if (seenMappedTabs.contains(tab)) {
-            false
-          } else {
-            seenMappedTabs.add(tab)
-            seenNames.add(nameNorm)
-            true
-          }
-        } else if (action.isNotBlank()) {
-          if (seenActionKeys.contains(action)) {
-            false
-          } else {
-            seenActionKeys.add(action)
-            seenNames.add(nameNorm)
-            true
-          }
-        } else {
-          seenNames.add(nameNorm)
-          true
-        }
-      }.sortedBy { it.order }
-    }
+    val activeTools = remember(tools) { tools.navigationTools() }
 
     val editToolsNavItem = FuturisticNavItemData(
       id = "edit_tools_primary",
@@ -3343,52 +3277,7 @@ private fun MoreToolsDialog(
   onSelectTool: (EditorToolItem) -> Unit
 ) {
   var selectedCategory by remember { mutableStateOf("All") }
-  val activeTools = remember(tools) {
-    val seenMappedTabs = mutableSetOf<EditorToolbarTab>()
-    val seenActionKeys = mutableSetOf<String>()
-    val seenNames = mutableSetOf<String>()
-
-    tools.filter { tool ->
-      tool.isActive &&
-        tool.id != "tool_asset_packs" &&
-        tool.id != "tool_ai_tools" &&
-        tool.id != "tool_emojis" &&
-        tool.actionKey != "TOOL_ASSET_PACKS" &&
-        tool.actionKey != "TOOL_AI_TOOLS" &&
-        tool.actionKey != "TOOL_EMOJIS" &&
-        !tool.name.contains("Asset Pack", ignoreCase = true) &&
-        !tool.name.contains("Assets Pack", ignoreCase = true) &&
-        !tool.name.equals("AI Tools", ignoreCase = true) &&
-        !tool.name.equals("Emojis", ignoreCase = true)
-    }.filter { tool ->
-      val tab = tool.mappedTab
-      val action = tool.actionKey.uppercase().trim()
-      val nameNorm = tool.name.lowercase().trim()
-
-      if (seenNames.contains(nameNorm)) {
-        false
-      } else if (tab != null) {
-        if (seenMappedTabs.contains(tab)) {
-          false
-        } else {
-          seenMappedTabs.add(tab)
-          seenNames.add(nameNorm)
-          true
-        }
-      } else if (action.isNotBlank()) {
-        if (seenActionKeys.contains(action)) {
-          false
-        } else {
-          seenActionKeys.add(action)
-          seenNames.add(nameNorm)
-          true
-        }
-      } else {
-        seenNames.add(nameNorm)
-        true
-      }
-    }.sortedBy { it.order }
-  }
+  val activeTools = remember(tools) { tools.navigationTools() }
   val categories = remember(activeTools) {
     val cats = activeTools.map { it.category.replaceFirstChar { c -> c.uppercase() } }.distinct()
     listOf("All") + cats

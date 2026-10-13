@@ -48,6 +48,7 @@ data class EditorToolItem(
       "TOOL_EDIT" -> EditorToolbarTab.EDIT
       "TOOL_VOLUME" -> EditorToolbarTab.VOLUME
       "TOOL_MEDIA" -> EditorToolbarTab.MEDIA
+      "TOOL_SMART", "TOOL_SMART_TOOLS" -> EditorToolbarTab.SMART
       "TOOL_TRENDING_PACKS", "TOOL_EFFECT_PACKS", "TOOL_ASSET_PACKS", "TOOL_VIDEO_TEMPLATES" -> EditorToolbarTab.ASSET_STORE
       else -> when (category.lowercase()) {
         "effects" -> EditorToolbarTab.EFFECTS
@@ -110,6 +111,13 @@ data class EditorToolItem(
       "TOOL_SPEED" -> Icons.Default.Speed
       "TOOL_VOLUME" -> Icons.Default.VolumeUp
       "TOOL_MEDIA" -> Icons.Default.VideoLibrary
+      "TOOL_BACKGROUND" -> Icons.Default.Texture
+      "TOOL_ADVANCED_ANIMATIONS" -> Icons.Default.AutoFixHigh
+      "TOOL_RETOUCH" -> Icons.Default.FaceRetouchingNatural
+      "TOOL_VIDEO_QUALITY" -> Icons.Default.HighQuality
+      "TOOL_CANVAS" -> Icons.Default.AspectRatio
+      "TOOL_SMART", "TOOL_SMART_TOOLS" -> Icons.Default.GraphicEq
+      "TOOL_ADJUST" -> Icons.Default.Tune
       else -> when (category.lowercase()) {
         "effects" -> Icons.Default.AutoAwesome
         "filters" -> Icons.Default.ColorLens
@@ -142,5 +150,76 @@ data class EditorToolItem(
       "ai" -> NavItemThemes.AI
       "graphics" -> NavItemThemes.Elements
       else -> NavItemThemes.DefaultSlate
+    }
+}
+
+/** Where tapping a toolbar tool leads. Resolved once so the toolbar, "More" dialog and tests agree. */
+sealed interface EditorToolRoute {
+  data object Split : EditorToolRoute
+  data object Export : EditorToolRoute
+  data object EffectsMenu : EditorToolRoute
+  data object TextMenu : EditorToolRoute
+  data object EditMenu : EditorToolRoute
+  data class Panel(val tab: EditorToolbarTab) : EditorToolRoute
+  data object None : EditorToolRoute
+}
+
+/**
+ * Tools that must not appear in the navigation bar / "More" list. AI Suite is reached from Edit Tools,
+ * asset packs from the Asset Store tool and emojis from Stickers.
+ */
+val EditorToolItem.isHiddenFromNavigation: Boolean
+  get() = id == "tool_asset_packs" || id == "tool_ai_tools" || id == "tool_emojis" ||
+    actionKey.trim().uppercase().let { it == "TOOL_ASSET_PACKS" || it == "TOOL_AI_TOOLS" || it == "TOOL_EMOJIS" } ||
+    name.contains("Asset Pack", ignoreCase = true) ||
+    name.contains("Assets Pack", ignoreCase = true) ||
+    name.trim().equals("AI Tools", ignoreCase = true) ||
+    name.trim().equals("Emojis", ignoreCase = true)
+
+/**
+ * The action key is authoritative. Names and ids are only a fallback for remote tools that carry no
+ * usable action key, so a tool such as "Text Filters" is never hijacked by the Text menu.
+ */
+fun EditorToolItem.resolveRoute(): EditorToolRoute {
+  val action = actionKey.trim().uppercase()
+  return when {
+    action.contains("SPLIT") -> EditorToolRoute.Split
+    action == "TOOL_EXPORT_PRESETS" -> EditorToolRoute.Export
+    action == "TOOL_EFFECTS" -> EditorToolRoute.EffectsMenu
+    action == "TOOL_TEXT" -> EditorToolRoute.TextMenu
+    action == "TOOL_EDIT" -> EditorToolRoute.EditMenu
+    action == "TOOL_OVERLAYS" -> EditorToolRoute.Panel(EditorToolbarTab.OVERLAY)
+    action.isNotBlank() && hasKeyedPanel(action) -> EditorToolRoute.Panel(mappedTab!!)
+    id.equals("tool_overlays", true) || name.trim().equals("Overlay", true) || name.trim().equals("Overlays", true) ->
+      EditorToolRoute.Panel(EditorToolbarTab.OVERLAY)
+    id.equals("tool_effects", true) || name.trim().equals("Effects", true) -> EditorToolRoute.EffectsMenu
+    id.equals("tool_text", true) || name.trim().equals("Text", true) -> EditorToolRoute.TextMenu
+    else -> mappedTab?.let { EditorToolRoute.Panel(it) } ?: EditorToolRoute.None
+  }
+}
+
+private fun EditorToolItem.hasKeyedPanel(upperAction: String): Boolean =
+  mappedTab != null && copy(category = "").mappedTab != null && upperAction.startsWith("TOOL_")
+
+/**
+ * Active, visible tools in display order with duplicates removed (same target panel, same action key
+ * or same label). Shared by the bottom toolbar and the "More" dialog.
+ */
+fun List<EditorToolItem>.navigationTools(): List<EditorToolItem> {
+  val seenTabs = mutableSetOf<EditorToolbarTab>()
+  val seenActions = mutableSetOf<String>()
+  val seenNames = mutableSetOf<String>()
+  return filter { it.isActive && !it.isHiddenFromNavigation }
+    .sortedBy { it.order }
+    .filter { tool ->
+      val nameNorm = tool.name.lowercase().trim()
+      val action = tool.actionKey.uppercase().trim()
+      val tab = tool.mappedTab
+      when {
+        nameNorm in seenNames -> false
+        tab != null -> seenTabs.add(tab)
+        action.isNotBlank() -> seenActions.add(action)
+        else -> true
+      }.also { keep -> if (keep) seenNames.add(nameNorm) }
     }
 }
