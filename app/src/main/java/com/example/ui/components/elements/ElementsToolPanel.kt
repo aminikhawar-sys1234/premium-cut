@@ -377,11 +377,11 @@ private fun ElementThumbnailCard(
           .fillMaxWidth(),
         contentAlignment = Alignment.Center
       ) {
-        if (element.thumbnailUrl != null) {
-          // Firebase PNG thumbnail (Coil memory/disk cached; full SVG is only
-          // fetched from storagePath when the asset is actually used).
+        if (element.thumbnailUrl != null || element.thumbnailData != null) {
+          // Firebase PNG thumbnail: Storage URL (Coil cached) ya Firestore se
+          // embedded PNG bytes - dono surat mein asal asset ki preview hai.
           AsyncImage(
-            model = element.thumbnailUrl,
+            model = element.thumbnailData ?: element.thumbnailUrl,
             contentDescription = element.title,
             modifier = Modifier
               .fillMaxSize(0.85f)

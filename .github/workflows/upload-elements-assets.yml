@@ -87,6 +87,9 @@ jobs:
             console.log('categories in Firestore:', cats.size);
             console.log('published assets in Firestore:', pub.size);
             if(cats.size!==11||pub.size!==220){console.error('MISMATCH: expected 11 categories and 220 published assets');process.exit(1)}
+            const withContent=pub.docs.filter(d=>{const a=d.data();return a.deliveryMode==='storage'||(typeof a.svgContent==='string'&&a.svgContent.includes('<svg')&&typeof a.thumbnailBase64==='string'&&a.thumbnailBase64.length>100)}).length;
+            console.log('assets with deliverable content:', withContent, '| deliveryMode:', pub.docs[0].data().deliveryMode);
+            if(withContent!==220){console.error('MISMATCH: every asset must carry Storage files or embedded svgContent+thumbnailBase64');process.exit(1)}
             console.log('VERIFIED: 11 categories + 220 published assets are live.');
           })().catch(e=>{console.error(e);process.exit(1)});
           "

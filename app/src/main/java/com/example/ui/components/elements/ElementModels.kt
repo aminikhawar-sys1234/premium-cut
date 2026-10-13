@@ -46,6 +46,11 @@ data class ElementItem(
   val isRemote: Boolean = false,
   /** Firebase Storage download URL of the PNG thumbnail (Coil-cached in the panel). */
   val thumbnailUrl: String? = null,
+  /** PNG thumbnail bytes when the asset is delivered embedded in Firestore
+   *  (`thumbnailBase64`, used when the project has no Storage bucket/billing). */
+  val thumbnailData: ByteArray? = null,
+  /** Inline SVG markup when delivered embedded in Firestore (`svgContent`). */
+  val svgContent: String? = null,
   /** Firebase Storage path of the full asset file, e.g. `elements/files/shapes/x.svg`. */
   val storagePath: String? = null,
   val format: String? = null

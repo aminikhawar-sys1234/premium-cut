@@ -97,10 +97,18 @@ object FirebaseElementsRepository {
         val categoryId = doc.getString("categoryId") ?: return@runCatching null
         val category = ElementCategory.values().firstOrNull { it.id == categoryId }
           ?: return@runCatching null
-        val thumbnailPath = doc.getString("thumbnailPath")
-        val thumbnailUrl = thumbnailPath?.let { path ->
-          runCatching { storage.reference.child(path).downloadUrl.await().toString() }.getOrNull()
+        // Delivery: "storage" (download URL) ya "firestore" (embedded content -
+        // jab project par billing/bucket na ho). Dono real Firebase source hain.
+        val svgContent = doc.getString("svgContent")
+        val thumbnailData = doc.getString("thumbnailBase64")?.let { b64 ->
+          runCatching { android.util.Base64.decode(b64, android.util.Base64.DEFAULT) }.getOrNull()
         }
+        val thumbnailPath = doc.getString("thumbnailPath")
+        val thumbnailUrl = if (thumbnailData == null) {
+          thumbnailPath?.let { path ->
+            runCatching { storage.reference.child(path).downloadUrl.await().toString() }.getOrNull()
+          }
+        } else null
         val props = doc.get("defaultProperties") as? Map<*, *>
         ElementItem(
           id = doc.id,
@@ -115,9 +123,13 @@ object FirebaseElementsRepository {
           secondaryColor = parseColor(props?.get("secondaryColor") as? String),
           isRemote = true,
           thumbnailUrl = thumbnailUrl,
+          thumbnailData = thumbnailData,
+          svgContent = svgContent,
           storagePath = doc.getString("storagePath"),
           format = doc.getString("format"),
-          renderData = doc.getString("storagePath")
+          // Timeline clip carries the real asset: inline SVG when embedded,
+          // otherwise its Storage path.
+          renderData = svgContent ?: doc.getString("storagePath")
         )
       }.getOrNull()
     }.sortedWith(compareBy({ it.category.id }, { it.title }))
