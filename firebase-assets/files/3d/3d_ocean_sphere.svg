@@ -1,0 +1,1 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512"><title>Ocean Sphere</title><defs><radialGradient id="g8" cx="35%" cy="30%"><stop offset="0%" stop-color="#fff" stop-opacity=".75"/><stop offset="45%" stop-color="#00E5FF"/><stop offset="100%" stop-color="#0091FF"/></radialGradient></defs><circle cx="256" cy="256" r="180" fill="url(#g8)"/></svg>

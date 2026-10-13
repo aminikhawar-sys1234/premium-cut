@@ -37,5 +37,19 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+
+    // ---- Elements asset library (Shapes panel) ----
+    // Published by trusted admin tooling only (tools/assets/upload_firebase.js,
+    // service account bypasses rules). App/public can read; nobody can write
+    // from a client, so unauthorized users cannot upload/publish assets.
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /assets/{assetId} {
+      allow read: if true;
+      allow write: if false;
+    }
   }
 }

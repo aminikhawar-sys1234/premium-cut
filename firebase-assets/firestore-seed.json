@@ -1,0 +1,7114 @@
+{
+ "categories": [
+  {
+   "id": "shapes",
+   "name": "Shapes",
+   "description": "Circles, squares, lines, arrows & geometry",
+   "order": 0,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "graphics",
+   "name": "Graphics",
+   "description": "Illustrations, decorative graphics & stickers",
+   "order": 1,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "frames",
+   "name": "Frames",
+   "description": "Image, video & device frames",
+   "order": 2,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "tables",
+   "name": "Tables",
+   "description": "Grids, rows/cols & comparison tables",
+   "order": 3,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "3d",
+   "name": "3D",
+   "description": "3D objects, shapes & volume graphics",
+   "order": 4,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "icons",
+   "name": "Icons",
+   "description": "Social, business & UI icons",
+   "order": 5,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "animals",
+   "name": "Animals",
+   "description": "Animal illustrations, shapes & graphics",
+   "order": 6,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "birds",
+   "name": "Birds",
+   "description": "Flying birds, bird types & illustrations",
+   "order": 7,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "characters",
+   "name": "Characters",
+   "description": "Men, women, kids & elder avatars",
+   "order": 8,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "vehicles",
+   "name": "Vehicles",
+   "description": "Cars, bikes, trucks, jeeps & tractors",
+   "order": 9,
+   "assetCount": 20,
+   "status": "published"
+  },
+  {
+   "id": "charts",
+   "name": "Charts",
+   "description": "Bar, line, pie, graphs & data charts",
+   "order": 10,
+   "assetCount": 20,
+   "status": "published"
+  }
+ ],
+ "assets": [
+  {
+   "id": "shapes_solid_circle",
+   "name": "Solid Circle",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_solid_circle.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_solid_circle.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "circle"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "circle",
+    "solid circle"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_circle_ring",
+   "name": "Circle Ring",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_circle_ring.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_circle_ring.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "ring"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "ring",
+    "circle ring"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_rounded_square",
+   "name": "Rounded Square",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_rounded_square.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_rounded_square.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "square"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "square",
+    "rounded square"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_wide_rectangle",
+   "name": "Wide Rectangle",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_wide_rectangle.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_wide_rectangle.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "rect"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "rect",
+    "wide rectangle"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_triangle",
+   "name": "Triangle",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_triangle.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_triangle.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "triangle"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "triangle",
+    "triangle"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_diamond",
+   "name": "Diamond",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_diamond.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_diamond.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "diamond"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "diamond",
+    "diamond"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_pentagon",
+   "name": "Pentagon",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_pentagon.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_pentagon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "pentagon"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "pentagon",
+    "pentagon"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_hexagon",
+   "name": "Hexagon",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_hexagon.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_hexagon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "hexagon"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "hexagon",
+    "hexagon"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_octagon",
+   "name": "Octagon",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_octagon.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_octagon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "octagon"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "octagon",
+    "octagon"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_star",
+   "name": "Star",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_star.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_star.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "star"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "star",
+    "star"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_heart",
+   "name": "Heart",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_heart.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_heart.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "heart"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "heart",
+    "heart"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_plus_cross",
+   "name": "Plus Cross",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_plus_cross.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_plus_cross.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "cross"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "cross",
+    "plus cross"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_arrow_right",
+   "name": "Arrow Right",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_arrow_right.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_arrow_right.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "arrow"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "arrow",
+    "arrow right"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_chevron",
+   "name": "Chevron",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_chevron.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_chevron.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "chevron"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "chevron",
+    "chevron"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_organic_blob",
+   "name": "Organic Blob",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_organic_blob.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_organic_blob.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "blob"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "blob",
+    "organic blob"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_half_circle",
+   "name": "Half Circle",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_half_circle.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_half_circle.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "half"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "half",
+    "half circle"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_water_drop",
+   "name": "Water Drop",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_water_drop.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_water_drop.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "drop"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "drop",
+    "water drop"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_crescent_moon",
+   "name": "Crescent Moon",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_crescent_moon.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_crescent_moon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "crescent"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "crescent",
+    "crescent moon"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_pill_label",
+   "name": "Pill Label",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_pill_label.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_pill_label.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "pill"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "pill",
+    "pill label"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "shapes_badge_circle",
+   "name": "Badge Circle",
+   "categoryId": "shapes",
+   "format": "svg",
+   "storagePath": "elements/files/shapes/shapes_badge_circle.svg",
+   "thumbnailPath": "elements/thumbnails/shapes/shapes_badge_circle.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "seal"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "shapes",
+    "seal",
+    "badge circle"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_starburst_badge",
+   "name": "Starburst Badge",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_starburst_badge.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_starburst_badge.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "burst"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "burst",
+    "starburst badge"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_award_seal",
+   "name": "Award Seal",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_award_seal.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_award_seal.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "seal"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "seal",
+    "award seal"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_price_tag",
+   "name": "Price Tag",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_price_tag.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_price_tag.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "tag"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "tag",
+    "price tag"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_ribbon_banner",
+   "name": "Ribbon Banner",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_ribbon_banner.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_ribbon_banner.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "ribbon"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "ribbon",
+    "ribbon banner"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_sparkle_burst",
+   "name": "Sparkle Burst",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_sparkle_burst.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_sparkle_burst.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "sparkle"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "sparkle",
+    "sparkle burst"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_wave_banner",
+   "name": "Wave Banner",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_wave_banner.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_wave_banner.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "banner"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "banner",
+    "wave banner"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_confetti_pop",
+   "name": "Confetti Pop",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_confetti_pop.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_confetti_pop.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "confetti"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "confetti",
+    "confetti pop"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_swirl_spiral",
+   "name": "Swirl Spiral",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_swirl_spiral.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_swirl_spiral.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "swirl"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "swirl",
+    "swirl spiral"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_sun_rays",
+   "name": "Sun Rays",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_sun_rays.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_sun_rays.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "rays"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "rays",
+    "sun rays"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_quote_bubble",
+   "name": "Quote Bubble",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_quote_bubble.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_quote_bubble.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "quote"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "quote",
+    "quote bubble"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_pill_label_art",
+   "name": "Pill Label Art",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_pill_label_art.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_pill_label_art.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "label"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "label",
+    "pill label art"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_ocean_wave",
+   "name": "Ocean Wave",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_ocean_wave.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_ocean_wave.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "wave"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "wave",
+    "ocean wave"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_coral_burst",
+   "name": "Coral Burst",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_coral_burst.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_coral_burst.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "burst"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "burst",
+    "coral burst"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_mint_seal",
+   "name": "Mint Seal",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_mint_seal.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_mint_seal.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "seal"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "seal",
+    "mint seal"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_sunset_tag",
+   "name": "Sunset Tag",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_sunset_tag.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_sunset_tag.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "tag"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "tag",
+    "sunset tag"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_violet_ribbon",
+   "name": "Violet Ribbon",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_violet_ribbon.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_violet_ribbon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "ribbon"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "ribbon",
+    "violet ribbon"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_golden_sparkle",
+   "name": "Golden Sparkle",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_golden_sparkle.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_golden_sparkle.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "sparkle"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "sparkle",
+    "golden sparkle"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_pink_banner",
+   "name": "Pink Banner",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_pink_banner.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_pink_banner.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "banner"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "banner",
+    "pink banner"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_teal_confetti",
+   "name": "Teal Confetti",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_teal_confetti.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_teal_confetti.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "confetti"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "confetti",
+    "teal confetti"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "graphics_neon_swirl",
+   "name": "Neon Swirl",
+   "categoryId": "graphics",
+   "format": "svg",
+   "storagePath": "elements/files/graphics/graphics_neon_swirl.svg",
+   "thumbnailPath": "elements/thumbnails/graphics/graphics_neon_swirl.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "swirl"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "graphics",
+    "swirl",
+    "neon swirl"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_circle_frame",
+   "name": "Circle Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_circle_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_circle_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "circle"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "circle",
+    "circle frame"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_rounded_frame",
+   "name": "Rounded Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_rounded_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_rounded_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "rounded"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "rounded",
+    "rounded frame"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_double_border_frame",
+   "name": "Double Border Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_double_border_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_double_border_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "double"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "double",
+    "double border frame"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_polaroid_frame",
+   "name": "Polaroid Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_polaroid_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_polaroid_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "polaroid"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "polaroid",
+    "polaroid frame"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_film_strip_frame",
+   "name": "Film Strip Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_film_strip_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_film_strip_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "film"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "film",
+    "film strip frame"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_ornate_corner_frame",
+   "name": "Ornate Corner Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_ornate_corner_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_ornate_corner_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "ornate"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "ornate",
+    "ornate corner frame"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_corner_marks_frame",
+   "name": "Corner Marks Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_corner_marks_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_corner_marks_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "corner"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "corner",
+    "corner marks frame"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_cinematic_wide_frame",
+   "name": "Cinematic Wide Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_cinematic_wide_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_cinematic_wide_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "wide"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "wide",
+    "cinematic wide frame"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_portrait_frame",
+   "name": "Portrait Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_portrait_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_portrait_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "portrait"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "portrait",
+    "portrait frame"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_dashed_frame",
+   "name": "Dashed Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_dashed_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_dashed_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "dashed"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "dashed",
+    "dashed frame"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_thin_ring_frame",
+   "name": "Thin Ring Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_thin_ring_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_thin_ring_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "circle"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "circle",
+    "thin ring frame"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_soft_rounded_frame",
+   "name": "Soft Rounded Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_soft_rounded_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_soft_rounded_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "rounded"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "rounded",
+    "soft rounded frame"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_classic_double_frame",
+   "name": "Classic Double Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_classic_double_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_classic_double_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "double"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "double",
+    "classic double frame"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_instant_photo_frame",
+   "name": "Instant Photo Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_instant_photo_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_instant_photo_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "polaroid"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "polaroid",
+    "instant photo frame"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_cinema_film_frame",
+   "name": "Cinema Film Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_cinema_film_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_cinema_film_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "film"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "film",
+    "cinema film frame"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_royal_ornate_frame",
+   "name": "Royal Ornate Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_royal_ornate_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_royal_ornate_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "ornate"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "ornate",
+    "royal ornate frame"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_focus_corners_frame",
+   "name": "Focus Corners Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_focus_corners_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_focus_corners_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "corner"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "corner",
+    "focus corners frame"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_widescreen_frame",
+   "name": "Widescreen Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_widescreen_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_widescreen_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "wide"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "wide",
+    "widescreen frame"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_story_portrait_frame",
+   "name": "Story Portrait Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_story_portrait_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_story_portrait_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "portrait"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "portrait",
+    "story portrait frame"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "frames_stitch_dashed_frame",
+   "name": "Stitch Dashed Frame",
+   "categoryId": "frames",
+   "format": "svg",
+   "storagePath": "elements/files/frames/frames_stitch_dashed_frame.svg",
+   "thumbnailPath": "elements/thumbnails/frames/frames_stitch_dashed_frame.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "dashed"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "frames",
+    "dashed",
+    "stitch dashed frame"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_1",
+   "name": "Data Table 1",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_1.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_1.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 2,
+    "cols": 2,
+    "headerColor": "#FFC300",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 1"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_2",
+   "name": "Data Table 2",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_2.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_2.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 3,
+    "cols": 2,
+    "headerColor": "#48CAE4",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 2"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_3",
+   "name": "Data Table 3",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_3.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_3.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 4,
+    "cols": 2,
+    "headerColor": "#E0AAFF",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 3"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_4",
+   "name": "Data Table 4",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_4.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_4.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 5,
+    "cols": 2,
+    "headerColor": "#90E0EF",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 4"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_5",
+   "name": "Data Table 5",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_5.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_5.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 2,
+    "cols": 3,
+    "headerColor": "#FFAFCC",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 5"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_6",
+   "name": "Data Table 6",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_6.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_6.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 3,
+    "cols": 3,
+    "headerColor": "#A7C957",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 6"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_7",
+   "name": "Data Table 7",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_7.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_7.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 4,
+    "cols": 3,
+    "headerColor": "#F4A261",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 7"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_8",
+   "name": "Data Table 8",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_8.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_8.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 5,
+    "cols": 3,
+    "headerColor": "#2EC4B6",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 8"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_9",
+   "name": "Data Table 9",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_9.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_9.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 2,
+    "cols": 4,
+    "headerColor": "#E63946",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 9"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_10",
+   "name": "Data Table 10",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_10.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_10.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 3,
+    "cols": 4,
+    "headerColor": "#B388FF",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 10"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_11",
+   "name": "Data Table 11",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_11.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_11.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 4,
+    "cols": 4,
+    "headerColor": "#FFD54F",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 11"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_12",
+   "name": "Data Table 12",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_12.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_12.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 5,
+    "cols": 4,
+    "headerColor": "#00E5FF",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 12"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_13",
+   "name": "Data Table 13",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_13.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_13.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 2,
+    "cols": 5,
+    "headerColor": "#FF4D6D",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 13"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_14",
+   "name": "Data Table 14",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_14.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_14.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 3,
+    "cols": 5,
+    "headerColor": "#FFD166",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 14"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_15",
+   "name": "Data Table 15",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_15.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_15.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 4,
+    "cols": 5,
+    "headerColor": "#06D6A0",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 15"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_16",
+   "name": "Data Table 16",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_16.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_16.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 5,
+    "cols": 5,
+    "headerColor": "#9D6BFF",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 16"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_17",
+   "name": "Data Table 17",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_17.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_17.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 2,
+    "cols": 2,
+    "headerColor": "#FF7B54",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 17"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_18",
+   "name": "Data Table 18",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_18.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_18.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 3,
+    "cols": 2,
+    "headerColor": "#4CC9F0",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 18"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_19",
+   "name": "Data Table 19",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_19.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_19.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 4,
+    "cols": 2,
+    "headerColor": "#F72585",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 19"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "tables_data_table_20",
+   "name": "Data Table 20",
+   "categoryId": "tables",
+   "format": "svg",
+   "storagePath": "elements/files/tables/tables_data_table_20.svg",
+   "thumbnailPath": "elements/thumbnails/tables/tables_data_table_20.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "grid",
+    "editable": true,
+    "modelType": "table",
+    "rows": 5,
+    "cols": 2,
+    "headerColor": "#80ED99",
+    "cellColor": "#FFFFFF"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "tables",
+    "grid",
+    "data table 20"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_isometric_cube",
+   "name": "Isometric Cube",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_isometric_cube.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_isometric_cube.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "cube",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cube",
+    "isometric cube"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_glossy_sphere",
+   "name": "Glossy Sphere",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_glossy_sphere.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_glossy_sphere.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "sphere",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "sphere",
+    "glossy sphere"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_pyramid",
+   "name": "Pyramid",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_pyramid.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_pyramid.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "pyramid",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "pyramid",
+    "pyramid"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_cylinder",
+   "name": "Cylinder",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_cylinder.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_cylinder.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "cylinder",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cylinder",
+    "cylinder"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_cone",
+   "name": "Cone",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_cone.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_cone.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "cone",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cone",
+    "cone"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_torus_ring",
+   "name": "Torus Ring",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_torus_ring.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_torus_ring.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "torus",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "torus",
+    "torus ring"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_glass_prism",
+   "name": "Glass Prism",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_glass_prism.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_glass_prism.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "prism",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "prism",
+    "glass prism"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_sunset_cube",
+   "name": "Sunset Cube",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_sunset_cube.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_sunset_cube.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "cube",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cube",
+    "sunset cube"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_ocean_sphere",
+   "name": "Ocean Sphere",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_ocean_sphere.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_ocean_sphere.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "sphere",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "sphere",
+    "ocean sphere"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_sand_pyramid",
+   "name": "Sand Pyramid",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_sand_pyramid.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_sand_pyramid.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "pyramid",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "pyramid",
+    "sand pyramid"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_steel_cylinder",
+   "name": "Steel Cylinder",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_steel_cylinder.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_steel_cylinder.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "cylinder",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cylinder",
+    "steel cylinder"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_coral_cone",
+   "name": "Coral Cone",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_coral_cone.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_coral_cone.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "cone",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cone",
+    "coral cone"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_violet_torus",
+   "name": "Violet Torus",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_violet_torus.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_violet_torus.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "torus",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "torus",
+    "violet torus"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_crystal_prism",
+   "name": "Crystal Prism",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_crystal_prism.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_crystal_prism.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "prism",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "prism",
+    "crystal prism"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_mint_cube",
+   "name": "Mint Cube",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_mint_cube.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_mint_cube.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "cube",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cube",
+    "mint cube"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_rose_sphere",
+   "name": "Rose Sphere",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_rose_sphere.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_rose_sphere.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "sphere",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "sphere",
+    "rose sphere"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_amber_pyramid",
+   "name": "Amber Pyramid",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_amber_pyramid.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_amber_pyramid.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "pyramid",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "pyramid",
+    "amber pyramid"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_teal_cylinder",
+   "name": "Teal Cylinder",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_teal_cylinder.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_teal_cylinder.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "cylinder",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cylinder",
+    "teal cylinder"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_indigo_cone",
+   "name": "Indigo Cone",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_indigo_cone.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_indigo_cone.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "cone",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "cone",
+    "indigo cone"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "3d_lime_torus",
+   "name": "Lime Torus",
+   "categoryId": "3d",
+   "format": "svg",
+   "storagePath": "elements/files/3d/3d_lime_torus.svg",
+   "thumbnailPath": "elements/thumbnails/3d/3d_lime_torus.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "torus",
+    "renderMode": "svg_render",
+    "note": "Isometric SVG render overlay; not a GLB model"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "3d",
+    "torus",
+    "lime torus"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_heart_icon",
+   "name": "Heart Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_heart_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_heart_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "heart"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "heart",
+    "heart icon"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_star_icon",
+   "name": "Star Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_star_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_star_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "star"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "star",
+    "star icon"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_play_icon",
+   "name": "Play Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_play_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_play_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "play"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "play",
+    "play icon"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_microphone_icon",
+   "name": "Microphone Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_microphone_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_microphone_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "mic"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "mic",
+    "microphone icon"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_camera_icon",
+   "name": "Camera Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_camera_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_camera_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "camera"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "camera",
+    "camera icon"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_bell_icon",
+   "name": "Bell Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_bell_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_bell_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "bell"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "bell",
+    "bell icon"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_home_icon",
+   "name": "Home Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_home_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_home_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "home"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "home",
+    "home icon"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_search_icon",
+   "name": "Search Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_search_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_search_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "search"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "search",
+    "search icon"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_settings_gear",
+   "name": "Settings Gear",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_settings_gear.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_settings_gear.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "gear"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "gear",
+    "settings gear"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_download_icon",
+   "name": "Download Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_download_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_download_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "download"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "download",
+    "download icon"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_share_icon",
+   "name": "Share Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_share_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_share_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "share"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "share",
+    "share icon"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_music_icon",
+   "name": "Music Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_music_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_music_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "music"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "music",
+    "music icon"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_location_pin",
+   "name": "Location Pin",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_location_pin.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_location_pin.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "pin"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "pin",
+    "location pin"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_calendar_icon",
+   "name": "Calendar Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_calendar_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_calendar_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "calendar"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "calendar",
+    "calendar icon"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_clock_icon",
+   "name": "Clock Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_clock_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_clock_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "clock"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "clock",
+    "clock icon"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_chat_bubble",
+   "name": "Chat Bubble",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_chat_bubble.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_chat_bubble.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "chat"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "chat",
+    "chat bubble"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_check_mark",
+   "name": "Check Mark",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_check_mark.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_check_mark.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "check"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "check",
+    "check mark"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_lock_icon",
+   "name": "Lock Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_lock_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_lock_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "lock"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "lock",
+    "lock icon"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_wifi_icon",
+   "name": "WiFi Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_wifi_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_wifi_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "wifi"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "wifi",
+    "wifi icon"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "icons_bolt_icon",
+   "name": "Bolt Icon",
+   "categoryId": "icons",
+   "format": "svg",
+   "storagePath": "elements/files/icons/icons_bolt_icon.svg",
+   "thumbnailPath": "elements/thumbnails/icons/icons_bolt_icon.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "bolt"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "icons",
+    "bolt",
+    "bolt icon"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_happy_cat",
+   "name": "Happy Cat",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_happy_cat.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_happy_cat.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "Cat"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "cat",
+    "happy cat"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_playful_dog",
+   "name": "Playful Dog",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_playful_dog.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_playful_dog.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "Dog"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "dog",
+    "playful dog"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_giant_panda",
+   "name": "Giant Panda",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_giant_panda.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_giant_panda.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "Panda"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "panda",
+    "giant panda"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_brave_tiger",
+   "name": "Brave Tiger",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_brave_tiger.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_brave_tiger.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "Tiger"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "tiger",
+    "brave tiger"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_cute_bunny",
+   "name": "Cute Bunny",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_cute_bunny.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_cute_bunny.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "Bunny"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "bunny",
+    "cute bunny"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_clever_fox",
+   "name": "Clever Fox",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_clever_fox.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_clever_fox.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "Fox"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "fox",
+    "clever fox"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_gentle_elephant",
+   "name": "Gentle Elephant",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_gentle_elephant.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_gentle_elephant.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "Elephant"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "elephant",
+    "gentle elephant"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_king_lion",
+   "name": "King Lion",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_king_lion.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_king_lion.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "Lion"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "lion",
+    "king lion"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_little_pig",
+   "name": "Little Pig",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_little_pig.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_little_pig.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "Pig"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "pig",
+    "little pig"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_happy_frog",
+   "name": "Happy Frog",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_happy_frog.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_happy_frog.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "Frog"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "frog",
+    "happy frog"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_tall_giraffe",
+   "name": "Tall Giraffe",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_tall_giraffe.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_tall_giraffe.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "Giraffe"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "giraffe",
+    "tall giraffe"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_striped_zebra",
+   "name": "Striped Zebra",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_striped_zebra.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_striped_zebra.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "Zebra"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "zebra",
+    "striped zebra"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_magic_unicorn",
+   "name": "Magic Unicorn",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_magic_unicorn.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_magic_unicorn.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "Unicorn"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "unicorn",
+    "magic unicorn"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_wise_owl",
+   "name": "Wise Owl",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_wise_owl.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_wise_owl.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "Owl"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "owl",
+    "wise owl"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_sleepy_koala",
+   "name": "Sleepy Koala",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_sleepy_koala.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_sleepy_koala.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "Koala"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "koala",
+    "sleepy koala"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_brown_bear",
+   "name": "Brown Bear",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_brown_bear.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_brown_bear.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "Bear"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "bear",
+    "brown bear"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_grey_wolf",
+   "name": "Grey Wolf",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_grey_wolf.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_grey_wolf.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "Wolf"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "wolf",
+    "grey wolf"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_white_rabbit",
+   "name": "White Rabbit",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_white_rabbit.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_white_rabbit.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "Rabbit"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "rabbit",
+    "white rabbit"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_rhino",
+   "name": "Rhino",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_rhino.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_rhino.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "Rhino"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "rhino",
+    "rhino"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "animals_kitten",
+   "name": "Kitten",
+   "categoryId": "animals",
+   "format": "svg",
+   "storagePath": "elements/files/animals/animals_kitten.svg",
+   "thumbnailPath": "elements/thumbnails/animals/animals_kitten.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "Cat"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "animals",
+    "cat",
+    "kitten"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_bluebird",
+   "name": "Bluebird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_bluebird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_bluebird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "crest"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "crest",
+    "bluebird"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_parrot",
+   "name": "Parrot",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_parrot.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_parrot.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "parrot"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_robin",
+   "name": "Robin",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_robin.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_robin.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "robin"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_flamingo_bird",
+   "name": "Flamingo Bird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_flamingo_bird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_flamingo_bird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "crest"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "crest",
+    "flamingo bird"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_owl_bird",
+   "name": "Owl Bird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_owl_bird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_owl_bird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "owl bird"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_penguin_bird",
+   "name": "Penguin Bird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_penguin_bird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_penguin_bird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "penguin bird"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_eagle_bird",
+   "name": "Eagle Bird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_eagle_bird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_eagle_bird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "crest"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "crest",
+    "eagle bird"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_hummingbird",
+   "name": "Hummingbird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_hummingbird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_hummingbird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "hummingbird"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_cardinal",
+   "name": "Cardinal",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_cardinal.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_cardinal.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "cardinal"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_peacock_bird",
+   "name": "Peacock Bird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_peacock_bird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_peacock_bird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "crest"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "crest",
+    "peacock bird"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_toucan_bird",
+   "name": "Toucan Bird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_toucan_bird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_toucan_bird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "toucan bird"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_sparrow",
+   "name": "Sparrow",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_sparrow.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_sparrow.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "sparrow"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_dove",
+   "name": "Dove",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_dove.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_dove.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "crest"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "crest",
+    "dove"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_woodpecker",
+   "name": "Woodpecker",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_woodpecker.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_woodpecker.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "woodpecker"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_kingfisher",
+   "name": "Kingfisher",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_kingfisher.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_kingfisher.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "kingfisher"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_finch",
+   "name": "Finch",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_finch.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_finch.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "crest"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "crest",
+    "finch"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_kite_bird",
+   "name": "Kite Bird",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_kite_bird.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_kite_bird.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "kite bird"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_heron",
+   "name": "Heron",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_heron.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_heron.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "heron"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_macaw",
+   "name": "Macaw",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_macaw.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_macaw.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "crest"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "crest",
+    "macaw"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "birds_chick",
+   "name": "Chick",
+   "categoryId": "birds",
+   "format": "svg",
+   "storagePath": "elements/files/birds/birds_chick.svg",
+   "thumbnailPath": "elements/thumbnails/birds/birds_chick.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "plain"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "birds",
+    "plain",
+    "chick"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_man_with_cap",
+   "name": "Man With Cap",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_man_with_cap.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_man_with_cap.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "cap"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "cap",
+    "man with cap"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_woman_with_bun",
+   "name": "Woman With Bun",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_woman_with_bun.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_woman_with_bun.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "bun"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "bun",
+    "woman with bun"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_spiky_hair_guy",
+   "name": "Spiky Hair Guy",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_spiky_hair_guy.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_spiky_hair_guy.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "spiky"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "spiky",
+    "spiky hair guy"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_curly_hair_woman",
+   "name": "Curly Hair Woman",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_curly_hair_woman.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_curly_hair_woman.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "curly"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "curly",
+    "curly hair woman"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_long_hair_woman",
+   "name": "Long Hair Woman",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_long_hair_woman.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_long_hair_woman.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "long"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "long",
+    "long hair woman"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_smiling_boy",
+   "name": "Smiling Boy",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_smiling_boy.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_smiling_boy.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "spiky"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "spiky",
+    "smiling boy"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_girl_with_bun",
+   "name": "Girl With Bun",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_girl_with_bun.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_girl_with_bun.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "bun"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "bun",
+    "girl with bun"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_cap_boy",
+   "name": "Cap Boy",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_cap_boy.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_cap_boy.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "cap"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "cap",
+    "cap boy"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_curly_man",
+   "name": "Curly Man",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_curly_man.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_curly_man.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "curly"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "curly",
+    "curly man"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_long_hair_girl",
+   "name": "Long Hair Girl",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_long_hair_girl.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_long_hair_girl.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "long"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "long",
+    "long hair girl"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_happy_man",
+   "name": "Happy Man",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_happy_man.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_happy_man.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "none"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "none",
+    "happy man"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_happy_woman",
+   "name": "Happy Woman",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_happy_woman.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_happy_woman.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "bun"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "bun",
+    "happy woman"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_kid_with_cap",
+   "name": "Kid With Cap",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_kid_with_cap.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_kid_with_cap.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "cap"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "cap",
+    "kid with cap"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_teen_spiky",
+   "name": "Teen Spiky",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_teen_spiky.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_teen_spiky.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "spiky"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "spiky",
+    "teen spiky"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_woman_curly",
+   "name": "Woman Curly",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_woman_curly.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_woman_curly.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "curly"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "curly",
+    "woman curly"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_girl_long_hair",
+   "name": "Girl Long Hair",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_girl_long_hair.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_girl_long_hair.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "long"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "long",
+    "girl long hair"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_man_bun",
+   "name": "Man Bun",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_man_bun.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_man_bun.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "bun"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "bun",
+    "man bun"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_boy_curly",
+   "name": "Boy Curly",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_boy_curly.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_boy_curly.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "curly"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "curly",
+    "boy curly"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_woman_cap",
+   "name": "Woman Cap",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_woman_cap.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_woman_cap.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "cap"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "cap",
+    "woman cap"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "characters_elder_smile",
+   "name": "Elder Smile",
+   "categoryId": "characters",
+   "format": "svg",
+   "storagePath": "elements/files/characters/characters_elder_smile.svg",
+   "thumbnailPath": "elements/thumbnails/characters/characters_elder_smile.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "none"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "characters",
+    "none",
+    "elder smile"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_sedan_car",
+   "name": "Sedan Car",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_sedan_car.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_sedan_car.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "car"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "car",
+    "sedan car"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_sports_car",
+   "name": "Sports Car",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_sports_car.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_sports_car.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "sport"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "sport",
+    "sports car"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_jeep",
+   "name": "Jeep",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_jeep.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_jeep.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "jeep"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "jeep",
+    "jeep"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_van",
+   "name": "Van",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_van.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_van.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "van"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "van",
+    "van"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_city_bus",
+   "name": "City Bus",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_city_bus.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_city_bus.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "bus"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "bus",
+    "city bus"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_cargo_truck",
+   "name": "Cargo Truck",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_cargo_truck.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_cargo_truck.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "truck"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "truck",
+    "cargo truck"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_motorbike",
+   "name": "Motorbike",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_motorbike.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_motorbike.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "bike"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "bike",
+    "motorbike"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_bicycle",
+   "name": "Bicycle",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_bicycle.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_bicycle.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "bike"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "bike",
+    "bicycle"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_airplane",
+   "name": "Airplane",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_airplane.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_airplane.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "plane"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "plane",
+    "airplane"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_sail_boat",
+   "name": "Sail Boat",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_sail_boat.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_sail_boat.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "boat"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "boat",
+    "sail boat"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_rocket",
+   "name": "Rocket",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_rocket.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_rocket.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "rocket"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "rocket",
+    "rocket"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_helicopter",
+   "name": "Helicopter",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_helicopter.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_helicopter.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "helicopter"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "helicopter",
+    "helicopter"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_train",
+   "name": "Train",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_train.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_train.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "train"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "train",
+    "train"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_tractor",
+   "name": "Tractor",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_tractor.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_tractor.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "tractor"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "tractor",
+    "tractor"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_hatchback_car",
+   "name": "Hatchback Car",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_hatchback_car.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_hatchback_car.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "car"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "car",
+    "hatchback car"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_roadster",
+   "name": "Roadster",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_roadster.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_roadster.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "sport"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "sport",
+    "roadster"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_offroad_jeep",
+   "name": "Offroad Jeep",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_offroad_jeep.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_offroad_jeep.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "jeep"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "jeep",
+    "offroad jeep"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_mini_van",
+   "name": "Mini Van",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_mini_van.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_mini_van.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "van"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "van",
+    "mini van"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_tour_bus",
+   "name": "Tour Bus",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_tour_bus.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_tour_bus.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "bus"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "bus",
+    "tour bus"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "vehicles_pickup_truck",
+   "name": "Pickup Truck",
+   "categoryId": "vehicles",
+   "format": "svg",
+   "storagePath": "elements/files/vehicles/vehicles_pickup_truck.svg",
+   "thumbnailPath": "elements/thumbnails/vehicles/vehicles_pickup_truck.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "truck"
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "vehicles",
+    "truck",
+    "pickup truck"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_bar_chart",
+   "name": "Bar Chart",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_bar_chart.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_bar_chart.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#48CAE4",
+    "secondaryColor": "#0077B6",
+    "kind": "bar",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "bar",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     40,
+     53,
+     66,
+     79,
+     92
+    ],
+    "colors": [
+     "#48CAE4",
+     "#0077B6",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "bar",
+    "bar chart"
+   ],
+   "sortOrder": 0,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_line_chart",
+   "name": "Line Chart",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_line_chart.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_line_chart.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E0AAFF",
+    "secondaryColor": "#9D4EDD",
+    "kind": "line",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "line",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     47,
+     60,
+     73,
+     86,
+     44
+    ],
+    "colors": [
+     "#E0AAFF",
+     "#9D4EDD",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "line",
+    "line chart"
+   ],
+   "sortOrder": 1,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_area_chart",
+   "name": "Area Chart",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_area_chart.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_area_chart.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#90E0EF",
+    "secondaryColor": "#00B4D8",
+    "kind": "area",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "area",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     54,
+     67,
+     80,
+     93,
+     51
+    ],
+    "colors": [
+     "#90E0EF",
+     "#00B4D8",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "area",
+    "area chart"
+   ],
+   "sortOrder": 2,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_pie_chart",
+   "name": "Pie Chart",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_pie_chart.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_pie_chart.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFAFCC",
+    "secondaryColor": "#FF5D8F",
+    "kind": "pie",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "pie",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     61,
+     74,
+     87,
+     45,
+     58
+    ],
+    "colors": [
+     "#FFAFCC",
+     "#FF5D8F",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "pie",
+    "pie chart"
+   ],
+   "sortOrder": 3,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_donut_chart",
+   "name": "Donut Chart",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_donut_chart.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_donut_chart.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#A7C957",
+    "secondaryColor": "#6A994E",
+    "kind": "donut",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "donut",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     68,
+     81,
+     94,
+     52,
+     65
+    ],
+    "colors": [
+     "#A7C957",
+     "#6A994E",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "donut",
+    "donut chart"
+   ],
+   "sortOrder": 4,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_progress_bars",
+   "name": "Progress Bars",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_progress_bars.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_progress_bars.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F4A261",
+    "secondaryColor": "#E76F51",
+    "kind": "progress",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "progress",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     75,
+     88,
+     46,
+     59,
+     72
+    ],
+    "colors": [
+     "#F4A261",
+     "#E76F51",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "progress",
+    "progress bars"
+   ],
+   "sortOrder": 5,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_scatter_plot",
+   "name": "Scatter Plot",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_scatter_plot.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_scatter_plot.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#2EC4B6",
+    "secondaryColor": "#011627",
+    "kind": "scatter",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "scatter",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     82,
+     40,
+     53,
+     66,
+     79
+    ],
+    "colors": [
+     "#2EC4B6",
+     "#011627",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "scatter",
+    "scatter plot"
+   ],
+   "sortOrder": 6,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_growth_bars",
+   "name": "Growth Bars",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_growth_bars.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_growth_bars.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#E63946",
+    "secondaryColor": "#F1FA8C",
+    "kind": "bar",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "bar",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     89,
+     47,
+     60,
+     73,
+     86
+    ],
+    "colors": [
+     "#E63946",
+     "#F1FA8C",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "bar",
+    "growth bars"
+   ],
+   "sortOrder": 7,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_trend_line",
+   "name": "Trend Line",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_trend_line.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_trend_line.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#B388FF",
+    "secondaryColor": "#7C4DFF",
+    "kind": "line",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "line",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     41,
+     54,
+     67,
+     80,
+     93
+    ],
+    "colors": [
+     "#B388FF",
+     "#7C4DFF",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "line",
+    "trend line"
+   ],
+   "sortOrder": 8,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_revenue_area",
+   "name": "Revenue Area",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_revenue_area.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_revenue_area.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD54F",
+    "secondaryColor": "#FF8F00",
+    "kind": "area",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "area",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     48,
+     61,
+     74,
+     87,
+     45
+    ],
+    "colors": [
+     "#FFD54F",
+     "#FF8F00",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "area",
+    "revenue area"
+   ],
+   "sortOrder": 9,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_market_pie",
+   "name": "Market Pie",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_market_pie.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_market_pie.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#00E5FF",
+    "secondaryColor": "#0091FF",
+    "kind": "pie",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "pie",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     55,
+     68,
+     81,
+     94,
+     52
+    ],
+    "colors": [
+     "#00E5FF",
+     "#0091FF",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "pie",
+    "market pie"
+   ],
+   "sortOrder": 10,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_goal_donut",
+   "name": "Goal Donut",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_goal_donut.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_goal_donut.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF4D6D",
+    "secondaryColor": "#FF8FA3",
+    "kind": "donut",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "donut",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     62,
+     75,
+     88,
+     46,
+     59
+    ],
+    "colors": [
+     "#FF4D6D",
+     "#FF8FA3",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "donut",
+    "goal donut"
+   ],
+   "sortOrder": 11,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_skill_progress",
+   "name": "Skill Progress",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_skill_progress.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_skill_progress.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFD166",
+    "secondaryColor": "#FF9100",
+    "kind": "progress",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "progress",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     69,
+     82,
+     40,
+     53,
+     66
+    ],
+    "colors": [
+     "#FFD166",
+     "#FF9100",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "progress",
+    "skill progress"
+   ],
+   "sortOrder": 12,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_data_scatter",
+   "name": "Data Scatter",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_data_scatter.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_data_scatter.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#06D6A0",
+    "secondaryColor": "#118AB2",
+    "kind": "scatter",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "scatter",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     76,
+     89,
+     47,
+     60,
+     73
+    ],
+    "colors": [
+     "#06D6A0",
+     "#118AB2",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "scatter",
+    "data scatter"
+   ],
+   "sortOrder": 13,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_sales_bars",
+   "name": "Sales Bars",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_sales_bars.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_sales_bars.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#9D6BFF",
+    "secondaryColor": "#7000FF",
+    "kind": "bar",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "bar",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     83,
+     41,
+     54,
+     67,
+     80
+    ],
+    "colors": [
+     "#9D6BFF",
+     "#7000FF",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "bar",
+    "sales bars"
+   ],
+   "sortOrder": 14,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_pulse_line",
+   "name": "Pulse Line",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_pulse_line.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_pulse_line.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FF7B54",
+    "secondaryColor": "#FFB26B",
+    "kind": "line",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "line",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     90,
+     48,
+     61,
+     74,
+     87
+    ],
+    "colors": [
+     "#FF7B54",
+     "#FFB26B",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "line",
+    "pulse line"
+   ],
+   "sortOrder": 15,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_traffic_area",
+   "name": "Traffic Area",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_traffic_area.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_traffic_area.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#4CC9F0",
+    "secondaryColor": "#4361EE",
+    "kind": "area",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "area",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     42,
+     55,
+     68,
+     81,
+     94
+    ],
+    "colors": [
+     "#4CC9F0",
+     "#4361EE",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "area",
+    "traffic area"
+   ],
+   "sortOrder": 16,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_share_pie",
+   "name": "Share Pie",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_share_pie.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_share_pie.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#F72585",
+    "secondaryColor": "#FF70A6",
+    "kind": "pie",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "pie",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     49,
+     62,
+     75,
+     88,
+     46
+    ],
+    "colors": [
+     "#F72585",
+     "#FF70A6",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "pie",
+    "share pie"
+   ],
+   "sortOrder": 17,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_score_donut",
+   "name": "Score Donut",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_score_donut.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_score_donut.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#80ED99",
+    "secondaryColor": "#38B000",
+    "kind": "donut",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "donut",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     56,
+     69,
+     82,
+     40,
+     53
+    ],
+    "colors": [
+     "#80ED99",
+     "#38B000",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "donut",
+    "score donut"
+   ],
+   "sortOrder": 18,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  },
+  {
+   "id": "charts_stats_progress",
+   "name": "Stats Progress",
+   "categoryId": "charts",
+   "format": "svg",
+   "storagePath": "elements/files/charts/charts_stats_progress.svg",
+   "thumbnailPath": "elements/thumbnails/charts/charts_stats_progress.png",
+   "width": 512,
+   "height": 512,
+   "defaultProperties": {
+    "movable": true,
+    "resizable": true,
+    "rotatable": true,
+    "opacity": 1.0,
+    "primaryColor": "#FFC300",
+    "secondaryColor": "#FF5733",
+    "kind": "progress",
+    "editable": true,
+    "modelType": "chart",
+    "chartType": "progress",
+    "labels": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "E"
+    ],
+    "values": [
+     63,
+     76,
+     89,
+     47,
+     60
+    ],
+    "colors": [
+     "#FFC300",
+     "#FF5733",
+     "#FFD166",
+     "#06D6A0",
+     "#9D6BFF"
+    ]
+   },
+   "version": 1,
+   "status": "published",
+   "tags": [
+    "charts",
+    "progress",
+    "stats progress"
+   ],
+   "sortOrder": 19,
+   "createdAt": "__SERVER_TIMESTAMP__",
+   "updatedAt": "__SERVER_TIMESTAMP__"
+  }
+ ]
+}

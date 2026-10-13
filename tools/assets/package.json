@@ -1,0 +1,13 @@
+{
+  "name": "ah-elements-asset-uploader",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Admin tooling: uploads the generated Elements (Shapes panel) asset library to Firebase Storage + Firestore.",
+  "main": "upload_firebase.js",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "firebase-admin": "^13.6.0"
+  }
+}
