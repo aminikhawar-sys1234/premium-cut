@@ -9,7 +9,6 @@ import android.os.Build
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.example.ai.AIToolsService
-import com.example.ai.VideoHighlightSegment
 import com.example.data.local.AppDatabase
 import com.example.data.local.ExportedVideoEntity
 import com.example.data.local.ProjectEntity
@@ -41,6 +40,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import com.example.data.local.CrashRecoveryEntity
 import com.example.engine.media.MediaPersistenceManager
+import com.example.engine.media.MediaPlayableUri
 import com.example.engine.media.MediaRelinkManager
 import com.ahstudio.captions.android.CaptionsGraph
 import com.ahstudio.captions.engine.AutoCaptionOptions
@@ -50,9 +50,12 @@ import com.ahstudio.captions.subtitle.SubtitleExporter
 import com.ahstudio.captions.subtitle.SubtitleFormat
 import com.ahstudio.captions.subtitle.SubtitleImporter
 import com.example.engine.ai.*
+import com.example.engine.ai.tracking.TrackingSampler
 import com.example.engine.ai.cutout.BgRemoveCodec
 import com.example.engine.ai.cutout.BgRemoveParams
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
+import com.example.engine.effects.media3.LivePreviewLook
+import com.example.engine.effects.media3.PreviewLookPolicy
 
 enum class ProjectSaveStatus {
   SAVED,
@@ -279,11 +282,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   private val _aiStatusMessage = MutableStateFlow("")
   val aiStatusMessage: StateFlow<String> = _aiStatusMessage.asStateFlow()
 
-  private val _aiHighlights = MutableStateFlow<List<VideoHighlightSegment>>(emptyList())
-  val aiHighlights: StateFlow<List<VideoHighlightSegment>> = _aiHighlights.asStateFlow()
-
   // Playback & auto-save jobs
   private var autoSaveJob: Job? = null
+  private var persistLookJob: Job? = null
+
+  private val _livePreviewLook = MutableStateFlow<LivePreviewLook?>(null)
+  val livePreviewLook: StateFlow<LivePreviewLook?> = _livePreviewLook.asStateFlow()
 
   /**
    * Wires timeline/playback collectors. Invoked from the last `init` block of this class: the collectors run
@@ -295,17 +299,26 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     // Sync Timeline changes with Playback Engine, mark unsaved, and persist recovery snapshot
     viewModelScope.launch {
+      var previousTimeline: Timeline? = null
       timelineEngine.timeline.collectLatest { timeline ->
+        val lookOnly = previousTimeline?.let { PreviewLookPolicy.isLookOnlyChange(it, timeline) } == true
+        previousTimeline = timeline
         com.example.engine.color.ColorEngineHost.syncFromTimeline(timeline.videoClips)
-        val mediaClips = timeline.videoClips + timeline.overlayClips
-        hydrateFaceReshape(mediaClips)
-        hydrateBodyReshape(mediaClips)
-        hydrateArOverlays(timeline.videoClips)
-        hydrateBgRemoval(timeline)
-        hydrateMotionTracking()
+        if (!lookOnly) {
+          val mediaClips = timeline.videoClips + timeline.overlayClips
+          hydrateFaceReshape(mediaClips)
+          hydrateBodyReshape(mediaClips)
+          hydrateArOverlays(timeline.videoClips)
+          hydrateBgRemoval(timeline)
+          hydrateMotionTracking()
+        }
         if (_currentScreen.value == AppScreen.EDITOR || _currentScreen.value == AppScreen.EXPORT) {
           try {
-            playbackEngine.updateTimeline(timeline)
+            if (lookOnly) {
+              playbackEngine.replaceTimelineLooks(timeline)
+            } else {
+              playbackEngine.updateTimeline(timeline)
+            }
           } catch (t: Throwable) {
             android.util.Log.w("StudioViewModel", "Playback update deferred", t)
           }
@@ -336,7 +349,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             fps = _activeFps.value,
             sampleRateHz = _activeSampleRate.value,
             canvasBackgroundColor = _activeCanvasColor.value,
-            totalDurationMs = timeline.totalDurationMs
+            totalDurationMs = timeline.totalDurationMs,
+            playheadMs = timelineEngine.currentPositionMs.value
           )
           try {
             repository.saveCrashRecoverySession(
@@ -418,6 +432,19 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
+  /**
+   * Drops the previous project's ExoPlayer / MediaCodec / VideoFrameProcessor so a dead
+   * effect graph cannot paint every later session black.
+   */
+  private fun resetPlaybackForNewProject() {
+    if (!playbackEngineDelegate.isInitialized()) return
+    try {
+      playbackEngine.resetPlaybackSession()
+    } catch (t: Throwable) {
+      android.util.Log.w("StudioViewModel", "Playback session reset failed", t)
+    }
+  }
+
   fun navigateTo(screen: AppScreen) {
     if (screen != AppScreen.EDITOR && screen != AppScreen.EXPORT) {
       timelineEngine.pause()
@@ -433,6 +460,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       try {
         playbackEngine.updateTimeline(timelineEngine.timeline.value)
         playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+        playbackEngine.prepareForEditorEntry()
       } catch (t: Throwable) {
         android.util.Log.w("StudioViewModel", "Editor entry playback initialization error", t)
       }
@@ -454,9 +482,83 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     playbackEngine.seekTo(safePos)
   }
 
-  /** Re-renders the current frame (e.g. after a colour grade change) without moving the playhead. */
-  fun refreshCurrentFrame() {
-    if (!timelineEngine.isPlaying.value) playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+  /**
+   * Publishes the latest Filters / Adjust / Video Quality values onto the
+   * resident preview grading shader and persists them latest-wins. Does not
+   * rebuild ExoPlayer, destroy the decoder, or seek.
+   */
+  fun publishLiveLook(clipId: String?, adjustments: VideoAdjustments, filter: FilterSettings) {
+    val look = LivePreviewLook(clipId, adjustments, filter)
+    _livePreviewLook.value = look
+    if (playbackEngineDelegate.isInitialized()) {
+      try {
+        playbackEngine.replaceTimelineLooks(
+          PreviewLookPolicy.applyLookToTimeline(timelineEngine.timeline.value, look)
+        )
+      } catch (t: Throwable) {
+        android.util.Log.w("StudioViewModel", "Live look preview update failed", t)
+      }
+    }
+    persistLookJob?.cancel()
+    persistLookJob = viewModelScope.launch {
+      delay(PreviewLookPolicy.LOOK_DEBOUNCE_MS)
+      commitLiveLook()
+    }
+  }
+
+  fun flushLiveLook() {
+    persistLookJob?.cancel()
+    persistLookJob = null
+    commitLiveLook()
+  }
+
+  private fun commitLiveLook() {
+    val look = _livePreviewLook.value ?: return
+    try {
+      val tl = timelineEngine.timeline.value
+      val clip = look.clipId?.let { id ->
+        tl.videoClips.find { it.id == id } ?: tl.overlayClips.find { it.id == id }
+      }
+      val currentAdj = clip?.adjustments ?: tl.adjustments
+      val currentFilter = clip?.filter ?: tl.filter
+      if (currentAdj != look.adjustments) {
+        if (!timelineEngine.updateClipAdjustments(look.adjustments, look.clipId)) {
+          timelineEngine.updateAdjustments(look.adjustments)
+        }
+      }
+      if (currentFilter != look.filter) {
+        timelineEngine.updateFilter(look.filter, look.clipId)
+      }
+    } catch (t: Throwable) {
+      android.util.Log.w("StudioViewModel", "Live look persist failed", t)
+    }
+  }
+
+  /**
+   * Re-applies LUT / VFX Media3 looks without reloading the decoder or seeking.
+   * Color-matrix sliders must use [publishLiveLook] instead of this path.
+   */
+  fun refreshCurrentFrame(preferClipId: String? = null) {
+    try {
+      if (!playbackEngineDelegate.isInitialized()) return
+      playbackEngine.replaceTimelineLooks(timelineEngine.timeline.value)
+      playbackEngine.applyActiveLookToPlayers(force = false, preferClipId = preferClipId)
+    } catch (t: Throwable) {
+      android.util.Log.w("StudioViewModel", "Preview look refresh failed", t)
+    }
+  }
+
+  /**
+   * Moves the playhead onto [clip] when the filter/adjust was applied to a clip that is
+   * not currently on screen, so the live preview shows the look immediately.
+   */
+  fun revealClipForLookPreview(clip: com.example.domain.model.VideoClip?) {
+    val target = clip ?: return
+    val pos = timelineEngine.currentPositionMs.value
+    val onClip = pos >= target.timelineStartMs && pos < target.timelineStartMs + target.durationMs
+    if (onClip) return
+    val revealAt = target.timelineStartMs + minOf(80L, (target.durationMs / 2L).coerceAtLeast(0L))
+    seekTo(revealAt)
   }
 
   fun seekToUs(posUs: Long) {
@@ -502,18 +604,35 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun setActiveToolbarTab(tab: EditorToolbarTab?) {
+    val previous = _activeToolbarTab.value
     _activeToolbarTab.value = tab
+    if (tab == EditorToolbarTab.MOTION_TRACKING || tab == EditorToolbarTab.AR_EFFECTS) {
+      startLiveMotionDetection()
+    } else if (previous == EditorToolbarTab.MOTION_TRACKING || previous == EditorToolbarTab.AR_EFFECTS) {
+      stopLiveMotionDetection()
+    }
+    if (previous == EditorToolbarTab.STICKERS &&
+      tab != EditorToolbarTab.STICKERS &&
+      _motionTrackingState.value.pendingAttachment == AttachmentTarget.STICKER
+    ) {
+      _motionTrackingState.update { it.copy(pendingAttachment = null) }
+    }
   }
 
   // Motion Tracking Engine & UI State
   val motionTrackerEngine = MotionTrackerEngine()
   private val _motionTrackingState = MutableStateFlow(MotionTrackingUiState())
   val motionTrackingState: StateFlow<MotionTrackingUiState> = _motionTrackingState.asStateFlow()
+  private val _pendingTrackedOverlayPick = MutableStateFlow(false)
+  val pendingTrackedOverlayPick: StateFlow<Boolean> = _pendingTrackedOverlayPick.asStateFlow()
   private var trackingJob: Job? = null
+  private var liveDetectJob: Job? = null
+  private var detectorsWarmed = false
 
   fun resetMotionTracking() {
     trackingJob?.cancel()
     trackingJob = null
+    _pendingTrackedOverlayPick.value = false
     val clip = getSelectedVideoClip()
     if (clip != null) {
       MotionTrackingCache.invalidateClip(clip.id)
@@ -528,7 +647,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   fun setTrackingCategory(category: TrackingCategory) {
-    _motionTrackingState.update { it.copy(activeCategory = category, errorMessage = null) }
+    _motionTrackingState.update {
+      it.copy(activeCategory = category, errorMessage = null, liveDetections = emptyList(), selectedLiveId = null)
+    }
   }
 
   fun updateTrackingRegion(region: NormalizedRect) {
@@ -548,7 +669,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
-  fun startMotionTracking(category: TrackingCategory = _motionTrackingState.value.activeCategory, isForward: Boolean = true) {
+  fun startMotionTracking(
+    category: TrackingCategory = _motionTrackingState.value.activeCategory,
+    isForward: Boolean = true,
+    range: TrackRange = if (isForward) TrackRange.FORWARD else TrackRange.BACKWARD
+  ) {
     val activeClip = getSelectedVideoClip()
     if (activeClip == null) {
       _motionTrackingState.update {
@@ -562,53 +687,117 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
     trackingJob?.cancel()
     trackingJob = viewModelScope.launch(Dispatchers.Default) {
+      val region = MotionTrackingAttach.pickLockRegion(_motionTrackingState.value)
       _motionTrackingState.update {
         it.copy(
           isTracking = true,
           engineState = TrackingEngineState.DETECTING,
           progress = 0.05f,
           statusMessage = "Detecting ${category.title.lowercase()}...",
-          errorMessage = null
+          errorMessage = null,
+          activeCategory = category,
+          targetRegion = region,
+          lockWidth = region.width,
+          lockHeight = region.height
         )
       }
 
       try {
+        _motionTrackingState.update {
+          it.copy(progress = maxOf(it.progress, 0.08f), statusMessage = "Starting detectors...")
+        }
+        warmMotionDetectors(category)
+        _motionTrackingState.update {
+          it.copy(progress = maxOf(it.progress, 0.10f), statusMessage = "Detecting ${category.title.lowercase()}...")
+        }
         val currentPlayheadMs = timelineEngine.currentPositionMs.value
-        val clipEndTimelineMs = activeClip.timelineStartMs + activeClip.durationMs
+        val playheadSourceUs = activeClip.timelineToSourceMs(currentPlayheadMs) * 1000L
+        val sourceStartUs = activeClip.sourceStartMs * 1000L
+        val sourceEndUs = activeClip.sourceEndMs * 1000L
         val startUs: Long
         val durationUs: Long
-        if (isForward) {
-          startUs = activeClip.timelineToSourceMs(currentPlayheadMs) * 1000L
-          val endUs = activeClip.timelineToSourceMs(clipEndTimelineMs) * 1000L
-          durationUs = (endUs - startUs).coerceAtLeast(100_000L)
-        } else {
-          startUs = activeClip.sourceStartMs * 1000L
-          durationUs = (activeClip.sourceEndMs - activeClip.sourceStartMs).coerceAtLeast(100L) * 1000L
+        when (range) {
+          TrackRange.FORWARD -> {
+            startUs = playheadSourceUs.coerceIn(sourceStartUs, sourceEndUs)
+            durationUs = (sourceEndUs - startUs).coerceAtLeast(100_000L)
+          }
+          TrackRange.BACKWARD -> {
+            startUs = sourceStartUs
+            durationUs = (playheadSourceUs - sourceStartUs).coerceAtLeast(100_000L)
+          }
+          TrackRange.FULL -> {
+            startUs = sourceStartUs
+            durationUs = (sourceEndUs - sourceStartUs).coerceAtLeast(100_000L)
+          }
         }
 
         val settings = _motionTrackingState.value.settings.copy(
-          trackForward = isForward,
-          trackBackward = !isForward
+          trackForward = range != TrackRange.BACKWARD,
+          trackBackward = range != TrackRange.FORWARD,
+          clipSourceStartUs = sourceStartUs
         )
 
         val result = motionTrackerEngine.analyzeMotion(
           context = getApplication(),
           videoUri = activeClip.uri,
           targetClipId = activeClip.id,
-          initialBox = _motionTrackingState.value.targetRegion,
+          initialBox = region,
           startUs = startUs,
           durationUs = durationUs,
           category = category,
           settings = settings,
           onProgress = { p, msg, state ->
             _motionTrackingState.update {
-              it.copy(progress = p, statusMessage = msg, engineState = state)
+              val next = when (state) {
+                TrackingEngineState.FAILED, TrackingEngineState.CANCELLED -> it.progress
+                else -> maxOf(it.progress, p)
+              }
+              it.copy(progress = next.coerceIn(0f, 1f), statusMessage = msg, engineState = state)
+            }
+          },
+          onPartial = { keys ->
+            if (keys.size >= 2) {
+              val partial = TrackingResult(
+                targetId = "partial_${activeClip.id}",
+                clipId = activeClip.id,
+                startTimestampUs = startUs,
+                endTimestampUs = startUs + durationUs,
+                keyframes = keys,
+                targetCategory = category
+              )
+              _motionTrackingState.update { it.copy(activeResult = partial) }
             }
           }
         )
 
         if (result.keyframes.isNotEmpty()) {
           timelineEngine.setClipMotionTrack(activeClip.id, MotionTrackCodec.encode(result))
+          refreshBoundLayerTracks(activeClip, result)
+        }
+
+        val session = result.keyframes.lastOrNull()?.let { last ->
+          TrackingSession(
+            sessionId = result.targetId,
+            targetCategory = category,
+            targetId = result.targetId,
+            startTimestampUs = result.startTimestampUs,
+            endTimestampUs = result.endTimestampUs,
+            currentTimeUs = last.timestampUs,
+            confidence = result.averageConfidence,
+            boundingBox = TrackingSampler.boxFromCenter(
+              last.centerX, last.centerY,
+              region.width * last.scaleX, region.height * last.scaleY
+            ),
+            centerX = last.centerX,
+            centerY = last.centerY,
+            width = region.width * last.scaleX,
+            height = region.height * last.scaleY,
+            rotation = last.rotationDeg,
+            scale = last.scaleX,
+            landmarks = last.landmarkPoints,
+            state = if (result.keyframes.isNotEmpty()) TrackingEngineState.COMPLETED else TrackingEngineState.FAILED,
+            keyframes = result.keyframes
+          )
         }
 
         _motionTrackingState.update {
@@ -616,14 +805,19 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             isTracking = false,
             engineState = if (result.keyframes.isNotEmpty()) TrackingEngineState.COMPLETED else TrackingEngineState.FAILED,
             activeResult = result,
+            activeSession = session,
             progress = 1.0f,
+            detectedFaceCount = if (category == TrackingCategory.FACE) 1 else it.detectedFaceCount,
+            detectedBodyCount = if (category == TrackingCategory.BODY) 1 else it.detectedBodyCount,
+            detectedPointsCount = result.keyframes.size,
             statusMessage = if (result.keyframes.isNotEmpty()) {
-              "Tracked ${result.keyframes.size} frames successfully"
+              "Tracked ${result.keyframes.size} frames"
             } else {
               when (category) {
                 TrackingCategory.FACE -> "No face detected in video"
                 TrackingCategory.BODY -> "No body pose detected in video"
-                else -> "No distinct tracking target found"
+                TrackingCategory.OBJECT -> "No object locked — draw a box or tap a detection"
+                else -> "Not enough trackable detail in the selected area"
               }
             }
           )
@@ -656,7 +850,169 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val activeClip = getSelectedVideoClip() ?: return
     val currentCat = _motionTrackingState.value.activeCategory
     MotionTrackingCache.invalidateClip(activeClip.id)
-    startMotionTracking(currentCat)
+    startMotionTracking(currentCat, range = TrackRange.FULL)
+  }
+
+  fun selectLiveDetection(detection: LiveDetection) {
+    val clip = getSelectedVideoClip()
+    val playheadUs = clip?.let { it.timelineToSourceMs(timelineEngine.currentPositionMs.value) * 1000L } ?: 0L
+    val seeded = clip?.let {
+      MotionTrackingAttach.resultFromLive(
+        clip = it,
+        detections = listOf(detection),
+        selectedId = detection.id,
+        category = detection.category,
+        playheadSourceUs = playheadUs,
+        fallbackRegion = detection.box
+      )
+    }
+    val nextResult = run {
+      val keepFullTrack = _motionTrackingState.value.activeResult != null &&
+        _motionTrackingState.value.activeResult!!.keyframes.size > 3 &&
+        _motionTrackingState.value.engineState == TrackingEngineState.COMPLETED
+      if (keepFullTrack) _motionTrackingState.value.activeResult else (seeded ?: _motionTrackingState.value.activeResult)
+    }
+    if (clip != null && nextResult != null && nextResult.keyframes.isNotEmpty()) {
+      persistClipMotionTrack(clip, nextResult)
+    }
+    _motionTrackingState.update {
+      it.copy(
+        targetRegion = detection.box.clamped(),
+        selectedLiveId = detection.id,
+        lockWidth = detection.box.width,
+        lockHeight = detection.box.height,
+        statusMessage = "Locked ${detection.label}",
+        errorMessage = null,
+        activeResult = nextResult
+      )
+    }
+  }
+
+  fun updateFeatureMode(mode: MotionFeatureType) {
+    _motionTrackingState.update {
+      it.copy(settings = it.settings.copy(featureMode = mode))
+    }
+  }
+
+  fun updateBodyRegion(region: BodyTrackingFeature) {
+    _motionTrackingState.update {
+      it.copy(settings = it.settings.copy(bodyRegion = region))
+    }
+  }
+
+  fun updateFollowFlags(position: Boolean, scale: Boolean, rotation: Boolean) {
+    _motionTrackingState.update {
+      it.copy(
+        settings = it.settings.copy(
+          followPosition = position,
+          followScale = scale,
+          followRotation = rotation
+        )
+      )
+    }
+  }
+
+  private fun startLiveMotionDetection() {
+    if (liveDetectJob?.isActive == true) return
+    liveDetectJob = viewModelScope.launch(Dispatchers.Default) {
+      var lastUs = Long.MIN_VALUE
+      var lastClip = ""
+      var lastCat = TrackingCategory.ATTACH
+      while (isActive) {
+        val tab = _activeToolbarTab.value
+        if (tab != EditorToolbarTab.MOTION_TRACKING && tab != EditorToolbarTab.AR_EFFECTS) break
+        val state = _motionTrackingState.value
+        if (state.isTracking) {
+          delay(140)
+          continue
+        }
+        val clip = getSelectedVideoClip()
+        val cat = if (tab == EditorToolbarTab.AR_EFFECTS) {
+          if (state.activeCategory == TrackingCategory.BODY) TrackingCategory.BODY else TrackingCategory.FACE
+        } else {
+          state.activeCategory
+        }
+        val trackable = cat == TrackingCategory.OBJECT ||
+          cat == TrackingCategory.FACE ||
+          cat == TrackingCategory.BODY ||
+          cat == TrackingCategory.MOTION
+        if (clip == null || !trackable) {
+          if (state.liveDetections.isNotEmpty()) {
+            _motionTrackingState.update { it.copy(liveDetections = emptyList()) }
+          }
+          delay(160)
+          continue
+        }
+        val pos = timelineEngine.currentPositionMs.value
+        val us = clip.timelineToSourceMs(pos) * 1000L
+        val sameFrame = us == lastUs && clip.id == lastClip && cat == lastCat
+        if (sameFrame && state.liveDetections.isNotEmpty()) {
+          delay(90)
+          continue
+        }
+        lastUs = us
+        lastClip = clip.id
+        lastCat = cat
+        val detections = runCatching {
+          motionTrackerEngine.detectLive(
+            context = getApplication(),
+            videoUri = clip.uri,
+            timeUs = us,
+            category = cat,
+            region = state.targetRegion,
+            settings = state.settings
+          )
+        }.getOrDefault(emptyList())
+        _motionTrackingState.update {
+          val playheadUs = clip.timelineToSourceMs(pos) * 1000L
+          val seeded = if (it.activeResult == null && detections.isNotEmpty()) {
+            MotionTrackingAttach.resultFromLive(
+              clip = clip,
+              detections = detections,
+              selectedId = it.selectedLiveId,
+              category = cat,
+              playheadSourceUs = playheadUs,
+              fallbackRegion = it.targetRegion
+            )
+          } else it.activeResult
+          it.copy(
+            liveDetections = detections,
+            activeResult = seeded,
+            detectedFaceCount = detections.count { d -> d.category == TrackingCategory.FACE },
+            detectedBodyCount = detections.count { d -> d.category == TrackingCategory.BODY },
+            detectedPointsCount = detections.sumOf { d ->
+              if (d.category == TrackingCategory.MOTION) d.landmarks.size else 0
+            },
+            statusMessage = when {
+              detections.isNotEmpty() && !it.isTracking &&
+                (it.engineState != TrackingEngineState.COMPLETED) ->
+                "Live: ${detections.joinToString { d -> d.label }}"
+              else -> it.statusMessage
+            }
+          )
+        }
+        delay(70)
+      }
+    }
+  }
+
+  private fun stopLiveMotionDetection() {
+    liveDetectJob?.cancel()
+    liveDetectJob = null
+    _motionTrackingState.update { it.copy(liveDetections = emptyList()) }
+  }
+
+  private fun warmMotionDetectors(category: TrackingCategory) {
+    if (detectorsWarmed) return
+    detectorsWarmed = true
+    runCatching {
+      MlKitDetectorPool.warmUp(
+        face = true,
+        body = true,
+        objects = true
+      )
+    }
+    android.util.Log.d("StudioViewModel", "Warmed motion detectors for $category")
   }
 
   fun attachFaceEffect(effectType: EffectType) {
@@ -717,14 +1073,28 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     followScale: Boolean = true,
     followRot: Boolean = true
   ) {
-    val activeClip = getSelectedVideoClip() ?: return
-    val result = _motionTrackingState.value.activeResult
-    if (result == null || result.keyframes.isEmpty()) {
+    val activeClip = getSelectedVideoClip()
+    if (activeClip == null) {
       _motionTrackingState.update {
-        it.copy(errorMessage = "Please track an object, face, or motion point first before attaching.")
+        it.copy(
+          errorMessage = "Select a video clip first.",
+          statusMessage = "Select a video clip first."
+        )
       }
       return
     }
+    val result = resolveAttachResult(activeClip)
+    if (result == null || result.keyframes.isEmpty()) {
+      _motionTrackingState.update {
+        it.copy(
+          errorMessage = "Detect a face, body, or object first, then attach.",
+          statusMessage = "Detect a face, body, or object first, then attach."
+        )
+      }
+      return
+    }
+    _motionTrackingState.update { it.copy(activeResult = result, errorMessage = null) }
+    persistClipMotionTrack(activeClip, result)
 
     val layerStartMs = activeClip.sourceToTimelineMs(result.startTimestampUs / 1000L)
     val layerEndMs = activeClip.sourceToTimelineMs(result.endTimestampUs / 1000L)
@@ -778,20 +1148,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
               keyframes = emptyList()
             )
           )
-          _motionTrackingState.update { it.copy(statusMessage = "Bound selected sticker to tracked target") }
+          _motionTrackingState.update {
+            it.copy(pendingAttachment = null, statusMessage = "Bound selected sticker to tracked target")
+          }
         } else {
-          val newSticker = timelineEngine.addStickerClip(emojiOrAsset = "✨")
-          timelineEngine.updateStickerClip(
-            newSticker.copy(
-              timelineStartMs = layerStartMs,
-              durationMs = clipDurationMs,
-              posX = 0f,
-              posY = 0f,
-              keyframes = emptyList(),
-              trackBindJson = bindJson
-            )
-          )
-          _motionTrackingState.update { it.copy(statusMessage = "Attached sticker to tracking path") }
+          requestTrackedStickerLibrary()
         }
       }
       AttachmentTarget.OVERLAY -> {
@@ -802,7 +1163,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           is SelectedTrackElement.Video ->
             timelineEngine.timeline.value.overlayClips.find { it.id == selected.clipId }
           else -> null
-        } ?: timelineEngine.timeline.value.overlayClips.lastOrNull()
+        }
         if (overlay != null) {
           timelineEngine.updateOverlayClip(
             overlay.copy(
@@ -812,9 +1173,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
               keyframes = emptyList()
             )
           )
-          _motionTrackingState.update { it.copy(statusMessage = "Attached overlay layer to tracking path") }
+          _motionTrackingState.update {
+            it.copy(pendingAttachment = null, statusMessage = "Attached overlay layer to tracking path")
+          }
         } else {
-          _motionTrackingState.update { it.copy(statusMessage = "Add an overlay clip on the timeline, then attach") }
+          requestTrackedOverlayPicker()
         }
       }
       AttachmentTarget.EFFECT_BLUR -> {
@@ -845,6 +1208,191 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         timelineEngine.updateClipKeyframes(activeClip.id, emptyList())
         _motionTrackingState.update { it.copy(statusMessage = "Attached transform to tracked target") }
       }
+    }
+  }
+
+  fun consumeTrackedOverlayPickRequest() {
+    _pendingTrackedOverlayPick.value = false
+  }
+
+  fun cancelPendingTrackedAttachment() {
+    _pendingTrackedOverlayPick.value = false
+    _motionTrackingState.update { it.copy(pendingAttachment = null) }
+  }
+
+  private fun requestTrackedOverlayPicker() {
+    _motionTrackingState.update {
+      it.copy(
+        pendingAttachment = AttachmentTarget.OVERLAY,
+        statusMessage = "Select an image overlay",
+        errorMessage = null
+      )
+    }
+    _pendingTrackedOverlayPick.value = true
+  }
+
+  private fun requestTrackedStickerLibrary() {
+    _motionTrackingState.update {
+      it.copy(
+        pendingAttachment = AttachmentTarget.STICKER,
+        statusMessage = "Select a sticker",
+        errorMessage = null
+      )
+    }
+    setActiveToolbarTab(EditorToolbarTab.STICKERS)
+  }
+
+  /**
+   * Adds a gallery-picked image/video as a tracked overlay. Returns false when there is
+   * no tracking data or the URI is empty — the caller must not create a placeholder clip.
+   */
+  fun addTrackedOverlayFromPersistedMedia(
+    uri: String,
+    name: String,
+    isVideo: Boolean,
+    durationMs: Long,
+    width: Int,
+    height: Int,
+    rotationDegrees: Int,
+    frameRate: Float,
+    mimeType: String,
+    hasAudio: Boolean
+  ): Boolean {
+    if (uri.isBlank()) {
+      cancelPendingTrackedAttachment()
+      return false
+    }
+    val activeClip = getSelectedVideoClip()
+    val result = activeClip?.let { resolveAttachResult(it) }
+    if (activeClip == null || result == null || result.keyframes.isEmpty()) {
+      cancelPendingTrackedAttachment()
+      _motionTrackingState.update {
+        it.copy(
+          errorMessage = "Detect a face, body, or object first, then attach.",
+          statusMessage = "Detect a face, body, or object first, then attach."
+        )
+      }
+      return false
+    }
+    persistClipMotionTrack(activeClip, result)
+    val settings = _motionTrackingState.value.settings
+    val layerStartMs = activeClip.sourceToTimelineMs(result.startTimestampUs / 1000L)
+    val layerEndMs = activeClip.sourceToTimelineMs(result.endTimestampUs / 1000L)
+    val trackDurationMs = (layerEndMs - layerStartMs).coerceAtLeast(1000L)
+    val layerDuration = if (isVideo && durationMs > 0L) {
+      minOf(durationMs, trackDurationMs).coerceAtLeast(1000L)
+    } else {
+      trackDurationMs
+    }
+    val bindJson = encodeOverlayBinding(
+      result, activeClip, settings.followPosition, settings.followScale, settings.followRotation
+    )
+    timelineEngine.addOverlayClip(
+      uri = uri,
+      name = name,
+      isVideo = isVideo,
+      startTimeMs = layerStartMs,
+      durationMs = layerDuration,
+      scale = 0.45f,
+      posX = 0f,
+      posY = 0f,
+      width = width,
+      height = height,
+      rotationDegrees = rotationDegrees,
+      frameRate = frameRate,
+      mimeType = mimeType,
+      hasAudio = hasAudio
+    )
+    val createdId = (timelineEngine.selectedElement.value as? SelectedTrackElement.Overlay)?.clipId
+    val created = timelineEngine.timeline.value.overlayClips.find { it.id == createdId }
+    if (created != null) {
+      timelineEngine.updateOverlayClip(
+        created.copy(trackBindJson = bindJson, keyframes = emptyList())
+      )
+    }
+    _pendingTrackedOverlayPick.value = false
+    _motionTrackingState.update {
+      it.copy(
+        pendingAttachment = null,
+        activeResult = result,
+        statusMessage = "Attached overlay to tracking path",
+        errorMessage = null
+      )
+    }
+    return true
+  }
+
+  /**
+   * Binds a sticker just added from the library to the pending track.
+   * Returns false when Overlay/Sticker attach is not waiting so the library keeps its normal add.
+   */
+  fun bindPendingTrackedSticker(sticker: StickerClip): Boolean {
+    if (_motionTrackingState.value.pendingAttachment != AttachmentTarget.STICKER) return false
+    val activeClip = getSelectedVideoClip()
+    val result = activeClip?.let { resolveAttachResult(it) }
+    if (activeClip == null || result == null || result.keyframes.isEmpty()) {
+      cancelPendingTrackedAttachment()
+      return false
+    }
+    persistClipMotionTrack(activeClip, result)
+    val settings = _motionTrackingState.value.settings
+    val layerStartMs = activeClip.sourceToTimelineMs(result.startTimestampUs / 1000L)
+    val layerEndMs = activeClip.sourceToTimelineMs(result.endTimestampUs / 1000L)
+    val clipDurationMs = (layerEndMs - layerStartMs).coerceAtLeast(1000L)
+    val bindJson = encodeOverlayBinding(
+      result, activeClip, settings.followPosition, settings.followScale, settings.followRotation
+    )
+    timelineEngine.updateStickerClip(
+      sticker.copy(
+        timelineStartMs = layerStartMs,
+        durationMs = clipDurationMs,
+        posX = 0f,
+        posY = 0f,
+        scale = 1f,
+        rotation = 0f,
+        keyframes = emptyList(),
+        trackBindJson = bindJson
+      )
+    )
+    _motionTrackingState.update {
+      it.copy(
+        pendingAttachment = null,
+        activeResult = result,
+        statusMessage = "Attached sticker to tracking path",
+        errorMessage = null
+      )
+    }
+    setActiveToolbarTab(EditorToolbarTab.MOTION_TRACKING)
+    return true
+  }
+
+  private fun refreshBoundLayerTracks(host: VideoClip, result: TrackingResult) {
+    if (result.keyframes.isEmpty()) return
+    val tl = timelineEngine.timeline.value
+    tl.textClips.forEach { clip ->
+      val next = OverlayTrackCodec.rebindHost(clip.trackBindJson, result, host)
+      if (next != clip.trackBindJson) timelineEngine.updateTextClip(clip.copy(trackBindJson = next))
+    }
+    tl.stickerClips.forEach { clip ->
+      val next = OverlayTrackCodec.rebindHost(clip.trackBindJson, result, host)
+      if (next != clip.trackBindJson) timelineEngine.updateStickerClip(clip.copy(trackBindJson = next))
+    }
+    tl.overlayClips.forEach { clip ->
+      val next = OverlayTrackCodec.rebindHost(clip.trackBindJson, result, host)
+      if (next != clip.trackBindJson) timelineEngine.updateOverlayClip(clip.copy(trackBindJson = next))
+    }
+    tl.effectClips.forEach { clip ->
+      val next = OverlayTrackCodec.rebindHost(clip.trackBindJson, result, host)
+      if (next != clip.trackBindJson) timelineEngine.updateEffectClip(clip.copy(trackBindJson = next))
+    }
+    val liveHost = timelineEngine.timeline.value.videoClips.find { it.id == host.id } ?: host
+    val hostBind = OverlayTrackCodec.rebindHost(liveHost.trackBindJson, result, liveHost)
+    if (hostBind != liveHost.trackBindJson) {
+      timelineEngine.setClipTrackBind(liveHost.id, hostBind)
+    }
+    val maskBind = OverlayTrackCodec.rebindHost(liveHost.mask.trackBindJson, result, liveHost)
+    if (maskBind != liveHost.mask.trackBindJson) {
+      timelineEngine.setClipMask(liveHost.id, liveHost.mask.copy(trackBindJson = maskBind))
     }
   }
 
@@ -891,7 +1439,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun toggleMotionPathVisibility() {
     _motionTrackingState.update {
-      it.copy(isRegionSelectorActive = !it.isRegionSelectorActive)
+      it.copy(showMotionPath = !it.showMotionPath)
     }
   }
 
@@ -997,6 +1545,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       canvasBackgroundColor = 0xFF000000
     )
 
+    resetPlaybackForNewProject()
     timelineEngine.setTimelineFps(fps.fps)
     timelineEngine.loadTimeline(initialTimeline)
     saveCurrentProject()
@@ -1195,6 +1744,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       return
     }
     _projectLoadError.value = null
+    resetPlaybackForNewProject()
     _activeProjectId.value = project.id
     _activeProjectName.value = project.name
     _activeAspectRatio.value = AspectRatio.values().find { it.label == project.aspectRatio } ?: AspectRatio.RATIO_9_16
@@ -1204,7 +1754,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _activeCanvasColor.value = project.canvasColor
 
     val pkg = parsedPackage
-    val loadedTimeline = parsedTimeline
+    val appContext = getApplication<Application>().applicationContext
+    val loadedTimeline = MediaPlayableUri.hydrateTimeline(appContext, parsedTimeline)
     if (pkg != null && pkg.settings.sampleRateHz > 0) {
       _activeSampleRate.value = pkg.settings.sampleRateHz
       _activeCanvasColor.value = pkg.settings.canvasBackgroundColor
@@ -1219,10 +1770,47 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       aspectRatio = _activeAspectRatio.value,
       canvasBackgroundColor = _activeCanvasColor.value
     ))
+    val restoredPlayhead = (pkg?.settings?.playheadMs ?: 0L)
+      .coerceIn(0L, loadedTimeline.totalDurationMs.coerceAtLeast(0L))
+    if (restoredPlayhead > 0L) {
+      timelineEngine.setPosition(restoredPlayhead, snap = false)
+    }
     _isCanvasConfiguredByMedia.value = loadedTimeline.videoClips.isNotEmpty()
     _saveState.value = ProjectSaveState(ProjectSaveStatus.SAVED, project.lastEditedTime)
     navigateTo(AppScreen.EDITOR)
     checkMissingMedia()
+    persistLoadedProjectMedia()
+  }
+
+  /**
+   * Copies any leftover PhotoPicker `content://` grants into app storage and reloads
+   * the player so a later reopen still has video + audio.
+   */
+  private fun persistLoadedProjectMedia() {
+    val projectId = _activeProjectId.value
+    if (projectId.isBlank()) return
+    viewModelScope.launch(Dispatchers.IO) {
+      val current = timelineEngine.timeline.value
+      val persisted = try {
+        MediaPersistenceManager.persistTimelineMedia(getApplication(), current)
+      } catch (t: Throwable) {
+        android.util.Log.w("StudioViewModel", "persistTimelineMedia failed", t)
+        return@launch
+      }
+      if (!MediaPlayableUri.hasUriChanges(current, persisted)) return@launch
+      withContext(Dispatchers.Main) {
+        if (_activeProjectId.value != projectId) return@withContext
+        timelineEngine.replaceTimelineKeepingState(persisted)
+        try {
+          playbackEngine.updateTimeline(persisted)
+          playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+          playbackEngine.prepareForEditorEntry()
+        } catch (t: Throwable) {
+          android.util.Log.w("StudioViewModel", "Playback reload after media persist failed", t)
+        }
+        saveCurrentProject()
+      }
+    }
   }
 
   // Template Creator Mode
@@ -1302,7 +1890,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             isDraft = false,
             sampleRate = _activeSampleRate.value,
             canvasColor = _activeCanvasColor.value,
-            hasMissingMedia = missingList.isNotEmpty()
+            hasMissingMedia = missingList.isNotEmpty(),
+            playheadMs = timelineEngine.currentPositionMs.value
           )
         }
         _saveState.value = ProjectSaveState(ProjectSaveStatus.SAVED, System.currentTimeMillis())
@@ -1324,6 +1913,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   fun restoreCrashRecoverySession() {
     viewModelScope.launch {
       val session: CrashRecoveryEntity = repository.getActiveRecoverySession() ?: return@launch
+      resetPlaybackForNewProject()
+      val appContext = getApplication<Application>().applicationContext
       _activeProjectId.value = session.projectId.ifBlank { UUID.randomUUID().toString() }
       _activeProjectName.value = session.projectName.ifBlank { "Recovered Project" }
       val pkg = TimelineSerializer.fromPackageJson(session.timelineJson)
@@ -1336,12 +1927,20 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         timelineEngine.setTimelineFps(pkg.settings.fps.fps)
         timelineEngine.setAspectRatio(pkg.settings.aspectRatio)
         timelineEngine.setCanvasBackgroundColor(pkg.settings.canvasBackgroundColor)
-        timelineEngine.loadTimeline(pkg.timeline.copy(
+        val hydrated = MediaPlayableUri.hydrateTimeline(appContext, pkg.timeline)
+        timelineEngine.loadTimeline(hydrated.copy(
           aspectRatio = pkg.settings.aspectRatio,
           canvasBackgroundColor = pkg.settings.canvasBackgroundColor
         ))
+        val recoveredPlayhead = pkg.settings.playheadMs.coerceIn(0L, hydrated.totalDurationMs.coerceAtLeast(0L))
+        if (recoveredPlayhead > 0L) {
+          timelineEngine.setPosition(recoveredPlayhead, snap = false)
+        }
       } else {
-        val recoveredTimeline = TimelineSerializer.fromJson(session.timelineJson)
+        val recoveredTimeline = MediaPlayableUri.hydrateTimeline(
+          appContext,
+          TimelineSerializer.fromJson(session.timelineJson)
+        )
         timelineEngine.setTimelineFps(_activeFps.value.fps)
         timelineEngine.setAspectRatio(_activeAspectRatio.value)
         timelineEngine.setCanvasBackgroundColor(_activeCanvasColor.value)
@@ -1350,6 +1949,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _saveState.value = ProjectSaveState(ProjectSaveStatus.UNSAVED, session.timestamp)
       navigateTo(AppScreen.EDITOR)
       checkMissingMedia()
+      persistLoadedProjectMedia()
     }
   }
 
@@ -1397,10 +1997,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun relinkMedia(clipId: String, newUri: String) {
     viewModelScope.launch(Dispatchers.IO) {
+      val persistentUri = MediaPersistenceManager.persistMedia(getApplication(), newUri)
       val currentTimeline = timelineEngine.timeline.value
-      val updated = MediaRelinkManager.relinkClip(getApplication(), currentTimeline, clipId, newUri)
+      val updated = MediaRelinkManager.relinkClip(getApplication(), currentTimeline, clipId, persistentUri)
       withContext(Dispatchers.Main) {
         timelineEngine.replaceTimelineKeepingState(updated)
+        try {
+          playbackEngine.updateTimeline(updated)
+          playbackEngine.seekTo(timelineEngine.currentPositionMs.value)
+        } catch (t: Throwable) {
+          android.util.Log.w("StudioViewModel", "Playback reload after relink failed", t)
+        }
         saveCurrentProject(isManual = true)
         checkMissingMedia()
       }
@@ -1776,14 +2383,59 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   private fun ensureFaceSource(force: Boolean = false) {
     val registry = com.ahstudio.face.deformation.FaceWarpRegistry
-    if (registry.faceSource == null && (force || _faceDeform.value.isNotEmpty())) {
+    val need = force || _faceDeform.value.isNotEmpty() || _arApplied.value.isNotEmpty()
+    if (!need) return
+    if (registry.faceSource is MotionFaceFallbackSource) return
+    if (registry.faceSource == null) {
       val tracker = com.ahstudio.face.tracking.ClipFaceTracker(
         context = getApplication<Application>().applicationContext,
         uriFor = { id -> mediaClip(id)?.uri },
       )
       clipFaceTracker = tracker
-      registry.faceSource = tracker
+      registry.faceSource = MotionFaceFallbackSource(tracker, ::motionFacesAt)
+    } else {
+      registry.faceSource = MotionFaceFallbackSource(registry.faceSource!!, ::motionFacesAt)
     }
+  }
+
+  private fun motionFacesAt(clipId: String, sourceTimeUs: Long): List<com.ahstudio.face.core.TrackedFace> {
+    val fromState = MotionTrackingAttach.facesFromState(_motionTrackingState.value, clipId, sourceTimeUs)
+    if (fromState.isNotEmpty()) return fromState
+    val clip = mediaClip(clipId) ?: return emptyList()
+    val encoded = clip.motionTrackJson ?: return emptyList()
+    val decoded = MotionTrackCodec.decode(encoded) ?: return emptyList()
+    if (decoded.keyframes.isEmpty()) return emptyList()
+    if (decoded.targetCategory != TrackingCategory.FACE &&
+      decoded.targetCategory != TrackingCategory.BODY
+    ) {
+      return emptyList()
+    }
+    val kf = MotionTrackingEvaluator(decoded).evaluate(sourceTimeUs)
+    val state = _motionTrackingState.value
+    return listOf(
+      MotionTrackingAttach.keyframeToTrackedFace(
+        kf,
+        decoded.targetCategory,
+        state.lockWidth.coerceAtLeast(0.08f),
+        state.lockHeight.coerceAtLeast(0.08f)
+      )
+    )
+  }
+
+  private fun resolveAttachResult(clip: VideoClip): TrackingResult? {
+    val state = _motionTrackingState.value
+    state.activeResult?.takeIf { it.keyframes.isNotEmpty() }?.let { return it }
+    val playheadUs = clip.timelineToSourceMs(timelineEngine.currentPositionMs.value) * 1000L
+    MotionTrackingAttach.resultFromLive(
+      clip = clip,
+      detections = state.liveDetections,
+      selectedId = state.selectedLiveId,
+      category = state.activeCategory,
+      playheadSourceUs = playheadUs,
+      fallbackRegion = if (state.liveDetections.isNotEmpty()) state.targetRegion else null
+    )?.let { return it }
+    val encoded = clip.motionTrackJson
+    return MotionTrackCodec.decode(encoded)?.takeIf { it.keyframes.isNotEmpty() }
   }
 
   private var clipBodyTracker: com.example.engine.effects.ClipBodyTracker? = null
@@ -1807,6 +2459,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     hydrateBodyReshape(media)
     hydrateBgRemoval(timelineEngine.timeline.value)
     runCatching { engineController.invalidateClip(clip.id) }
+    if (playbackEngineDelegate.isInitialized()) {
+      runCatching { playbackEngine.applyActiveLookToPlayers() }
+    }
+    refreshCurrentFrame()
   }
 
   /** Selected main video, selected overlay, or the main clip under the playhead. */
@@ -1917,13 +2573,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           activeResult = null,
           engineState = TrackingEngineState.IDLE
         )
-        decoded == null && json == null && state.activeResult?.clipId == clip?.id -> state.copy(
-          activeResult = null,
-          engineState = TrackingEngineState.IDLE
-        )
         else -> state
       }
     }
+  }
+
+  private fun persistClipMotionTrack(clip: VideoClip, result: TrackingResult) {
+    if (result.keyframes.isEmpty()) return
+    timelineEngine.setClipMotionTrack(clip.id, MotionTrackCodec.encode(result))
   }
 
   /** Rebuilds the compositor's cutout registry from the timeline after edit / load / undo / redo. */
@@ -2012,13 +2669,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         val mediaUri = if (mediaUriStr.startsWith("content://") || mediaUriStr.startsWith("file://")) {
           android.net.Uri.parse(mediaUriStr)
         } else android.net.Uri.fromFile(File(mediaUriStr))
-        val langTag = when (language.lowercase()) {
-          "spanish" -> "es"; "french" -> "fr"; "german" -> "de"; "chinese" -> "zh"
-          "japanese" -> "ja"; "arabic" -> "ar"; "urdu" -> "ur"; "hindi" -> "hi"; else -> "en"
-        }
+        val langTag = com.ahstudio.captions.recognition.CaptionLanguages.tag(language)
         val project = CaptionsGraph.get(getApplication()).autoEngine.generate(
           mediaUri = mediaUri,
-          options = AutoCaptionOptions(languageTag = langTag),
+          options = AutoCaptionOptions(languageTag = langTag, preferredProviderId = "firebase-speech"),
         ) { state ->
           when (state) {
             is CaptionGenerationState.ExtractingAudio -> _aiStatusMessage.value = "Captions Engine: Extracting audio..."
@@ -2047,6 +2701,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           clips += TextClip(
             id = UUID.randomUUID().toString(), text = clip.displayText,
             timelineStartMs = startMs, durationMs = durMs, words = wordTimings,
+            subtitleStyle = "Classic",
           )
           ids += clip.words.mapNotNull { it.speakerId }.groupingBy { it }.eachCount().maxByOrNull { it.value }?.key
         }
@@ -2129,21 +2784,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
           if (mediaUri != null) {
             try {
-              val langTag = when (language.lowercase()) {
-                "spanish" -> "es"
-                "french" -> "fr"
-                "german" -> "de"
-                "chinese" -> "zh"
-                "japanese" -> "ja"
-                "arabic" -> "ar"
-                "urdu" -> "ur"
-                "hindi" -> "hi"
-                else -> "en"
-              }
+              val langTag = com.ahstudio.captions.recognition.CaptionLanguages.tag(language)
               val captionsGraph = CaptionsGraph.get(getApplication())
               val project = captionsGraph.autoEngine.generate(
                 mediaUri = mediaUri,
-                options = AutoCaptionOptions(languageTag = langTag)
+                options = AutoCaptionOptions(languageTag = langTag, preferredProviderId = "firebase-speech")
               ) { state ->
                 when (state) {
                   is CaptionGenerationState.ExtractingAudio -> _aiStatusMessage.value = "Captions Engine: Extracting audio..."
@@ -2154,8 +2799,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                 }
               }
               val primaryTrack = project.tracks.firstOrNull()
-              if (primaryTrack != null && primaryTrack.clips.isNotEmpty()) {
-                val newClips = primaryTrack.clips.map { clip ->
+              val newClips = primaryTrack?.clips.orEmpty().map { clip ->
                   val startMs = (clip.timing.start.micros / 1000L).coerceAtLeast(0L)
                   val durMs = ((clip.timing.end.micros - clip.timing.start.micros) / 1000L).coerceAtLeast(500L)
                   val wordTimings = clip.words.map { w ->
@@ -2168,32 +2812,28 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
                     text = clip.displayText,
                     timelineStartMs = startMs,
                     durationMs = durMs,
-                    words = wordTimings
+                    words = wordTimings,
+                    subtitleStyle = "Classic"
                   )
                 }
-                val currentList = timelineEngine.timeline.value.textClips.toMutableList()
-                currentList.addAll(newClips)
-                timelineEngine.replaceTimelineKeepingState(timelineEngine.timeline.value.copy(textClips = currentList))
-                _aiStatusMessage.value = "Generated ${newClips.size} auto captions via Captions Engine!"
+                if (newClips.isEmpty()) {
+                  _aiStatusMessage.value = "No spoken words detected in the audio."
+                } else {
+                  val currentList = timelineEngine.timeline.value.textClips.toMutableList()
+                  currentList.addAll(newClips)
+                  timelineEngine.replaceTimelineKeepingState(timelineEngine.timeline.value.copy(textClips = currentList))
+                  _aiStatusMessage.value = "Generated ${newClips.size} captions from the Firebase speech engine."
+                }
                 generatedWithEngine = true
-              }
             } catch (e: Exception) {
-              // Fallback to aiTools if engine extraction encounters format discrepancy
+              _aiStatusMessage.value = e.message ?: "Auto captions failed."
+              generatedWithEngine = true
             }
           }
         }
 
         if (!generatedWithEngine) {
-          val result = aiTools.generateAutoCaptions(timelineEngine.timeline.value, language)
-          val captions = result.getOrThrow()
-          if (captions.isEmpty()) {
-            _aiStatusMessage.value = "No spoken words detected in imported audio."
-          } else {
-            val currentList = timelineEngine.timeline.value.textClips.toMutableList()
-            currentList.addAll(captions)
-            timelineEngine.replaceTimelineKeepingState(timelineEngine.timeline.value.copy(textClips = currentList))
-            _aiStatusMessage.value = "Generated ${captions.size} auto captions successfully!"
-          }
+          _aiStatusMessage.value = "Import a video or audio clip before generating captions."
         }
       } catch (e: Exception) {
         _aiStatusMessage.value = e.message ?: "AI Captions unavailable. Configure backend/API credentials."
@@ -2222,7 +2862,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         text = text,
         timelineStartMs = startMs,
         durationMs = durationMs,
-        words = wordTimings
+        words = wordTimings,
+        subtitleStyle = "Classic"
       )
     }
     val current = timelineEngine.timeline.value.textClips.toMutableList()
@@ -2321,12 +2962,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val sourceUs = clip.timelineToSourceMs(timelineMs) * 1000L
     val retriever = MediaMetadataRetriever()
     return try {
-      val parsed = Uri.parse(clip.uri)
+      val parsed = MediaPlayableUri.toExoPlayerUri(context, clip.uri)
       if (parsed.scheme == "content" || parsed.scheme == "android.resource") {
         retriever.setDataSource(context, parsed)
       } else {
-        val file = File(clip.uri)
-        if (file.isFile) retriever.setDataSource(file.absolutePath)
+        val file = MediaPlayableUri.resolveLocalFile(clip.uri)
+        if (file != null && file.isFile) retriever.setDataSource(file.absolutePath)
         else retriever.setDataSource(context, parsed)
       }
       if (Build.VERSION.SDK_INT >= 27) {
@@ -2343,12 +2984,12 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   private fun decodeStill(context: android.content.Context, uri: String): Bitmap? {
     fun open() = runCatching {
-      val parsed = Uri.parse(uri)
+      val parsed = MediaPlayableUri.toExoPlayerUri(context, uri)
       if (parsed.scheme == "content" || parsed.scheme == "android.resource") {
         context.contentResolver.openInputStream(parsed)
       } else {
-        val file = File(uri)
-        if (file.isFile) file.inputStream() else context.contentResolver.openInputStream(parsed)
+        val file = MediaPlayableUri.resolveLocalFile(uri)
+        if (file != null && file.isFile) file.inputStream() else context.contentResolver.openInputStream(parsed)
       }
     }.getOrNull()
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
@@ -2370,8 +3011,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         var audioFile: File? = null
         val firstAudio = timeline.audioClips.firstOrNull()
         if (firstAudio != null && firstAudio.uri.isNotBlank()) {
-          val candidate = File(firstAudio.uri)
-          if (candidate.exists() && candidate.length() > 0L) audioFile = candidate
+          val candidate = MediaPlayableUri.resolveLocalFile(firstAudio.uri)
+          if (candidate != null && candidate.exists() && candidate.length() > 0L) audioFile = candidate
         }
         if (audioFile == null && timeline.videoClips.isNotEmpty()) {
           audioFile = audioEngine.extractAudioFromVideo(timeline.videoClips.first().uri)
@@ -2383,13 +3024,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
         val denoisedResult = aiTools.reduceAudioNoise(audioFile)
         val denoisedFile = denoisedResult.getOrThrow()
+        val durationMs = com.example.engine.audio.AudioMediaDuration.durationMs(getApplication(), denoisedFile.absolutePath)
+          ?: com.example.engine.audio.WavDuration.durationMs(denoisedFile)
+          ?: throw IllegalStateException("Denoised audio was written, but its duration could not be read.")
 
         val newAudioClip = AudioClip(
           id = UUID.randomUUID().toString(),
           title = "Denoised Audio",
           uri = denoisedFile.absolutePath,
           timelineStartMs = 0L,
-          durationMs = timeline.totalDurationMs.coerceAtLeast(3000L),
+          durationMs = durationMs,
+          sourceEndMs = durationMs,
+          sourceTotalDurationMs = durationMs,
           volume = 1.0f
         )
         val updatedAudioClips = timeline.audioClips.toMutableList().apply { add(newAudioClip) }
@@ -2417,7 +3063,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         }
         val newAudioClip = AudioClip(
           id = UUID.randomUUID().toString(),
-          title = "AI Voice: ${text.take(20)}...",
+          title = "TTS: ${text.take(20)}...",
           uri = file.absolutePath,
           timelineStartMs = timelineEngine.currentPositionMs.value,
           durationMs = durationMs,
@@ -2427,44 +3073,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         )
         val currentAudio = timelineEngine.timeline.value.audioClips.toMutableList().apply { add(newAudioClip) }
         timelineEngine.replaceTimelineKeepingState(timelineEngine.timeline.value.copy(audioClips = currentAudio))
-        _aiStatusMessage.value = "AI Voice audio added to timeline audio track!"
+        _aiStatusMessage.value = "Speech audio added to the timeline."
       } catch (e: Exception) {
         _aiStatusMessage.value = e.message ?: "Voice synthesis failed."
-      } finally {
-        _isAIBusy.value = false
-      }
-    }
-  }
-
-  fun runAIHighlightAnalysis() {
-    viewModelScope.launch {
-      _isAIBusy.value = true
-      _aiStatusMessage.value = "Requesting highlight times from the project title and duration..."
-      try {
-        val result = aiTools.analyzeHighlights(timelineEngine.timeline.value)
-        val highlights = result.getOrThrow()
-        _aiHighlights.value = highlights
-        _aiStatusMessage.value = "The model suggested ${highlights.size} time ranges from the title and duration. It did not see the frames."
-      } catch (e: Exception) {
-        _aiStatusMessage.value = e.message ?: "Highlight analysis unavailable."
-      } finally {
-        _isAIBusy.value = false
-      }
-    }
-  }
-
-  fun runAIAutoEdit() {
-    viewModelScope.launch {
-      _isAIBusy.value = true
-      _aiStatusMessage.value = "Building a paced montage from clip durations..."
-      try {
-        val clips = timelineEngine.timeline.value.videoClips
-        val result = aiTools.autoEditMontage(clips)
-        val editedTimeline = result.getOrThrow()
-        timelineEngine.replaceTimelineKeepingState(editedTimeline)
-        _aiStatusMessage.value = "Montage built from fixed slice lengths and a rotating transition list."
-      } catch (e: Exception) {
-        _aiStatusMessage.value = e.message ?: "Auto-edit failed."
       } finally {
         _isAIBusy.value = false
       }
@@ -2487,9 +3098,17 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       )
 
       videoExporter.beginExternalExport(config)
+      videoExporter.onExternalCancel = { professionalExportEngine.cancel() }
       val progressJob = launch {
         professionalExportEngine.progress.collect { progress ->
-          videoExporter.updateExternalExportProgress(progress.fraction, progress.message)
+          videoExporter.updateExternalExportProgress(
+            progress = progress.fraction,
+            status = progress.message,
+            currentFrame = progress.currentFrame.toInt().coerceAtLeast(0),
+            totalFrames = progress.totalFrames.toInt().coerceAtLeast(0),
+            fps = progress.encodeFps,
+            estimatedRemainingSec = ((progress.estimatedRemainingMs ?: 0L) / 1000L).toInt()
+          )
         }
       }
 
@@ -2499,8 +3118,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
           timeline = timelineSnapshot,
           config = config,
           outputFile = outputFile,
-          requireAudio = timelineSnapshot.audioClips.isNotEmpty() ||
-            timelineSnapshot.videoClips.any { it.hasAudio },
+          requireAudio = com.example.engine.export.AudioExportProcessor(getApplication()).hasActiveAudio(timelineSnapshot),
           shouldCancel = { videoExporter.isCancelRequested() },
           isPaused = { videoExporter.isPauseRequested() }
         )
@@ -2576,6 +3194,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       if (filter.isMeshOverlay) {
         _showFaceMeshGrid.value = true
       }
+      ensureFaceSource(force = true)
+      startLiveMotionDetection()
     }
   }
 
@@ -2659,19 +3279,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   }
 
   /**
-   * Real tracked faces (ML Kit via ClipFaceTracker) at the current playhead, in the upright
-   * source frame. Non-blocking: may be empty while detection is still running.
-   * Clips rotated/flipped vertically by the user are not mapped, so they return no faces.
+   * Real tracked faces at the current playhead, in the upright source frame.
+   * Uses ClipFaceTracker first, then the live motion-tracking lock so filters
+   * sit on the detected face / body even while the face engine is still warming.
    */
   fun arPreviewFaces(): List<com.ahstudio.face.core.TrackedFace> {
     val clip = arPreviewClip() ?: return emptyList()
-    if (clip.rotationDegrees % 360 != 0 || clip.flipVertical) return emptyList()
     ensureFaceSource(force = true)
-    val source = com.ahstudio.face.deformation.FaceWarpRegistry.faceSource ?: return emptyList()
     val posMs = timelineEngine.currentPositionMs.value
     val sourceMs = clip.freezeFrameAtMs ?: clip.timelineToSourceMs(posMs)
-    return runCatching { source.facesAt(clip.id, sourceMs.coerceAtLeast(0L) * 1000L, false) }
+    val sourceUs = sourceMs.coerceAtLeast(0L) * 1000L
+    val source = com.ahstudio.face.deformation.FaceWarpRegistry.faceSource
+    val fromEngine = runCatching { source?.facesAt(clip.id, sourceUs, false).orEmpty() }
       .getOrDefault(emptyList())
+    if (fromEngine.isNotEmpty()) return fromEngine
+    return motionFacesAt(clip.id, sourceUs)
   }
 
   /**
@@ -2685,9 +3307,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _arStatusMessage.value = "Select a video clip first."
       return
     }
+    ensureFaceSource(force = true)
+    val result = resolveAttachResult(clip)
+    if (result != null && result.keyframes.isNotEmpty()) {
+      _motionTrackingState.update { it.copy(activeResult = result, errorMessage = null) }
+      persistClipMotionTrack(clip, result)
+    }
     if (filter.canExport) {
-      if (_motionTrackingState.value.activeResult == null) {
-        _arStatusMessage.value = "Track the face first (Motion Tracking tab), then apply."
+      if (result == null) {
+        _arStatusMessage.value = "No face detected yet — wait for the box on the face, then apply."
         return
       }
       attachFaceEffect(com.example.domain.model.EffectType.MOSAIC)
@@ -2698,7 +3326,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       clip.id,
       com.ahstudio.face.overlay.ArOverlayParams(filter.id, _arFilterScale.value, _arFilterOffsetY.value, _arFilterOpacity.value)
     )
-    _arStatusMessage.value = "${filter.name} applied. It is drawn on the clip and included in the export."
+    _arStatusMessage.value = "${filter.name} applied on the detected face / body."
   }
 
   // ==========================================
@@ -2715,6 +3343,7 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   override fun onCleared() {
     super.onCleared()
+    persistLookJob?.cancel()
     autoSaveJob?.cancel()
     com.ahstudio.face.deformation.FaceWarpRegistry.clear()
     com.example.engine.effects.BodyWarpRegistry.clear()

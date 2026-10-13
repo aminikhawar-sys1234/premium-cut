@@ -20,6 +20,8 @@
     <string name="auto_save">خودکار محفوظ کریں</string>
     <string name="save_projects_automatically">پروجیکٹس کو خود بخود محفوظ کریں</string>
     <string name="manage_app_notifications">ایپ اطلاعات کا نظم کریں</string>
+    <string name="gpu_preview_compositor">GPU پریویو کمپوزیٹر (بیٹا)</string>
+    <string name="gpu_preview_compositor_desc">تمام ٹریکس کو ایک ہی کلاک پر ایکسپورٹ رینڈرر سے ملائیں</string>
     <string name="video_quality">ویڈیو کا معیار</string>
     <string name="choose_default_video_quality">طے شدہ معیار منتخب کریں</string>
     <string name="help_and_support">مدد اور تعاون</string>

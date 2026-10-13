@@ -71,6 +71,22 @@ class TemplateEngine(private val appContext: Context) {
             layout = TextDocumentCodec.decodeLayout(o.optJSONObject("layout") ?: JSONObject()),
             motion = o.optJSONObject("motion")?.let { TextDocumentCodec.decodeMotion(it) },
             timing = TimeRange(o.optDouble("startSec", 0.0), o.optDouble("durationSec", 5.0)),
+            threeD = o.optJSONObject("threeD")?.let {
+                Text3DConfig(
+                    extrusionDepthPx = it.optDouble("depth", 20.0).toFloat(),
+                    bevelWidthPx = it.optDouble("bevel", 2.0).toFloat(),
+                    materialId = it.optString("material", "matte"),
+                    materialTint = decodeTint(it.optString("tint", "#FFFFFFFF")),
+                )
+            },
         )
+    }
+
+    private fun decodeTint(raw: String): Int = try {
+        val clean = raw.removePrefix("#")
+        val v = clean.toLong(16)
+        if (clean.length <= 6) (0xFF000000L or v).toInt() else v.toInt()
+    } catch (_: Exception) {
+        0xFFFFFFFF.toInt()
     }
 }

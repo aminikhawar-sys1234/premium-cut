@@ -3,8 +3,11 @@ package com.example
 import com.example.domain.model.*
 import com.example.engine.SelectedTrackElement
 import com.example.engine.TimelineEngine
+import com.ahstudio.color.core.LutState
+import com.example.engine.color.ColorEngineHost
 import com.example.engine.composition.ColorFilterGenerator
 import com.example.engine.effects.media3.ColorGradingGlEffect
+import com.example.engine.effects.media3.LutGlEffect
 import com.example.engine.effects.media3.PreviewFilterEffects
 import org.junit.Assert.*
 import org.junit.Before
@@ -29,22 +32,21 @@ class VideoFiltersTest {
   fun testAllRequestedFilterTypesExist() {
     val requestedNames = listOf(
       "4K",
-      "Blacklight Fix",
+      "Black Light",
       "Enhance",
       "HDR",
       "Glow",
-      "Focus",
-      "Quality Restoration",
-      "Golden Autumn",
-      "Oceanic View",
-      "Almond",
-      "Sunlight Orange Blue"
+      "Golden"
     )
 
     val actualDisplayNames = FilterType.values().map { it.displayName }
     for (name in requestedNames) {
       assertTrue("Filter $name should be present in FilterType", actualDisplayNames.contains(name))
     }
+    assertEquals(
+      requestedNames.toSet(),
+      com.example.engine.effects.FilterCatalog.SELECTABLE.map { it.displayName }.toSet()
+    )
   }
 
   @Test
@@ -194,11 +196,24 @@ class VideoFiltersTest {
     val timeline = Timeline(videoClips = listOf(clip))
 
     val noneEffects = PreviewFilterEffects.effectsFor(clip.copy(filter = FilterSettings()), timeline)
-    assertTrue("Original look must not inject a ColorGrading pass", noneEffects.none { it is ColorGradingGlEffect })
+    val noneGrading = noneEffects.filterIsInstance<ColorGradingGlEffect>()
+    assertEquals("Original look keeps a resident identity ColorGrading pass", 1, noneGrading.size)
+    assertTrue(noneGrading.single().isIdentityLook())
 
     val fourK = PreviewFilterEffects.effectsFor(clip, timeline)
-    assertTrue("4K must produce a real ColorGradingGlEffect for ExoPlayer", fourK.any { it is ColorGradingGlEffect })
-    assertFalse((fourK.single { it is ColorGradingGlEffect } as ColorGradingGlEffect).isNoOp(1920, 1080))
+    assertTrue(
+      "Artistic filters share the live ColorGradingGlEffect so preview matches export",
+      fourK.any { it is ColorGradingGlEffect }
+    )
+    assertEquals(
+      PreviewFilterEffects.media3GraphSignature(clip, timeline),
+      PreviewFilterEffects.media3GraphSignature(clip.copy(filter = FilterSettings(type = FilterType.BLACK_AND_WHITE)), timeline)
+    )
+    assertNotNull(
+      "4K must still produce a real ColorFilterGenerator matrix for the live TextureView and export",
+      com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(FilterType.FOUR_K, 1.0f)
+    )
+    assertNotNull(com.example.engine.effects.media3.PreviewDisplayFilter.matrixFor(clip, timeline))
 
     val cinematic = FilterSettings(type = FilterType.CINEMATIC, intensity = 0.75f)
     val bw = FilterSettings(type = FilterType.BLACK_AND_WHITE, intensity = 1.0f)
@@ -225,5 +240,47 @@ class VideoFiltersTest {
     )
     assertEquals(FilterType.GOLDEN_AUTUMN, PreviewFilterEffects.effectiveFilter(clip, timeline).type)
     assertEquals(FilterType.OCEANIC_VIEW, PreviewFilterEffects.effectiveFilter(null, timeline).type)
+  }
+
+  @Test
+  fun testPreviewFilterEffectsIncludeLutLookInSignature() {
+    val grade = ColorEngineHost.encode(
+      ColorEngineHost.decodeOrDefault(null).copy(
+        lut = LutState(lutId = "teal_orange", intensity = 0.8f)
+      )
+    )
+    val clip = VideoClip(
+      id = "v1",
+      name = "v1",
+      uri = "uri1",
+      durationMs = 3000L,
+      colorGradeJson = grade
+    )
+    val timeline = Timeline(videoClips = listOf(clip))
+    val look = PreviewFilterEffects.lutLook(clip)
+    assertEquals("teal_orange", look?.first)
+    assertEquals(0.8f, look!!.second, 0.001f)
+    assertTrue(PreviewFilterEffects.signature(clip, timeline).contains("teal_orange"))
+    assertFalse(PreviewFilterEffects.signature(clip.copy(colorGradeJson = null), timeline).contains("teal_orange"))
+
+    val lutBmp = LutGlEffect.createIdentityLut(16)
+    val withLut = PreviewFilterEffects.effectsFor(clip, timeline, lutBmp, 0.8f)
+    val without = PreviewFilterEffects.effectsFor(clip.copy(colorGradeJson = null), timeline)
+    assertTrue("LUT must add a live-preview pass", withLut.size > without.size)
+  }
+
+  @Test
+  fun testColorGradingGlEffectAppliesVideoQualityAndToneFields() {
+    val quality = ColorGradingGlEffect.fromTimeline(
+      VideoAdjustments(autoEnhance = 0.6f, whites = 0.3f, blacks = -0.2f, fade = 0.4f, denoise = 0.5f, colorFix = 0.3f),
+      FilterSettings()
+    )
+    assertFalse(quality.isNoOp(1920, 1080))
+    assertEquals(0.6f, quality.autoEnhance, 0.001f)
+    assertEquals(0.3f, quality.whites, 0.001f)
+    assertEquals(-0.2f, quality.blacks, 0.001f)
+    assertEquals(0.4f, quality.fade, 0.001f)
+    assertEquals(0.5f, quality.denoise, 0.001f)
+    assertEquals(0.3f, quality.colorFix, 0.001f)
   }
 }

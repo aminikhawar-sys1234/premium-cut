@@ -79,8 +79,9 @@ object TextLayerRenderer {
     var rot3DZ = 0f
     var depth3D = if (clip.is3D) clip.depth3D else 0f
 
-    // 1. If custom/generated keyframes are present, they drive the transform directly
-    if (clip.keyframes.isNotEmpty()) {
+    // 1. Keyframes and motion-track binds drive pose. Do not let preset "none"
+    // animations reset scale/position off the tracked box.
+    if (clip.keyframes.isNotEmpty() || !clip.trackBindJson.isNullOrBlank()) {
       return EvaluatedTextState(
         visibleText = visibleText,
         posX = animPosX,
@@ -96,15 +97,16 @@ object TextLayerRenderer {
       )
     }
 
-    // 2. Standard Preset In/Out/Loop animations when no keyframes are defined
-    val animType = clip.animationType.lowercase().trim()
+    // 2. Standard Preset In/Out/Loop animations when no keyframes are defined.
+    // animationType wins; animationIn is the fallback so template/caption styles actually play.
+    val animType = TextMotionCatalog.resolveEntrance(clip.animationType, clip.animationIn).lowercase().trim()
     if (animType.isEmpty() || animType == "none" || animType == "static") {
-      animAlpha = clip.opacity
-      animScale = clip.scale
+      animAlpha = 1f
+      animScale = 1f
       visibleText = clip.text
     } else if (progress >= 1.0f && !animType.contains("pulse") && !animType.contains("glow") && !animType.contains("neon") && !animType.contains("shake")) {
-      animAlpha = clip.opacity
-      animScale = clip.scale
+      animAlpha = 1f
+      animScale = 1f
       visibleText = clip.text
     } else {
       when (animType) {
@@ -350,6 +352,42 @@ object TextLayerRenderer {
       } else it
     }
 
+    if (!TextMotionCatalog.isNone(clip.animationOut) && clip.durationMs > 0L) {
+      val outWindow = clip.animDurationMs.coerceAtLeast(100L)
+      val remaining = (clip.durationMs - relTime).coerceAtLeast(0L)
+      if (remaining < outWindow) {
+        val p = (1f - remaining.toFloat() / outWindow).coerceIn(0f, 1f)
+        val out = clip.animationOut.lowercase().trim()
+        when {
+          out.contains("zoom") -> {
+            animScale *= (1f - 0.45f * p)
+            animAlpha *= (1f - p)
+          }
+          out.contains("slide up") -> {
+            animPosY -= p * 0.18f
+            animAlpha *= (1f - p)
+          }
+          out.contains("slide down") -> {
+            animPosY += p * 0.18f
+            animAlpha *= (1f - p)
+          }
+          out.contains("slide left") -> {
+            animPosX -= p * 0.22f
+            animAlpha *= (1f - p)
+          }
+          out.contains("slide right") -> {
+            animPosX += p * 0.22f
+            animAlpha *= (1f - p)
+          }
+          out.contains("pop") -> {
+            animScale *= (1f + 0.15f * p)
+            animAlpha *= (1f - p)
+          }
+          else -> animAlpha *= (1f - p)
+        }
+      }
+    }
+
     return EvaluatedTextState(
       visibleText = visibleText,
       posX = animPosX,
@@ -394,10 +432,11 @@ object TextLayerRenderer {
     val scaledMs = (previewLoopMs * speedMultiplier).toLong()
     val totalLoopDur = 2400L
     val loopTime = (scaledMs % totalLoopDur).coerceAtLeast(0L)
+    val previewFontSp = previewFillFontSizeSp(width, height, clip)
     val effectiveClip = if (overridePosY != null) {
-      clip.copy(posX = 0f, posY = overridePosY)
+      clip.copy(posX = 0f, posY = overridePosY, fontSizeSp = previewFontSp)
     } else {
-      clip.copy(posX = 0f, posY = 0f)
+      clip.copy(posX = 0f, posY = 0f, fontSizeSp = previewFontSp)
     }
     val state = evaluateAnimation(effectiveClip, loopTime)
     val loopFadeAlpha = if (loopTime > 2050L) {
@@ -405,6 +444,27 @@ object TextLayerRenderer {
     } else 1f
     val finalState = state.copy(opacity = state.opacity * loopFadeAlpha)
     drawInternal(canvas, effectiveClip, finalState, width, height, context)
+  }
+
+  /**
+   * Thumbnail cards are ~1/4 of the editor width. The canvas scaler is `width / 360`,
+   * so a 28sp title becomes a few pixels tall. Size the preview glyph to fill the card
+   * so live-animate 2D/3D text stays readable.
+   */
+  fun previewFillFontSizeSp(width: Int, height: Int, clip: TextClip): Float {
+    val w = width.coerceAtLeast(1).toFloat()
+    val h = height.coerceAtLeast(1).toFloat()
+    val pad = if (clip.is3D) 0.68f else 0.78f
+    val usableW = w * pad
+    val usableH = h * pad
+    val lines = clip.text.split('\n')
+    val longest = lines.maxOf { it.length }.coerceAtLeast(1)
+    val lineCount = lines.size.coerceAtLeast(1)
+    val widthPerEm = longest * 0.70f
+    val heightPerEm = lineCount * 1.20f
+    val targetPx = minOf(usableW / widthPerEm, usableH / heightPerEm)
+    val scaleFactor = w / 360f
+    return (targetPx / scaleFactor.coerceAtLeast(0.05f)).coerceIn(52f, 240f)
   }
 
   private fun shadedColor(base: Int, shade: Float, alpha: Float): Int = Color.argb(

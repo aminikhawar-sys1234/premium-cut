@@ -2,7 +2,6 @@ package com.example.engine.cloud
 
 import android.content.Context
 import com.example.data.local.TimelineSerializer
-import com.example.domain.model.ProjectPackage
 import com.example.domain.model.Timeline
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -54,16 +53,5 @@ object CloudProjectSyncEngine {
       _syncState.value = CloudSyncState.ERROR
       null
     }
-  }
-
-  /**
-   * Performs cloud project sync simulation for offline/online state synchronization.
-   */
-  suspend fun syncProjectToCloud(context: Context, projectId: String): Boolean = withContext(Dispatchers.IO) {
-    _syncState.value = CloudSyncState.SYNCING
-    kotlinx.coroutines.delay(800)
-    _syncState.value = CloudSyncState.SUCCESS
-    _lastSyncTimestamp.value = System.currentTimeMillis()
-    true
   }
 }

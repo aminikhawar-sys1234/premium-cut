@@ -244,28 +244,48 @@ fun StickersToolPanel(
                     .weight(1f)
                     .padding(horizontal = 10.dp, vertical = 4.dp)
             ) {
-                LazyVerticalGrid(
-                    columns = GridCells.Adaptive(minSize = 52.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                    contentPadding = PaddingValues(bottom = 6.dp),
-                    modifier = Modifier.fillMaxSize()
-                ) {
-                    items(stickers, key = { it.id }) { stickerItem ->
-                        StickerCardItem(
-                            item = stickerItem,
-                            onClick = {
-                                if (stickerItem.badgeType != null) {
-                                    viewModel.timelineEngine.addBadge(stickerItem.badgeType)
-                                } else {
-                                    viewModel.timelineEngine.addStickerClip(
-                                        emojiOrAsset = stickerItem.symbolOrAsset,
-                                        category = stickerItem.category
-                                    )
-                                }
-                                addedFeedbackText = "Added ${stickerItem.symbolOrAsset}"
-                            }
+                if (stickers.isEmpty()) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .testTag("stickers_empty_state"),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = "No stickers available",
+                            color = TextMuted,
+                            fontSize = 13.sp,
+                            textAlign = TextAlign.Center
                         )
+                    }
+                } else {
+                    LazyVerticalGrid(
+                        columns = GridCells.Adaptive(minSize = 52.dp),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                        contentPadding = PaddingValues(bottom = 6.dp),
+                        modifier = Modifier.fillMaxSize()
+                    ) {
+                        items(stickers, key = { it.id }) { stickerItem ->
+                            StickerCardItem(
+                                item = stickerItem,
+                                onClick = {
+                                    val created = if (stickerItem.badgeType != null) {
+                                        viewModel.timelineEngine.addBadge(stickerItem.badgeType)
+                                    } else {
+                                        viewModel.timelineEngine.addStickerClip(
+                                            emojiOrAsset = stickerItem.symbolOrAsset,
+                                            category = stickerItem.category
+                                        )
+                                    }
+                                    if (viewModel.bindPendingTrackedSticker(created)) {
+                                        addedFeedbackText = "Tracking ${stickerItem.symbolOrAsset}"
+                                    } else {
+                                        addedFeedbackText = "Added ${stickerItem.symbolOrAsset}"
+                                    }
+                                }
+                            )
+                        }
                     }
                 }
             }

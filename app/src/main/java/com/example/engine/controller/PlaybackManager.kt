@@ -5,6 +5,7 @@ import android.net.Uri
 import android.util.Log
 import android.view.Surface
 import androidx.annotation.OptIn
+import androidx.media3.common.Effect
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.PlaybackParameters
@@ -14,6 +15,7 @@ import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.SeekParameters
+import com.example.engine.media.MediaPlayableUri
 
 /**
  * Owns the single Media3/ExoPlayer hardware playback pipeline.
@@ -28,31 +30,8 @@ class PlaybackManager(
 ) {
   companion object { private const val TAG = "PlaybackManager" }
 
-  val player: ExoPlayer = ExoPlayer.Builder(
-    context.applicationContext,
-    DefaultRenderersFactory(context.applicationContext)
-      .setEnableDecoderFallback(true)
-      .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
-      .setAllowedVideoJoiningTimeMs(5000L)
-  ).setLoadControl(
-    DefaultLoadControl.Builder()
-      .setBufferDurationsMs(
-        1500,
-        8000,
-        500,
-        1000
-      )
-      .setPrioritizeTimeOverSizeThresholds(true)
-      .build()
-  ).setSeekParameters(SeekParameters.EXACT)
-    // Take audio focus while previewing: without this the editor kept playing over other
-    // apps (and over phone calls), and a headphone unplug kept blasting the preview.
-    .setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)
-    .setHandleAudioBecomingNoisy(true)
-    .build().apply {
-      playWhenReady = false
-      repeatMode = Player.REPEAT_MODE_OFF
-    }
+  private var _player: ExoPlayer = createPlayer()
+  val player: ExoPlayer get() = _player
 
   private var currentLoadedUri: String? = null
 
@@ -114,7 +93,61 @@ class PlaybackManager(
     }
   }
 
-  init { player.addListener(playerListener) }
+  init { _player.addListener(playerListener) }
+
+  private fun createPlayer(): ExoPlayer {
+    return ExoPlayer.Builder(
+      context.applicationContext,
+      DefaultRenderersFactory(context.applicationContext)
+        .setEnableDecoderFallback(true)
+        .setExtensionRendererMode(DefaultRenderersFactory.EXTENSION_RENDERER_MODE_OFF)
+        .setAllowedVideoJoiningTimeMs(5000L)
+    ).setLoadControl(
+      DefaultLoadControl.Builder()
+        .setBufferDurationsMs(
+          1500,
+          8000,
+          500,
+          1000
+        )
+        .setPrioritizeTimeOverSizeThresholds(true)
+        .build()
+    ).setSeekParameters(SeekParameters.EXACT)
+      // Take audio focus while previewing: without this the editor kept playing over other
+      // apps (and over phone calls), and a headphone unplug kept blasting the preview.
+      .setAudioAttributes(androidx.media3.common.AudioAttributes.DEFAULT, /* handleAudioFocus= */ true)
+      .setHandleAudioBecomingNoisy(true)
+      .build().apply {
+        playWhenReady = false
+        repeatMode = Player.REPEAT_MODE_OFF
+      }
+  }
+
+  /**
+   * Tears down the current ExoPlayer / MediaCodec / VideoFrameProcessor chain and installs a
+   * fresh instance. Required after a failed effect graph: the dead processor stays black
+   * across later projects if the same player is reused.
+   */
+  fun resetPlaybackSession() {
+    val old = _player
+    try {
+      old.playWhenReady = false
+      old.stop()
+      old.clearVideoSurface()
+      try {
+        old.setVideoEffects(emptyList<Effect>())
+      } catch (_: Throwable) {
+      }
+      old.removeListener(playerListener)
+      old.release()
+    } catch (e: Exception) {
+      Log.w(TAG, "resetPlaybackSession old player teardown failed", e)
+    }
+    currentLoadedUri = null
+    _player = createPlayer()
+    _player.addListener(playerListener)
+    Log.i(TAG, "Preview ExoPlayer recreated after session reset")
+  }
 
   fun loadMedia(uri: Uri, startPosMs: Long = 0L, autoPlay: Boolean = false) {
     try {
@@ -243,26 +276,13 @@ class PlaybackManager(
 
   fun release() {
     try {
-      player.removeListener(playerListener)
-      player.stop()
-      player.clearVideoSurface()
-      player.release()
+      _player.removeListener(playerListener)
+      _player.stop()
+      _player.clearVideoSurface()
+      _player.release()
     } catch (_: Exception) { }
     currentLoadedUri = null
   }
 
-  private fun normalizeUri(uri: Uri): Uri = when {
-    uri.scheme == "asset" -> {
-      var path = uri.path ?: ""
-      if (path.startsWith("/")) path = path.substring(1)
-      if (path.isEmpty()) path = uri.authority ?: ""
-      Uri.parse("asset:///$path")
-    }
-    uri.scheme == null || uri.scheme == "file" -> {
-      val path = uri.path ?: uri.toString()
-      val file = java.io.File(path)
-      if (file.exists()) Uri.fromFile(file) else uri
-    }
-    else -> uri
-  }
+  private fun normalizeUri(uri: Uri): Uri = MediaPlayableUri.toExoPlayerUri(uri.toString())
 }

@@ -20,6 +20,8 @@
     <string name="auto_save">الحفظ التلقائي</string>
     <string name="save_projects_automatically">حفظ المشاريع تلقائياً</string>
     <string name="manage_app_notifications">إدارة إشعارات التطبيق</string>
+    <string name="gpu_preview_compositor">مُركِّب المعاينة عبر GPU (تجريبي)</string>
+    <string name="gpu_preview_compositor_desc">دمج كل المسارات على ساعة واحدة باستخدام مُصيِّر التصدير</string>
     <string name="video_quality">جودة الفيديو</string>
     <string name="choose_default_video_quality">اختر جودة التصدير الافتراضية</string>
     <string name="help_and_support">المساعدة والدعم</string>

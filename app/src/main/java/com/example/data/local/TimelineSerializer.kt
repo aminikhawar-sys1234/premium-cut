@@ -5,6 +5,7 @@ import com.example.domain.model.ProjectPackage
 import com.example.domain.model.ProjectSettings
 import com.example.domain.model.SourceMetadata
 import com.example.domain.model.Timeline
+import com.example.domain.model.isCompoundContainer
 import com.squareup.moshi.FromJson
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.ToJson
@@ -49,87 +50,7 @@ object TimelineSerializer {
   ): ProjectPackage {
     val mediaRefs = mutableListOf<MediaReference>()
     val sourceMetas = mutableListOf<SourceMetadata>()
-
-    // Extract from Main Video Clips
-    timeline.videoClips.forEach { clip ->
-      if (clip.uri.isNotBlank()) {
-        val fileName = clip.uri.substringAfterLast("/").ifBlank { clip.name }
-        mediaRefs.add(
-          MediaReference(
-            clipId = clip.id,
-            uri = clip.uri,
-            originalPath = clip.uri,
-            filename = fileName,
-            mediaType = if (clip.isVideo) "VIDEO" else "IMAGE",
-            mimeType = clip.mimeType
-          )
-        )
-        sourceMetas.add(
-          SourceMetadata(
-            clipId = clip.id,
-            width = clip.width,
-            height = clip.height,
-            naturalRotation = clip.naturalRotation,
-            durationMs = clip.sourceEndMs - clip.sourceStartMs,
-            frameRate = clip.frameRate,
-            videoCodec = if (clip.mimeType.contains("hevc", ignoreCase = true)) "hevc" else "h264"
-          )
-        )
-      }
-    }
-
-    // Extract from Overlay Clips
-    timeline.overlayClips.forEach { clip ->
-      if (clip.uri.isNotBlank()) {
-        val fileName = clip.uri.substringAfterLast("/").ifBlank { clip.name }
-        mediaRefs.add(
-          MediaReference(
-            clipId = clip.id,
-            uri = clip.uri,
-            originalPath = clip.uri,
-            filename = fileName,
-            mediaType = if (clip.isVideo) "VIDEO" else "IMAGE",
-            mimeType = clip.mimeType
-          )
-        )
-        sourceMetas.add(
-          SourceMetadata(
-            clipId = clip.id,
-            width = clip.width,
-            height = clip.height,
-            naturalRotation = clip.naturalRotation,
-            durationMs = clip.sourceEndMs - clip.sourceStartMs,
-            frameRate = clip.frameRate
-          )
-        )
-      }
-    }
-
-    // Extract from Audio Clips
-    timeline.audioClips.forEach { clip ->
-      if (clip.uri.isNotBlank()) {
-        val fileName = clip.uri.substringAfterLast("/").ifBlank { clip.title }
-        mediaRefs.add(
-          MediaReference(
-            clipId = clip.id,
-            uri = clip.uri,
-            originalPath = clip.uri,
-            filename = fileName,
-            mediaType = "AUDIO",
-            mimeType = "audio/mpeg"
-          )
-        )
-        sourceMetas.add(
-          SourceMetadata(
-            clipId = clip.id,
-            durationMs = clip.sourceEndMs - clip.sourceStartMs,
-            audioChannels = 2,
-            audioSampleRate = settings.sampleRateHz,
-            audioCodec = "aac"
-          )
-        )
-      }
-    }
+    collectTimelineMedia(timeline, settings, mediaRefs, sourceMetas)
 
     // Extract from Chroma Key Background
     val bgUri = timeline.chromaKey.backgroundUri
@@ -156,6 +77,92 @@ object TimelineSerializer {
       timeline = timeline,
       isDraft = isDraft
     )
+  }
+
+  private fun collectTimelineMedia(
+    timeline: Timeline,
+    settings: ProjectSettings,
+    mediaRefs: MutableList<MediaReference>,
+    sourceMetas: MutableList<SourceMetadata>
+  ) {
+    timeline.videoClips.forEach { clip ->
+      if (clip.uri.isNotBlank() && !clip.isCompoundContainer()) {
+        val fileName = clip.uri.substringAfterLast("/").ifBlank { clip.name }
+        mediaRefs.add(
+          MediaReference(
+            clipId = clip.id,
+            uri = clip.uri,
+            originalPath = clip.uri,
+            filename = fileName,
+            mediaType = if (clip.isVideo) "VIDEO" else "IMAGE",
+            mimeType = clip.mimeType
+          )
+        )
+        sourceMetas.add(
+          SourceMetadata(
+            clipId = clip.id,
+            width = clip.width,
+            height = clip.height,
+            naturalRotation = clip.naturalRotation,
+            durationMs = clip.sourceEndMs - clip.sourceStartMs,
+            frameRate = clip.frameRate,
+            videoCodec = if (clip.mimeType.contains("hevc", ignoreCase = true)) "hevc" else "h264"
+          )
+        )
+      }
+    }
+    timeline.overlayClips.forEach { clip ->
+      if (clip.uri.isNotBlank() && !clip.isCompoundContainer()) {
+        val fileName = clip.uri.substringAfterLast("/").ifBlank { clip.name }
+        mediaRefs.add(
+          MediaReference(
+            clipId = clip.id,
+            uri = clip.uri,
+            originalPath = clip.uri,
+            filename = fileName,
+            mediaType = if (clip.isVideo) "VIDEO" else "IMAGE",
+            mimeType = clip.mimeType
+          )
+        )
+        sourceMetas.add(
+          SourceMetadata(
+            clipId = clip.id,
+            width = clip.width,
+            height = clip.height,
+            naturalRotation = clip.naturalRotation,
+            durationMs = clip.sourceEndMs - clip.sourceStartMs,
+            frameRate = clip.frameRate
+          )
+        )
+      }
+    }
+    timeline.audioClips.forEach { clip ->
+      if (clip.uri.isNotBlank()) {
+        val fileName = clip.uri.substringAfterLast("/").ifBlank { clip.title }
+        mediaRefs.add(
+          MediaReference(
+            clipId = clip.id,
+            uri = clip.uri,
+            originalPath = clip.uri,
+            filename = fileName,
+            mediaType = "AUDIO",
+            mimeType = "audio/mpeg"
+          )
+        )
+        sourceMetas.add(
+          SourceMetadata(
+            clipId = clip.id,
+            durationMs = clip.sourceEndMs - clip.sourceStartMs,
+            audioChannels = 2,
+            audioSampleRate = settings.sampleRateHz,
+            audioCodec = "aac"
+          )
+        )
+      }
+    }
+    timeline.compoundClips.forEach { compound ->
+      collectTimelineMedia(compound.nested, settings, mediaRefs, sourceMetas)
+    }
   }
 
   fun toJson(timeline: Timeline): String {

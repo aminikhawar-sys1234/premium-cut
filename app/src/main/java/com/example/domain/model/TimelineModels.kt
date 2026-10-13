@@ -550,7 +550,7 @@ data class TextAnimatorSpec(
 
 data class TextClip(
   val id: String = UUID.randomUUID().toString(),
-  val text: String = "Tap to edit",
+  val text: String = "",
   val timelineStartMs: Long = 0L,
   val durationMs: Long = 3000L,
   val trackIndex: Int = 0,
@@ -585,17 +585,17 @@ data class TextClip(
   val posX: Float = 0f, // -1f to 1f normalized
   val posY: Float = 0.35f, // -1f to 1f normalized
   val scale: Float = 1f,
-  val animationType: String = "Fade", // "None", "Fade", "Slide", "Zoom", "Bounce", "Typewriter", "Pop", "Shake", "Glow", "Neon", "Glitch", "Cinematic", "Elastic"
+  val animationType: String = "None",
   val animDurationMs: Long = 400L,
   val hasGlow: Boolean = false,
   val glowColor: Long = 0xFF00E5FF,
   val glowRadius: Float = 10f,
   val backgroundShape: String = "Rounded",
-  val animationIn: String = "Pop",
-  val animationOut: String = "Fade",
+  val animationIn: String = "None",
+  val animationOut: String = "None",
   val animationDelayMs: Long = 0L,
   val animationEasing: String = "Ease Out",
-  val subtitleStyle: String = "Classic", // "Classic", "Bold", "HighlightWord", "Karaoke", "Animated"
+  val subtitleStyle: String = "None",
   val highlightColor: Long = 0xFFFFEB3B,
   val words: List<WordTiming> = emptyList(),
   val is3D: Boolean = false,
@@ -1131,11 +1131,13 @@ enum class TransitionType(val displayName: String) {
   BLUR("Blur Zoom"),
   FLASH("White Flash"),
   GLITCH("Glitch Cut"),
-  WIPE("Wipe Curtain"),
+  WIPE("Wipe Left"),
   WHIP_PAN("Whip Pan"),
   ZOOM_BLUR("Zoom Blur"),
   GLITCH_WIPE("Glitch Wipe"),
-  LIGHT_LEAK("Light Leak")
+  LIGHT_LEAK("Light Leak"),
+  WIPE_RIGHT("Wipe Right"),
+  RADIAL_WIPE("Radial Wipe")
 }
 
 data class Transition(
@@ -1174,39 +1176,41 @@ data class VideoAdjustments(
 fun VideoClip?.effectiveAdjustments(timeline: Timeline): VideoAdjustments =
   this?.adjustments ?: timeline.adjustments
 
-enum class FilterType(val displayName: String, val category: String = "Pro Enhancements") {
+enum class FilterType(val displayName: String, val category: String = "Looks") {
   NONE("Original", "All"),
-  FOUR_K("4K", "Pro Enhancements"),
-  BLACKLIGHT_FIX("Blacklight Fix", "Pro Enhancements"),
-  ENHANCE("Enhance", "Pro Enhancements"),
-  HDR("HDR", "Pro Enhancements"),
-  GLOW("Glow", "Pro Enhancements"),
-  FOCUS("Focus", "Pro Enhancements"),
-  QUALITY_RESTORATION("Quality Restoration", "Pro Enhancements"),
-  GOLDEN_AUTUMN("Golden Autumn", "Cinematic & Nature"),
-  OCEANIC_VIEW("Oceanic View", "Cinematic & Nature"),
-  ALMOND("Almond", "Aesthetic Looks"),
-  SUNLIGHT_ORANGE_BLUE("Sunlight Orange Blue", "Cinematic & Nature"),
-  
-  // Classic / Creative presets
-  CINEMATIC("Cinematic Teal & Orange", "Cinematic & Nature"),
-  WARM("Golden Warm", "Aesthetic Looks"),
-  COOL("Arctic Cool", "Aesthetic Looks"),
-  PORTRAIT("Portrait Soft", "Aesthetic Looks"),
-  BLACK_AND_WHITE("Black & White", "Aesthetic Looks"),
-  VINTAGE("Vintage 1970s", "Aesthetic Looks"),
-  SATURATION("Saturation Boost", "Pro Enhancements"),
-  FILM("35mm Film Grain", "Cinematic & Nature"),
-  RETRO("80s Retro Synth", "Aesthetic Looks"),
-  NATURE("Vibrant Nature", "Cinematic & Nature"),
-  FOOD("Rich Warm Food", "Aesthetic Looks"),
-  TRAVEL("Mediterranean Travel", "Cinematic & Nature"),
-  SOCIAL_MEDIA("Hyper Vivid", "Pro Enhancements")
+  FOUR_K("4K", "Looks"),
+  BLACKLIGHT_FIX("Black Light", "Looks"),
+  ENHANCE("Enhance", "Looks"),
+  HDR("HDR", "Looks"),
+  GLOW("Glow", "Looks"),
+  FOCUS("Focus", "Legacy"),
+  QUALITY_RESTORATION("Quality Restoration", "Legacy"),
+  GOLDEN_AUTUMN("Golden", "Looks"),
+  OCEANIC_VIEW("Oceanic View", "Legacy"),
+  ALMOND("Almond", "Legacy"),
+  SUNLIGHT_ORANGE_BLUE("Sunlight Orange Blue", "Legacy"),
+  // Legacy presets: kept so saved projects still deserialize and render.
+  // They are not offered in the Filters panel.
+  CINEMATIC("Cinematic Teal & Orange", "Legacy"),
+  WARM("Golden Warm", "Legacy"),
+  COOL("Arctic Cool", "Legacy"),
+  PORTRAIT("Portrait Soft", "Legacy"),
+  BLACK_AND_WHITE("Black & White", "Legacy"),
+  VINTAGE("Vintage 1970s", "Legacy"),
+  SATURATION("Saturation Boost", "Legacy"),
+  FILM("35mm Film Grain", "Legacy"),
+  RETRO("80s Retro Synth", "Legacy"),
+  NATURE("Vibrant Nature", "Legacy"),
+  FOOD("Rich Warm Food", "Legacy"),
+  TRAVEL("Mediterranean Travel", "Legacy"),
+  SOCIAL_MEDIA("Hyper Vivid", "Legacy")
 }
 
 data class FilterSettings(
   val type: FilterType = FilterType.NONE,
-  val intensity: Float = 1.0f // 0f to 1f
+  val intensity: Float = 1.0f, // 0f to 1f
+  /** When false the look is stored but not applied. Default true keeps legacy projects unchanged. */
+  val enabled: Boolean = true
 )
 
 data class ChromaKeySettings(
@@ -1293,6 +1297,36 @@ fun defaultTrackSettings(): Map<TrackType, TrackSettings> {
   return TrackType.values().associateWith { TrackSettings(it) }
 }
 
+/** Mime type of a compound-clip shell. The shell is a normal [VideoClip]; the nest lives in [CompoundClip]. */
+const val COMPOUND_CLIP_MIME = "application/x-compound-clip"
+
+/** URI scheme for a compound shell: `compound://<shellId>`. */
+const val COMPOUND_CLIP_URI_PREFIX = "compound://"
+
+fun compoundClipUri(id: String): String = COMPOUND_CLIP_URI_PREFIX + id
+
+fun VideoClip.isCompoundContainer(): Boolean =
+  mimeType == COMPOUND_CLIP_MIME || uri.startsWith(COMPOUND_CLIP_URI_PREFIX)
+
+/** Id of the [CompoundClip] this shell displays. Equals the shell id once the shell has been rebound. */
+fun VideoClip.compoundOwnerId(): String =
+  if (uri.startsWith(COMPOUND_CLIP_URI_PREFIX)) uri.removePrefix(COMPOUND_CLIP_URI_PREFIX).ifBlank { id } else id
+
+/**
+ * Nested timeline group (CapCut / Final Cut compound clip).
+ *
+ * Child clips keep their track lanes, keyframes and offsets relative to the compound origin.
+ * On the parent timeline the group is one [VideoClip] shell with the same [id], so trim, split,
+ * move, duplicate and animation operate on a single block. [contentDurationMs] is the nested
+ * sequence length; the shell's source in/out is the visible window into that sequence.
+ */
+data class CompoundClip(
+  val id: String = UUID.randomUUID().toString(),
+  val name: String = "Compound Clip",
+  val nested: Timeline = Timeline(),
+  val contentDurationMs: Long = 0L
+)
+
 data class Timeline(
   val videoClips: List<VideoClip> = emptyList(),
   val overlayClips: List<VideoClip> = emptyList(),
@@ -1301,6 +1335,8 @@ data class Timeline(
   val stickerClips: List<StickerClip> = emptyList(),
   val effectClips: List<EffectClip> = emptyList(),
   val shapeClips: List<ShapeClip> = emptyList(),
+  /** Top-level nested sequences. Each id matches its shell [VideoClip] on the main or overlay track. */
+  val compoundClips: List<CompoundClip> = emptyList(),
   val transitions: List<Transition> = emptyList(),
   val adjustments: VideoAdjustments = VideoAdjustments(),
   val filter: FilterSettings = FilterSettings(),
@@ -1312,7 +1348,11 @@ data class Timeline(
   val markers: List<TimelineMarker> = emptyList(),
   val version: Int = 1,
   /** Speakers found by caption diarization (label + colour). Persisted so speaker cards survive save / reload. */
-  val captionSpeakers: List<TimelineSpeaker> = emptyList()
+  val captionSpeakers: List<TimelineSpeaker> = emptyList(),
+  /** Explicit voice / music roles of audio lanes. Lanes without an entry are [AudioTrackRole.UNSPECIFIED]. */
+  val audioLaneRoles: List<AudioLaneRole> = emptyList(),
+  /** Auto-ducking per background audio lane; at most one entry per [AudioDuckingSettings.targetTrackIndex]. */
+  val audioDucking: List<AudioDuckingSettings> = emptyList()
 ) {
   val totalDurationMs: Long
     get() {

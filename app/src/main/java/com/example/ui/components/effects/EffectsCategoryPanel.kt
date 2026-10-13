@@ -1,6 +1,6 @@
 package com.example.ui.components.effects
 
-import androidx.compose.animation.*
+import android.graphics.Bitmap
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -27,6 +26,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -34,26 +34,18 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import android.graphics.Bitmap
 import com.example.engine.effects.EffectThumbnailRaster
+import com.example.engine.effects.ProductionEffectApplicator
 import com.example.engine.effects.registry.EffectCategory
 import com.example.engine.effects.registry.EffectsAssetRegistry
 import com.example.engine.effects.registry.RegisteredEffect
+import com.example.engine.media.VideoThumbnailManager
 import com.example.ui.StudioViewModel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 /**
- * Lightweight Effects Panel for:
- * 1. Video Effects
- * 2. Body Effects
- * 3. Photo Effects
- * 4. AI Effects
- *
- * Characteristics:
- * - Occupies ~40% screen height, opens upward from the bottom.
- * - Green + Blue visual theme.
- * - Header: ❌ Close (left) | Search bar (center) | ✓ Confirm (right).
- * - 4-column card grid: First card: "None", remaining cards: dynamically generated from EffectsAssetRegistry.
- * - Starts completely empty (zero fake/mock/sample/placeholder effects).
+ * Effects category panel: live clip-frame thumbnails, real registry effects only.
  */
 @Composable
 fun EffectsCategoryPanel(
@@ -64,35 +56,64 @@ fun EffectsCategoryPanel(
   onIntensity: (RegisteredEffect, Float) -> Unit = { _, _ -> },
   modifier: Modifier = Modifier
 ) {
-  var searchQuery by remember { mutableStateOf("") }
-  var draftSelectedEffect by remember { mutableStateOf<RegisteredEffect?>(null) }
-  var isNoneSelected by remember { mutableStateOf(false) }
-  var strength by remember { mutableFloatStateOf(1f) }
+  val context = LocalContext.current
+  val timeline by viewModel.timelineEngine.timeline.collectAsState()
+  val clip = remember(timeline) { viewModel.targetClipForEffects() }
+  val registrySnapshot = EffectsAssetRegistry.snapshot()
 
-  // Query real installed effect assets/plugins from registry matching category and search query
-  val availableEffects = remember(category, searchQuery) {
+  var searchQuery by remember(category) { mutableStateOf("") }
+  var draftSelectedEffect by remember(category, clip?.id) { mutableStateOf<RegisteredEffect?>(null) }
+  var isNoneSelected by remember(category, clip?.id) { mutableStateOf(false) }
+  var strength by remember(category, clip?.id) { mutableFloatStateOf(1f) }
+
+  LaunchedEffect(category, clip?.id) {
+    val current = viewModel.targetClipForEffects()
+    val applied = ProductionEffectApplicator.appliedOn(current, category)
+    draftSelectedEffect = applied
+    isNoneSelected = applied == null
+    strength = applied?.let { ProductionEffectApplicator.intensityOn(current, it) } ?: 1f
+  }
+
+  val availableEffects = remember(category, searchQuery, registrySnapshot) {
     EffectsAssetRegistry.searchEffects(category, searchQuery)
   }
 
-  // Green + Blue lightweight gradient theme
+  val previewUri = clip?.uri.orEmpty()
+  val previewStartMs = clip?.sourceStartMs ?: 0L
+  var baseThumbnail by remember(previewUri, previewStartMs) {
+    val key = VideoThumbnailManager.makeKey(previewUri, previewStartMs, 96, 96)
+    mutableStateOf(VideoThumbnailManager.getCachedThumbnail(key))
+  }
+  LaunchedEffect(previewUri, previewStartMs) {
+    if (previewUri.isNotBlank() && baseThumbnail == null) {
+      runCatching {
+        VideoThumbnailManager.requestThumbnail(
+          context = context,
+          uri = previewUri,
+          sourceTimeMs = previewStartMs,
+          targetWidth = 96,
+          targetHeight = 96,
+          isVideo = true
+        ) { bmp -> baseThumbnail = bmp }
+      }
+    }
+  }
+
   val panelBackground = Brush.verticalGradient(
-    colors = listOf(
-      Color(0xFF0A2B27), // Deep emerald
-      Color(0xFF0F263B)  // Deep slate blue
-    )
+    colors = listOf(Color(0xFF0A2B27), Color(0xFF0F263B))
   )
 
   Column(
     modifier = modifier
       .fillMaxWidth()
-      .wrapContentHeight()
+      .heightIn(min = 260.dp, max = 380.dp)
+      .height(320.dp)
       .clip(RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
       .background(panelBackground)
       .border(1.dp, Color(0xFF164746), RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp))
       .padding(horizontal = 14.dp, vertical = 8.dp)
       .testTag("effects_panel_${category.name.lowercase()}")
   ) {
-    // --- Header: Left: ❌ Close | Center: Search Bar | Right: ✓ Confirm ---
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -100,21 +121,13 @@ fun EffectsCategoryPanel(
       horizontalArrangement = Arrangement.SpaceBetween,
       verticalAlignment = Alignment.CenterVertically
     ) {
-      // ❌ Close/Cancel Button
       IconButton(
         onClick = onClose,
-        modifier = Modifier
-          .size(38.dp)
-          .testTag("effects_close_btn")
+        modifier = Modifier.size(38.dp).testTag("effects_close_btn")
       ) {
-        Icon(
-          imageVector = Icons.Default.Close,
-          contentDescription = "Close",
-          tint = Color.White
-        )
+        Icon(Icons.Default.Close, contentDescription = "Close", tint = Color.White)
       }
 
-      // Center: Search Bar
       Surface(
         shape = RoundedCornerShape(20.dp),
         color = Color(0xFF071B20),
@@ -125,82 +138,41 @@ fun EffectsCategoryPanel(
           .padding(horizontal = 8.dp)
       ) {
         Row(
-          modifier = Modifier
-            .fillMaxSize()
-            .padding(horizontal = 10.dp),
+          modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
           verticalAlignment = Alignment.CenterVertically,
           horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-          Icon(
-            imageVector = Icons.Default.Search,
-            contentDescription = "Search",
-            tint = Color(0xFF10B981),
-            modifier = Modifier.size(16.dp)
-          )
-
-          Box(
-            modifier = Modifier
-              .weight(1f),
-            contentAlignment = Alignment.CenterStart
-          ) {
+          Icon(Icons.Default.Search, contentDescription = "Search", tint = Color(0xFF10B981), modifier = Modifier.size(16.dp))
+          Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
             if (searchQuery.isEmpty()) {
-              Text(
-                text = "Search ${category.displayName}...",
-                color = Color(0xFF64748B),
-                fontSize = 13.sp
-              )
+              Text("Search ${category.displayName}...", color = Color(0xFF64748B), fontSize = 13.sp)
             }
             BasicTextField(
               value = searchQuery,
               onValueChange = { searchQuery = it },
-              textStyle = TextStyle(
-                color = Color.White,
-                fontSize = 13.sp,
-                fontWeight = FontWeight.Medium
-              ),
+              textStyle = TextStyle(color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.Medium),
               cursorBrush = SolidColor(Color(0xFF10B981)),
               singleLine = true,
-              modifier = Modifier
-                .fillMaxWidth()
-                .testTag("effects_search_input")
+              modifier = Modifier.fillMaxWidth().testTag("effects_search_input")
             )
           }
-
           if (searchQuery.isNotEmpty()) {
-            IconButton(
-              onClick = { searchQuery = "" },
-              modifier = Modifier.size(20.dp)
-            ) {
-              Icon(
-                imageVector = Icons.Default.Close,
-                contentDescription = "Clear search",
-                tint = Color(0xFF94A3B8),
-                modifier = Modifier.size(14.dp)
-              )
+            IconButton(onClick = { searchQuery = "" }, modifier = Modifier.size(20.dp)) {
+              Icon(Icons.Default.Close, contentDescription = "Clear search", tint = Color(0xFF94A3B8), modifier = Modifier.size(14.dp))
             }
           }
         }
       }
 
-      // ✓ Apply/Confirm Button
       IconButton(
         onClick = {
-          if (isNoneSelected) {
-            onApply(null)
-          } else if (draftSelectedEffect != null) {
-            onApply(draftSelectedEffect)
-          }
+          if (isNoneSelected) onApply(null)
+          else draftSelectedEffect?.let { onIntensity(it, strength) }
           onClose()
         },
-        modifier = Modifier
-          .size(38.dp)
-          .testTag("effects_confirm_btn")
+        modifier = Modifier.size(38.dp).testTag("effects_confirm_btn")
       ) {
-        Icon(
-          imageVector = Icons.Default.Check,
-          contentDescription = "Apply Effect",
-          tint = Color(0xFF10B981)
-        )
+        Icon(Icons.Default.Check, contentDescription = "Apply Effect", tint = Color(0xFF10B981))
       }
     }
 
@@ -218,24 +190,18 @@ fun EffectsCategoryPanel(
           draftSelectedEffect?.let { onIntensity(it, value) }
         },
         valueRange = 0f..1f,
-        modifier = Modifier
-          .fillMaxWidth()
-          .testTag("effect_strength_slider")
+        modifier = Modifier.fillMaxWidth().testTag("effect_strength_slider")
       )
     }
 
-    // --- 4-Column Card / Grid Layout ---
     LazyVerticalGrid(
       columns = GridCells.Fixed(4),
       horizontalArrangement = Arrangement.spacedBy(8.dp),
       verticalArrangement = Arrangement.spacedBy(8.dp),
-      modifier = Modifier
-        .fillMaxWidth()
-        .weight(1f)
+      modifier = Modifier.fillMaxWidth().weight(1f)
     ) {
-      // 1. FIRST CARD: "None" (Functional "None" option that clears the effect)
       item {
-        val isSelected = isNoneSelected || (draftSelectedEffect == null && !isNoneSelected)
+        val isSelected = isNoneSelected || draftSelectedEffect == null
         Surface(
           shape = RoundedCornerShape(10.dp),
           color = if (isSelected) Color(0xFF10B981).copy(alpha = 0.25f) else Color(0xFF0F2F32),
@@ -258,26 +224,29 @@ fun EffectsCategoryPanel(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(4.dp)
           ) {
-            Icon(
-              imageVector = Icons.Default.Block,
-              contentDescription = "None",
-              tint = if (isSelected) Color(0xFF10B981) else Color.White,
-              modifier = Modifier.size(20.dp)
-            )
+            if (baseThumbnail != null) {
+              Image(
+                bitmap = baseThumbnail!!.asImageBitmap(),
+                contentDescription = "None",
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(6.dp))
+              )
+            } else {
+              Icon(
+                imageVector = Icons.Default.Block,
+                contentDescription = "None",
+                tint = if (isSelected) Color(0xFF10B981) else Color.White,
+                modifier = Modifier.size(20.dp)
+              )
+            }
             Spacer(modifier = Modifier.height(2.dp))
-            Text(
-              text = "None",
-              color = Color.White,
-              fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-              fontSize = 11.sp
-            )
+            Text("None", color = Color.White, fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal, fontSize = 11.sp)
           }
         }
       }
 
-      // 2. REMAINING CARDS: Real installed Effects from EffectsAssetRegistry (Starts completely empty)
-      items(availableEffects) { effect ->
-        val isSelected = draftSelectedEffect?.id == effect.id
+      items(availableEffects, key = { it.id }) { effect ->
+        val isSelected = !isNoneSelected && draftSelectedEffect?.id == effect.id
         Surface(
           shape = RoundedCornerShape(10.dp),
           color = if (isSelected) Color(0xFF10B981).copy(alpha = 0.25f) else Color(0xFF0E2530),
@@ -301,12 +270,10 @@ fun EffectsCategoryPanel(
             verticalArrangement = Arrangement.Center,
             modifier = Modifier.padding(4.dp)
           ) {
-            EffectSwatch(
+            EffectLiveSwatch(
               shaderKey = effect.shaderKey,
-              modifier = Modifier
-                .fillMaxWidth()
-                .height(40.dp)
-                .clip(RoundedCornerShape(6.dp))
+              baseBitmap = baseThumbnail,
+              modifier = Modifier.fillMaxWidth().height(40.dp).clip(RoundedCornerShape(6.dp))
             )
             Spacer(modifier = Modifier.height(2.dp))
             Text(
@@ -325,15 +292,32 @@ fun EffectsCategoryPanel(
 }
 
 @Composable
-private fun EffectSwatch(shaderKey: String?, modifier: Modifier = Modifier) {
-  val image = remember(shaderKey) {
-    val pixels = EffectThumbnailRaster.argb(shaderKey, 48)
-    Bitmap.createBitmap(pixels, 48, 48, Bitmap.Config.ARGB_8888).asImageBitmap()
+internal fun EffectLiveSwatch(
+  shaderKey: String?,
+  baseBitmap: Bitmap?,
+  modifier: Modifier = Modifier
+) {
+  var image by remember(shaderKey, baseBitmap) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+  LaunchedEffect(shaderKey, baseBitmap) {
+    image = withContext(Dispatchers.Default) {
+      val processed = if (baseBitmap != null && !baseBitmap.isRecycled) {
+        EffectThumbnailRaster.applyToBitmap(baseBitmap, shaderKey)
+      } else {
+        val pixels = EffectThumbnailRaster.argb(shaderKey, 48)
+        Bitmap.createBitmap(pixels, 48, 48, Bitmap.Config.ARGB_8888)
+      }
+      processed.asImageBitmap()
+    }
   }
-  Image(
-    bitmap = image,
-    contentDescription = shaderKey,
-    contentScale = ContentScale.Crop,
-    modifier = modifier
-  )
+  val shown = image
+  if (shown != null) {
+    Image(
+      bitmap = shown,
+      contentDescription = shaderKey,
+      contentScale = ContentScale.Crop,
+      modifier = modifier
+    )
+  } else {
+    Box(modifier = modifier.background(Color(0xFF071419)))
+  }
 }

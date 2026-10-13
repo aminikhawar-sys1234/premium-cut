@@ -69,7 +69,8 @@ class ShaderTransitionCompositor {
         incomingClipId = CLIP_B,
         startMs = 0L,
         endMs = WINDOW_MS,
-        easing = Easing.linear()
+        easing = Easing.linear(),
+        parameters = TransitionAppBridge.parametersFor(type)
       )
       val snapshot = when (val s = eng.snapshot(definition.id, instance, timeMs, width, height, 1)) {
         is SnapshotResult.Ready -> s.snapshot
@@ -91,6 +92,7 @@ class ShaderTransitionCompositor {
       }
       if (result is TransitionResult.Err) {
         Log.w(TAG, "Shader transition render error: ${result.error}")
+        return false
       }
       true
     } catch (t: Throwable) {

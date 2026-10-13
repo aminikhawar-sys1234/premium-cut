@@ -27,6 +27,7 @@ object FirebaseEffectsManager {
   private var effectsListener: ListenerRegistration? = null
   private var effectsAssetsListener: ListenerRegistration? = null
   private var isInitialized = false
+  private val remoteIds = mutableSetOf<String>()
 
   fun init(context: Context) {
     if (isInitialized) return
@@ -125,7 +126,11 @@ object FirebaseEffectsManager {
       val effectTypeStr = (data["effectType"] as? String ?: data["type"] as? String ?: "").uppercase()
       val effectType = EffectType.values().find { it.name.equals(effectTypeStr, ignoreCase = true) }
 
-      val shaderKey = data["shaderKey"] as? String ?: data["shader"] as? String
+      val shaderKey = (data["shaderKey"] as? String ?: data["shader"] as? String)?.trim()
+      if (shaderKey.isNullOrBlank()) {
+        Log.d(TAG, "Skipping effect $docId — no shaderKey (cannot preview or export)")
+        return null
+      }
       val intensity = when (val intVal = data["intensity"]) {
         is Number -> intVal.toFloat()
         is String -> intVal.toFloatOrNull() ?: 1.0f
@@ -150,7 +155,17 @@ object FirebaseEffectsManager {
   }
 
   private fun updateRegistryWithRemoteEffects(remoteEffects: List<RegisteredEffect>) {
+    val incoming = remoteEffects.map { it.id }.toSet()
+    (remoteIds - incoming).forEach { id ->
+      if (com.example.engine.effects.ProductionEffectCatalog.byId(id) == null) {
+        EffectsAssetRegistry.unregisterEffect(id)
+      }
+    }
+    remoteIds.clear()
+    remoteIds.addAll(incoming)
     remoteEffects.forEach { effect ->
+      if (!effect.isRenderable) return@forEach
+      if (com.example.engine.effects.ProductionEffectCatalog.byId(effect.id) != null) return@forEach
       EffectsAssetRegistry.registerEffect(effect)
     }
   }

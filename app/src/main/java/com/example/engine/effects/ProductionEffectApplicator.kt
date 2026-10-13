@@ -34,9 +34,32 @@ object ProductionEffectApplicator {
     }
   }
 
+  /** Catalog (or registry) effect currently written on [clip] for this category, if any. */
+  fun appliedOn(clip: VideoClip?, category: EffectCategory): RegisteredEffect? {
+    if (clip == null) return null
+    val candidates = uniqueEffects(category)
+    return candidates.lastOrNull { matches(clip, it) }
+  }
+
+  fun intensityOn(clip: VideoClip?, effect: RegisteredEffect): Float {
+    if (clip == null) return effect.intensity
+    val key = effect.shaderKey ?: return effect.intensity
+    return when {
+      key.startsWith("vfx:") -> {
+        val id = key.removePrefix("vfx:")
+        val stack = VfxEffectsHost.decode(clip.vfxStackJson)
+        stack.effects().firstOrNull { it.definition.id == id }?.intensity ?: effect.intensity
+      }
+      key.startsWith("face:") -> faceIntensity(DeformationCodec.decode(clip.faceReshape), key.removePrefix("face:"))
+      key.startsWith("body:") -> bodyIntensity(BodyReshapeCodec.decode(clip.bodyReshape), key.removePrefix("body:"))
+      key.startsWith("cutout:") -> cutoutIntensity(clip, key.removePrefix("cutout:"))
+      else -> effect.intensity
+    }.coerceIn(0f, 1f)
+  }
+
   /** Removes this category's catalog effects and leaves every other category on the clip. */
   fun clearCategory(clip: VideoClip, category: EffectCategory): VideoClip {
-    val keys = ProductionEffectCatalog.effects.filter { it.category == category }.mapNotNull { it.shaderKey }
+    val keys = uniqueEffects(category).mapNotNull { it.shaderKey }
     var next = clip
     val vfxIds = keys.filter { it.startsWith("vfx:") }.map { it.removePrefix("vfx:") }.toSet()
     if (vfxIds.isNotEmpty()) next = next.copy(vfxStackJson = removeVfx(next.vfxStackJson, vfxIds))
@@ -133,6 +156,94 @@ object ProductionEffectApplicator {
       "color.hdr" -> set("amount", 0.35f + 0.9f * intensity)
       "color.pop" -> set("amount", intensity.coerceAtLeast(0.05f))
       "sharpen.unsharp" -> set("amount", 0.45f + 1.4f * intensity)
+      "stylize.sketch" -> set("strength", 0.8f + 2.4f * intensity)
+      "stylize.halftone" -> set("dotSize", 6f + 18f * intensity)
+      "stylize.posterize" -> set("levels", (8f - 5f * intensity).coerceAtLeast(2f))
+      "stylize.pixelate" -> {
+        val blocks = (24f + 120f * (1f - intensity)).coerceIn(8f, 160f)
+        set("blocksX", blocks)
+        set("blocksY", blocks)
+      }
+      "stylize.duotone" -> set("detail", 0.06f + 0.4f * intensity)
     }
+  }
+
+  private fun uniqueEffects(category: EffectCategory): List<RegisteredEffect> {
+    val catalog = ProductionEffectCatalog.effectsIn(category)
+    val extras = com.example.engine.effects.registry.EffectsAssetRegistry.getEffects(category)
+      .filter { extra -> catalog.none { it.id == extra.id || it.shaderKey == extra.shaderKey } }
+    return catalog + extras
+  }
+
+  private fun matches(clip: VideoClip, effect: RegisteredEffect): Boolean {
+    val key = effect.shaderKey ?: return false
+    return when {
+      key.startsWith("vfx:") -> {
+        val id = key.removePrefix("vfx:")
+        VfxEffectsHost.decode(clip.vfxStackJson).effects().any { it.enabled && it.definition.id == id && it.intensity > 0.01f }
+      }
+      key.startsWith("face:") -> faceKind(DeformationCodec.decode(clip.faceReshape)) == key.removePrefix("face:")
+      key.startsWith("body:") -> bodyKind(BodyReshapeCodec.decode(clip.bodyReshape)) == key.removePrefix("body:")
+      key.startsWith("cutout:") -> cutoutKind(clip) == key.removePrefix("cutout:")
+      else -> false
+    }
+  }
+
+  private fun faceKind(d: DeformationParams): String? {
+    val geometric = listOf(d.jawSharp, d.noseReshape, d.chinAdjust, d.smileAdjust).count { it > 0.02f }
+    if (geometric >= 2) return "reshape"
+    val singles = listOf(
+      "skin" to d.skinSmooth,
+      "teeth" to d.teethWhiten,
+      "eyes" to d.eyeEnlarge,
+      "slim" to d.faceSlim,
+    )
+    return singles.maxByOrNull { it.second }?.takeIf { it.second > 0.02f }?.first
+      ?: if (geometric > 0) "reshape" else null
+  }
+
+  private fun bodyKind(b: BodyReshapeParams): String? {
+    if (!b.isActive()) return null
+    return listOf(
+      "reshape" to b.reshape,
+      "waist" to b.waist,
+      "legs" to b.legs,
+      "shoulders" to b.shoulders,
+      "proportions" to b.proportions,
+    ).maxByOrNull { it.second }?.takeIf { it.second > 0.02f }?.first
+  }
+
+  private fun cutoutKind(clip: VideoClip): String? {
+    if (!clip.isBackgroundRemoved) return null
+    val params = BgRemoveCodec.decode(clip.bgRemove)
+    if (params.mode != BgRemoveParams.MODE_BLUR) return null
+    return if (params.softness > 0.30f) "background" else "portrait"
+  }
+
+  private fun faceIntensity(d: DeformationParams, kind: String): Float = when (kind) {
+    "reshape" -> listOf(d.eyeEnlarge / 0.55f, d.faceSlim / 0.45f, d.jawSharp / 0.40f).average().toFloat()
+    "slim" -> d.faceSlim
+    "eyes" -> d.eyeEnlarge
+    "skin" -> d.skinSmooth
+    "teeth" -> d.teethWhiten
+    else -> 1f
+  }
+
+  private fun bodyIntensity(b: BodyReshapeParams, kind: String): Float = when (kind) {
+    "reshape" -> b.reshape
+    "waist" -> b.waist
+    "legs" -> b.legs
+    "shoulders" -> b.shoulders
+    "proportions" -> b.proportions
+    else -> 1f
+  }
+
+  private fun cutoutIntensity(clip: VideoClip, kind: String): Float {
+    if (!clip.isBackgroundRemoved) return 0f
+    val params = BgRemoveCodec.decode(clip.bgRemove)
+    return when (kind) {
+      "portrait" -> ((params.strength - 0.55f) / 0.35f)
+      else -> ((params.softness - 0.35f) / 0.45f)
+    }.coerceIn(0f, 1f)
   }
 }

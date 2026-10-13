@@ -381,6 +381,38 @@ object TextAnimatorRecipes {
         durationMs = 1100L, timeEasing = "Ease Out",
         opacityPct = 0f, tiltXDeg = 80f, depthPx = 10f, posY = 0.3f
       )
+    },
+    Recipe("Type On") {
+      TextAnimatorSpec(
+        name = "Type On", basis = "Characters", shape = "Square", softness = 8f,
+        startFrom = 0f, startTo = 100f, endFrom = 100f, endTo = 100f,
+        durationMs = 1100L, timeEasing = "Linear",
+        opacityPct = 0f, trackingEm = 0.08f
+      )
+    },
+    Recipe("Skew Slide") {
+      TextAnimatorSpec(
+        name = "Skew Slide", basis = "Characters", shape = "Ramp Up", softness = 25f,
+        startFrom = 0f, startTo = 100f, endFrom = 100f, endTo = 100f,
+        durationMs = 900L, timeEasing = "Ease Out",
+        opacityPct = 0f, posX = 0.55f, skewDeg = 18f
+      )
+    },
+    Recipe("Pulse") {
+      TextAnimatorSpec(
+        name = "Pulse", basis = "Characters", shape = "Smooth",
+        startFrom = -40f, startTo = 100f, endFrom = 0f, endTo = 140f,
+        durationMs = 1000L, timeEasing = "Ease In Out", loopMode = "Ping-Pong",
+        scalePct = 118f, opacityPct = 70f
+      )
+    },
+    Recipe("Drop In") {
+      TextAnimatorSpec(
+        name = "Drop In", basis = "Words", shape = "Square", softness = 20f,
+        startFrom = 0f, startTo = 100f, endFrom = 100f, endTo = 100f,
+        durationMs = 850L, timeEasing = "Ease Out",
+        opacityPct = 0f, posY = -0.7f, rotationDeg = -8f
+      )
     }
   )
 }

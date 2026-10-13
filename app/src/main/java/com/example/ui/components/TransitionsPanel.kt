@@ -20,7 +20,6 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentHeight
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -48,12 +47,15 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.example.engine.timeline.TransitionDurationLimits
+import kotlin.math.abs
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -94,7 +96,8 @@ enum class TransitionTabCategory(val title: String) {
   FADE("Fade"),
   MOVE("Move"),
   WIPE("Wipe"),
-  ZOOM("Zoom")
+  ZOOM("Zoom"),
+  EFFECT("Effect")
 }
 
 data class TransitionVisualItem(
@@ -120,7 +123,8 @@ enum class TransitionVisualKind {
   WHIP_PAN,
   ZOOM_BLUR,
   LIGHT_LEAK,
-  GLITCH
+  GLITCH,
+  RADIAL
 }
 
 // Complete catalog of real transitions matching the reference layout
@@ -145,10 +149,16 @@ val TRANSITION_CATALOG = listOf(
     visualKind = TransitionVisualKind.WIPE_LEFT
   ),
   TransitionVisualItem(
-    type = TransitionType.GLITCH_WIPE,
+    type = TransitionType.WIPE_RIGHT,
     name = "Wipe Right",
     category = TransitionTabCategory.WIPE,
     visualKind = TransitionVisualKind.WIPE_RIGHT
+  ),
+  TransitionVisualItem(
+    type = TransitionType.RADIAL_WIPE,
+    name = "Radial",
+    category = TransitionTabCategory.WIPE,
+    visualKind = TransitionVisualKind.RADIAL
   ),
 
   // Row 2 (Matching reference screenshot)
@@ -223,7 +233,13 @@ val TRANSITION_CATALOG = listOf(
   TransitionVisualItem(
     type = TransitionType.GLITCH,
     name = "Glitch",
-    category = TransitionTabCategory.ZOOM,
+    category = TransitionTabCategory.EFFECT,
+    visualKind = TransitionVisualKind.GLITCH
+  ),
+  TransitionVisualItem(
+    type = TransitionType.GLITCH_WIPE,
+    name = "Glitch Wipe",
+    category = TransitionTabCategory.EFFECT,
     visualKind = TransitionVisualKind.GLITCH
   )
 )
@@ -244,13 +260,35 @@ fun TransitionsPanel(
   val selectedCutIndex by viewModel.timelineEngine.selectedTransitionCutIndex.collectAsState()
 
   val videoClips = timeline.videoClips
+  val playheadMs by viewModel.timelineEngine.currentPositionMs.collectAsState()
   val totalCuts = (videoClips.size - 1).coerceAtLeast(0)
   val currentCutIndex = selectedCutIndex.coerceIn(0, (totalCuts - 1).coerceAtLeast(0))
   val currentTransition = timeline.transitions.find { it.clipIndexBefore == currentCutIndex }
+  val durationMax = if (totalCuts > 0) {
+    TransitionDurationLimits.maxMs(
+      videoClips[currentCutIndex].durationMs,
+      videoClips[currentCutIndex + 1].durationMs
+    )
+  } else {
+    TransitionDurationLimits.UI_MAX_MS
+  }
+  val durationMin = minOf(TransitionDurationLimits.MIN_MS, durationMax)
+  val sliderEnabled = durationMax > durationMin
+
+  LaunchedEffect(totalCuts) {
+    if (totalCuts <= 0) return@LaunchedEffect
+    val nearest = (0 until totalCuts).minByOrNull { index ->
+      val cutMs = videoClips[index].timelineStartMs + videoClips[index].durationMs
+      abs(cutMs - playheadMs)
+    } ?: 0
+    viewModel.timelineEngine.setSelectedTransitionCutIndex(nearest)
+  }
 
   var selectedCategory by remember { mutableStateOf(TransitionTabCategory.ALL) }
-  var durationMs by remember(currentTransition) {
-    mutableLongStateOf(currentTransition?.durationMs ?: 500L)
+  var durationMs by remember(currentTransition, durationMax) {
+    mutableLongStateOf(
+      (currentTransition?.durationMs ?: 500L).coerceIn(durationMin, durationMax)
+    )
   }
 
   Surface(
@@ -259,13 +297,11 @@ fun TransitionsPanel(
     border = BorderStroke(1.dp, PanelBorder),
     modifier = modifier
       .fillMaxWidth()
-      .wrapContentHeight()
       .testTag("transitions_panel")
   ) {
     Column(
       modifier = Modifier
-        .fillMaxWidth()
-        .wrapContentHeight()
+        .fillMaxSize()
         .navigationBarsPadding()
     ) {
       // -----------------------------------------------------------------------------------------
@@ -361,6 +397,56 @@ fun TransitionsPanel(
         }
       }
 
+      if (totalCuts > 0) {
+        Row(
+          modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 2.dp),
+          verticalAlignment = Alignment.CenterVertically,
+          horizontalArrangement = Arrangement.SpaceBetween
+        ) {
+          IconButton(
+            onClick = {
+              viewModel.timelineEngine.setSelectedTransitionCutIndex(
+                (currentCutIndex - 1).coerceAtLeast(0)
+              )
+            },
+            enabled = currentCutIndex > 0,
+            modifier = Modifier.size(28.dp).testTag("transition_cut_prev")
+          ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+              contentDescription = "Previous cut",
+              tint = if (currentCutIndex > 0) TextWhite else TextMuted,
+              modifier = Modifier.size(16.dp)
+            )
+          }
+          Text(
+            text = "Cut ${currentCutIndex + 1} of $totalCuts",
+            color = TextWhite,
+            fontWeight = FontWeight.Medium,
+            fontSize = 12.sp,
+            modifier = Modifier.testTag("transition_cut_label")
+          )
+          IconButton(
+            onClick = {
+              viewModel.timelineEngine.setSelectedTransitionCutIndex(
+                (currentCutIndex + 1).coerceAtMost(totalCuts - 1)
+              )
+            },
+            enabled = currentCutIndex < totalCuts - 1,
+            modifier = Modifier.size(28.dp).testTag("transition_cut_next")
+          ) {
+            Icon(
+              imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+              contentDescription = "Next cut",
+              tint = if (currentCutIndex < totalCuts - 1) TextWhite else TextMuted,
+              modifier = Modifier.size(16.dp)
+            )
+          }
+        }
+      }
+
       // -----------------------------------------------------------------------------------------
       // 3. TRANSITION GRID (4 COLUMNS, Vertically Scrollable, Lightweight)
       // -----------------------------------------------------------------------------------------
@@ -439,14 +525,15 @@ fun TransitionsPanel(
           }
 
           Slider(
-            value = durationMs.toFloat(),
+            value = durationMs.toFloat().coerceIn(durationMin.toFloat(), durationMax.toFloat().coerceAtLeast(durationMin.toFloat() + 1f)),
             onValueChange = { newMs ->
-              durationMs = newMs.toLong()
+              durationMs = newMs.toLong().coerceIn(durationMin, durationMax)
               if (currentTransition != null && totalCuts > 0) {
                 viewModel.timelineEngine.setTransitionDuration(currentCutIndex, durationMs)
               }
             },
-            valueRange = 100f..2000f,
+            enabled = sliderEnabled,
+            valueRange = durationMin.toFloat()..durationMax.toFloat().coerceAtLeast(durationMin.toFloat() + 1f),
             colors = SliderDefaults.colors(
               thumbColor = TextWhite,
               activeTrackColor = BlueGreenAccent,
@@ -459,7 +546,20 @@ fun TransitionsPanel(
           )
         }
 
-        Spacer(modifier = Modifier.width(10.dp))
+        Spacer(modifier = Modifier.width(6.dp))
+
+        IconButton(
+          onClick = { viewModel.timelineEngine.removeTransition(currentCutIndex) },
+          enabled = currentTransition != null,
+          modifier = Modifier.size(32.dp).testTag("remove_transition_btn")
+        ) {
+          Icon(
+            imageVector = Icons.Default.Refresh,
+            contentDescription = "Remove transition",
+            tint = if (currentTransition != null) TextWhite else TextMuted,
+            modifier = Modifier.size(16.dp)
+          )
+        }
 
         // Apply to All Button
         Button(
@@ -771,6 +871,24 @@ private fun TransitionThumbnailGraphic(
           tint = accentColor,
           modifier = Modifier.size(18.dp)
         )
+      }
+      TransitionVisualKind.RADIAL -> {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+          val r = size.height * 0.32f
+          drawCircle(
+            color = iconColor,
+            radius = r,
+            center = Offset(size.width / 2f, size.height / 2f),
+            style = Stroke(width = 2.2f)
+          )
+          drawLine(
+            iconColor,
+            Offset(size.width / 2f, size.height / 2f),
+            Offset(size.width / 2f + r, size.height / 2f - r * 0.15f),
+            strokeWidth = 2.2f,
+            cap = StrokeCap.Round
+          )
+        }
       }
     }
   }

@@ -1,7 +1,6 @@
 package com.example.engine.composition.gpu
 
 import android.opengl.GLES20
-import android.opengl.GLES30
 import android.util.Log
 import com.ahstudio.color.core.ColorConfig
 import com.ahstudio.color.core.ColorFrame
@@ -41,7 +40,7 @@ class ColorGradeStage {
     val prevProgram = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_CURRENT_PROGRAM, prevProgram, 0)
     val prevActive = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_ACTIVE_TEXTURE, prevActive, 0)
     val prevTex2d = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_TEXTURE_BINDING_2D, prevTex2d, 0)
-    val prevVao = IntArray(1); GLES30.glGetIntegerv(GLES30.GL_VERTEX_ARRAY_BINDING, prevVao, 0)
+    val prevVao = GlEsCompat.currentVao()
     val blendWasOn = GLES20.glIsEnabled(GLES20.GL_BLEND)
     val depthWasOn = GLES20.glIsEnabled(GLES20.GL_DEPTH_TEST)
     val scissorWasOn = GLES20.glIsEnabled(GLES20.GL_SCISSOR_TEST)
@@ -60,7 +59,7 @@ class ColorGradeStage {
       disabled = true
       srcTex
     } finally {
-      GLES30.glBindVertexArray(prevVao[0])
+      GlEsCompat.bindVao(prevVao)
       GLES20.glUseProgram(prevProgram[0])
       GLES20.glActiveTexture(prevActive[0])
       GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, prevTex2d[0])

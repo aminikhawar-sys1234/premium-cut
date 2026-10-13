@@ -32,20 +32,9 @@ class StudioApplication : Application() {
       }
     }
 
-    // 1. Safe Firebase App Initialization with explicit BuildConfig parameters
+    // Auth, Firestore, and Storage all use project gen-lang-client-0291066258.
     try {
-      if (com.google.firebase.FirebaseApp.getApps(this).isEmpty()) {
-        val apiKey = runCatching { BuildConfig.FIREBASE_API_KEY }.getOrDefault("")
-        val projectId = runCatching { BuildConfig.FIREBASE_PROJECT_ID }.getOrDefault("")
-        if (apiKey.isNotBlank() && projectId.isNotBlank()) {
-          val options = com.google.firebase.FirebaseOptions.Builder()
-            .setApiKey(apiKey)
-            .setApplicationId("1:368906369830:android:7d8a9f0e1b2c3d4e")
-            .setProjectId(projectId)
-            .build()
-          com.google.firebase.FirebaseApp.initializeApp(this, options)
-        }
-      }
+      com.example.data.firebase.FirebaseBootstrap.ensure(this)
     } catch (t: Throwable) {
       Log.w("StudioApplication", "FirebaseApp initialization offline fallback: ${t.message}")
     }
@@ -73,6 +62,11 @@ class StudioApplication : Application() {
         com.example.data.firebase.FirebaseTemplateManager.init(applicationContext)
       } catch (t: Throwable) {
         Log.w("StudioApplication", "FirebaseTemplateManager init skipped/failed", t)
+      }
+      try {
+        com.example.engine.text.registry.TextTemplateCatalog.ensureLoaded(applicationContext)
+      } catch (t: Throwable) {
+        Log.w("StudioApplication", "TextTemplateCatalog load skipped/failed", t)
       }
       try {
         com.example.data.repository.NotificationRepository.init(applicationContext)

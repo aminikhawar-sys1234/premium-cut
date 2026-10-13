@@ -80,4 +80,49 @@ class ToolPipelineIntegrationTest {
     assertEquals(2000L, clips[0].durationMs)
     assertEquals(2000L, clips[1].durationMs)
   }
+
+  @Test
+  fun extractAudioPreservesTrimSpeedAndEffects() {
+    val engine = TimelineEngine()
+    engine.loadTimeline(
+      Timeline(
+        videoClips = listOf(
+          VideoClip(
+            id = "v1",
+            name = "Talk",
+            uri = "file:///tmp/talk.mp4",
+            timelineStartMs = 1500L,
+            durationMs = 2000L,
+            sourceStartMs = 2000L,
+            sourceEndMs = 6000L,
+            sourceTotalDurationMs = 12000L,
+            speed = 2f,
+            volume = 0.6f,
+            isReversed = true,
+            audioEffects = com.example.domain.model.AudioEffectsSettings(
+              noiseReductionDb = 8f,
+              normalizeVolume = true
+            )
+          )
+        )
+      )
+    )
+    val audioId = engine.extractAudioFromClip("v1")
+    assertTrue(audioId != null)
+    val audio = engine.timeline.value.audioClips.single()
+    assertEquals("file:///tmp/talk.mp4", audio.uri)
+    assertEquals(1500L, audio.timelineStartMs)
+    assertEquals(2000L, audio.durationMs)
+    assertEquals(2000L, audio.sourceStartMs)
+    assertEquals(6000L, audio.sourceEndMs)
+    assertEquals(12000L, audio.sourceTotalDurationMs)
+    assertEquals(2f, audio.speed, 0.001f)
+    assertEquals(0.6f, audio.volume, 0.001f)
+    assertTrue(audio.isReversed)
+    assertEquals(8f, audio.audioEffects.noiseReductionDb, 0.001f)
+    assertTrue(audio.audioEffects.normalizeVolume)
+    val video = engine.timeline.value.videoClips.single()
+    assertTrue(video.isMuted)
+    assertFalse(video.hasAudio)
+  }
 }

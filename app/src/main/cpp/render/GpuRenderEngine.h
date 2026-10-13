@@ -63,6 +63,9 @@ struct RenderLayer {
     // Custom transform matrix (4x4 column-major). Used if useCustomMatrix == true
     float transformMatrix[16];
     bool useCustomMatrix{false};
+    // True only for a live SurfaceTexture / samplerExternalOES id. Kotlin converts
+    // decoder OES frames to GL_TEXTURE_2D before compose, so this stays false there.
+    bool isExternal{false};
 };
 
 struct FrameBufferObject {

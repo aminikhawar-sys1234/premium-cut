@@ -64,7 +64,7 @@ private:
     void ensureTargets(int width, int height);
     void destroyTargets();
 
-    void drawTexture(GLuint texture, const float* mvp, const float* st, float opacity, BlendMode mode, bool external);
+    void drawTexture(GLuint texture, const float* mvp, const float* st, float opacity, BlendMode mode, bool external, bool premultiply);
     void identity(float* m) const;
     void multiply(float* out, const float* a, const float* b) const;
     void layerMatrix(const RenderLayer& layer, float* out) const;
@@ -77,8 +77,8 @@ private:
     GLuint vao_ = 0, vbo_ = 0;
     GLuint program2d_ = 0, programOes_ = 0, programEffects_ = 0;
 
-    GLint mvp2d_ = -1, st2d_ = -1, opacity2d_ = -1, sampler2d_ = -1;
-    GLint mvpOes_ = -1, stOes_ = -1, opacityOes_ = -1, samplerOes_ = -1;
+    GLint mvp2d_ = -1, st2d_ = -1, opacity2d_ = -1, sampler2d_ = -1, premul2d_ = -1;
+    GLint mvpOes_ = -1, stOes_ = -1, opacityOes_ = -1, samplerOes_ = -1, premulOes_ = -1;
 
     // Effect Shader Uniforms
     GLint fxTypeLoc_ = -1, fxIntensityLoc_ = -1, fxParam1Loc_ = -1, fxParam2Loc_ = -1, fxTimeLoc_ = -1, fxSamplerLoc_ = -1, fxTexSizeLoc_ = -1;

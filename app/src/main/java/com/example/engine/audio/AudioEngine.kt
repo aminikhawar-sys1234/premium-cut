@@ -5,7 +5,6 @@ import android.media.MediaExtractor
 import android.media.MediaFormat
 import android.media.MediaMuxer
 import android.media.MediaRecorder
-import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.speech.tts.TextToSpeech
@@ -156,9 +155,10 @@ class AudioEngine(private val context: Context) {
   }
 
   /**
-   * Stops recording and returns the real recorded audio file.
+   * Stops recording and returns the captured file, or null when nothing was written.
+   * Callers must not invent silence or report success on a missing file.
    */
-  fun stopVoiceRecording(): File {
+  fun stopVoiceRecording(): File? {
     _isRecording.value = false
     recordingJob?.cancel()
     try {
@@ -173,12 +173,11 @@ class AudioEngine(private val context: Context) {
     }
     mediaRecorder = null
 
-    val file = currentRecordingFile ?: File(context.cacheDir, "recording_${System.currentTimeMillis()}.m4a")
-    if (!file.exists() || file.length() == 0L) {
-      val fallbackFile = File(context.cacheDir, "recording_silence_${System.currentTimeMillis()}.wav")
-      val pcm = ShortArray(44100 * 2) { 0 }
-      writeWavFile(fallbackFile, pcm, 44100)
-      return fallbackFile
+    val file = currentRecordingFile
+    currentRecordingFile = null
+    if (file == null || !file.exists() || file.length() == 0L) {
+      Log.w(tag, "Recording produced no audio file")
+      return null
     }
     return file
   }
@@ -367,8 +366,45 @@ class AudioEngine(private val context: Context) {
     }
   }
 
-  private fun getOrCreateSfxWavFile(sfxId: String): File {
-    return getOrCreateSoundWavFile(sfxId)
+  /**
+   * Previews a voice effect through [AdvancedAudioProcessor] on a short voiced tone,
+   * not a generic catalog whoosh.
+   */
+  fun playVoiceEffectPreview(
+    effect: com.example.domain.model.VoiceEffect,
+    pitchShiftSemitones: Float = 0f
+  ) {
+    try {
+      val sampleRate = 22050
+      val frames = sampleRate
+      val pcm = ShortArray(frames)
+      for (i in 0 until frames) {
+        val t = i.toDouble() / sampleRate
+        val env = sin(Math.PI * (i.toDouble() / frames)).coerceIn(0.0, 1.0)
+        val wave = 0.55 * sin(2.0 * Math.PI * 180.0 * t) +
+          0.30 * sin(2.0 * Math.PI * 360.0 * t) +
+          0.15 * sin(2.0 * Math.PI * 720.0 * t)
+        pcm[i] = (wave * env * 24000.0).toInt().coerceIn(-32768, 32767).toShort()
+      }
+      val processed = AdvancedAudioProcessor.processPcmBuffer(
+        pcm = pcm,
+        sampleRate = sampleRate,
+        channels = 1,
+        effects = com.example.domain.model.AudioEffectsSettings(
+          voiceEffect = effect,
+          pitchShiftSemitones = pitchShiftSemitones
+        )
+      )
+      val previewDir = File(context.cacheDir, "voice_fx_preview").apply { if (!exists()) mkdirs() }
+      val previewFile = File(previewDir, "preview_${effect.name.lowercase()}.wav")
+      writeWavFile(previewFile, processed, sampleRate)
+      val mediaItem = MediaItem.fromUri(Uri.fromFile(previewFile))
+      sfxPlayer.setMediaItem(mediaItem)
+      sfxPlayer.prepare()
+      sfxPlayer.play()
+    } catch (e: Exception) {
+      Log.e(tag, "Failed to preview voice effect $effect", e)
+    }
   }
 
   private fun writeWavFile(file: File, pcm: ShortArray, sampleRate: Int) {

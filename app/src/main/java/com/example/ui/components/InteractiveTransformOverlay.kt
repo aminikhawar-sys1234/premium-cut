@@ -42,6 +42,10 @@ import androidx.compose.ui.viewinterop.AndroidView
 import android.widget.FrameLayout
 import android.view.ViewGroup
 import com.example.engine.media.MediaRelinkManager
+import com.example.engine.effects.media3.LivePreviewLook
+import com.example.engine.effects.media3.PreviewDisplayFilter
+import com.example.engine.effects.media3.PreviewLookPolicy
+import com.example.domain.model.Timeline
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
@@ -53,7 +57,9 @@ import com.example.domain.model.TextClip
 import com.example.domain.model.VideoClip
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.SelectedTrackElement
+import com.example.engine.composition.StickerDisplayMetrics
 import com.example.engine.composition.StickerLayerRenderer
+import com.example.engine.composition.StickerUserTransform
 import com.example.engine.text.TextLayerRenderer
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import com.example.ui.theme.AmberAccent
@@ -212,6 +218,12 @@ fun InteractiveTransformOverlay(
    * added PIP video kept showing the image placeholder until something else recomposed.
    */
   overlayPlayerIds: Set<String> = emptySet(),
+  /** False when the GPU compositor already draws the overlay pixels: only the edit frame is shown. */
+  renderOverlayMedia: Boolean = true,
+  /** Clock-driven overlay decoder surface (no per-clip ExoPlayer). */
+  onBindOverlaySurface: ((String, android.view.TextureView) -> Unit)? = null,
+  timeline: Timeline = Timeline(),
+  liveLook: LivePreviewLook? = null,
   modifier: Modifier = Modifier
 ) {
   val context = LocalContext.current
@@ -279,10 +291,14 @@ fun InteractiveTransformOverlay(
           .scale(kf.scale)
           .rotate(kf.rotation)
           .clip(RoundedCornerShape(8.dp))
-          .background(Color(0xFF1E293B))
+          .background(if (renderOverlayMedia) Color(0xFF1E293B) else Color.Transparent)
           .border(
             width = if (isSelected) 2.dp else 1.dp,
-            color = if (isSelected) (if (overlay.isLocked) RedAccent else AmberAccent) else Color.White.copy(alpha = 0.5f),
+            color = when {
+              isSelected -> if (overlay.isLocked) RedAccent else AmberAccent
+              renderOverlayMedia -> Color.White.copy(alpha = 0.5f)
+              else -> Color.White.copy(alpha = 0.2f)
+            },
             shape = RoundedCornerShape(8.dp)
           )
           .pointerInput(overlay.id, kf.rotation, kf.scale, overlay.isLocked) {
@@ -341,14 +357,23 @@ fun InteractiveTransformOverlay(
             )
           }
       ) {
-        val overlayColorFilter = remember(overlay.filter) {
-          val f = overlay.filter
-          if (f == null || f.type == com.example.domain.model.FilterType.NONE) {
-            null
-          } else {
-            com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(f.type, f.intensity)?.let { m ->
-              androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(m.array))
-            }
+        val overlayLookApplies = PreviewLookPolicy.appliesTo(liveLook, overlay.id)
+        val overlayAdjustments = if (overlayLookApplies && liveLook != null) {
+          liveLook.adjustments
+        } else {
+          overlay.adjustments ?: timeline.adjustments
+        }
+        val overlayFilter = if (overlayLookApplies && liveLook != null) {
+          liveLook.filter
+        } else {
+          overlay.filter ?: timeline.filter
+        }
+        val overlayDisplayMatrix = remember(overlayAdjustments, overlayFilter) {
+          PreviewDisplayFilter.matrixFor(overlayAdjustments, overlayFilter)
+        }
+        val overlayColorFilter = remember(overlayDisplayMatrix) {
+          overlayDisplayMatrix?.let { m ->
+            androidx.compose.ui.graphics.ColorFilter.colorMatrix(androidx.compose.ui.graphics.ColorMatrix(m.array))
           }
         }
 
@@ -356,8 +381,30 @@ fun InteractiveTransformOverlay(
         val overlayPlayer = if (isRealVideoOverlay && overlay.id in overlayPlayerIds) {
           getOverlayPlayer?.invoke(overlay.id)
         } else null
+        val bindCompositorSurface = onBindOverlaySurface != null && isRealVideoOverlay && overlay.id in overlayPlayerIds
 
-        if (isRealVideoOverlay && overlayPlayer != null) {
+        if (!renderOverlayMedia) {
+          // GPU compositor already drew this overlay; only the edit frame remains.
+        } else if (bindCompositorSurface) {
+          AndroidView(
+            factory = { ctx ->
+              android.view.TextureView(ctx).apply {
+                layoutParams = FrameLayout.LayoutParams(
+                  ViewGroup.LayoutParams.MATCH_PARENT,
+                  ViewGroup.LayoutParams.MATCH_PARENT
+                )
+                onBindOverlaySurface?.invoke(overlay.id, this)
+                PreviewDisplayFilter.apply(this, overlayDisplayMatrix)
+              }
+            },
+            update = { tv ->
+              onBindOverlaySurface?.invoke(overlay.id, tv)
+              PreviewDisplayFilter.apply(tv, overlayDisplayMatrix)
+            },
+            onReset = { /* Keep texture view intact */ },
+            modifier = Modifier.fillMaxSize()
+          )
+        } else if (isRealVideoOverlay && overlayPlayer != null) {
           AndroidView(
             factory = { ctx ->
               android.view.TextureView(ctx).apply {
@@ -366,10 +413,12 @@ fun InteractiveTransformOverlay(
                   ViewGroup.LayoutParams.MATCH_PARENT
                 )
                 com.example.ui.components.player.PreviewVideoSurfaceRegistry.bind(overlayPlayer, this)
+                PreviewDisplayFilter.apply(this, overlayDisplayMatrix)
               }
             },
             update = { tv ->
               com.example.ui.components.player.PreviewVideoSurfaceRegistry.bind(overlayPlayer, tv)
+              PreviewDisplayFilter.apply(tv, overlayDisplayMatrix)
             },
             onReset = { /* Keep texture view intact */ },
             onRelease = { tv ->
@@ -387,7 +436,7 @@ fun InteractiveTransformOverlay(
           )
         }
 
-        Column(
+        if (renderOverlayMedia || isSelected) Column(
           modifier = Modifier
             .fillMaxSize()
             .padding(4.dp),
@@ -465,27 +514,28 @@ fun InteractiveTransformOverlay(
       val currentSticker by rememberUpdatedState(sticker)
       val isBadge = sticker.badgeType != null
       val isElement = sticker.elementId != null
+      val defaultBoxPx = StickerDisplayMetrics.baseSizePx(parentWidthPx, parentHeightPx)
       val baseWidthDp = when {
-        isBadge -> 150.dp
+        isBadge -> with(density) { (defaultBoxPx * 1.4f).toDp() }
         isElement -> when (sticker.elementCategory) {
-          "tables" -> 140.dp
-          "charts" -> 130.dp
-          "frames" -> 120.dp
-          "graphics" -> 100.dp
-          else -> 90.dp
+          "tables" -> with(density) { (defaultBoxPx * 1.35f).toDp() }
+          "charts" -> with(density) { (defaultBoxPx * 1.25f).toDp() }
+          "frames" -> with(density) { (defaultBoxPx * 1.2f).toDp() }
+          "graphics" -> with(density) { defaultBoxPx.toDp() }
+          else -> with(density) { (defaultBoxPx * 0.95f).toDp() }
         }
-        else -> 80.dp
+        else -> with(density) { defaultBoxPx.toDp() }
       }
       val baseHeightDp = when {
-        isBadge -> 64.dp
+        isBadge -> with(density) { (defaultBoxPx * 0.58f).toDp() }
         isElement -> when (sticker.elementCategory) {
-          "tables" -> 90.dp
-          "charts" -> 95.dp
-          "frames" -> 120.dp
-          "graphics" -> 100.dp
-          else -> 90.dp
+          "tables" -> with(density) { (defaultBoxPx * 0.9f).toDp() }
+          "charts" -> with(density) { (defaultBoxPx * 0.95f).toDp() }
+          "frames" -> with(density) { (defaultBoxPx * 1.2f).toDp() }
+          "graphics" -> with(density) { defaultBoxPx.toDp() }
+          else -> with(density) { (defaultBoxPx * 0.95f).toDp() }
         }
-        else -> 80.dp
+        else -> with(density) { defaultBoxPx.toDp() }
       }
       val baseWidthPx = with(density) { baseWidthDp.toPx() }
       val baseHeightPx = with(density) { baseHeightDp.toPx() }
@@ -523,44 +573,24 @@ fun InteractiveTransformOverlay(
               },
               onMoveDelta = { deltaNormX, deltaNormY ->
                 if (currentSticker.isLocked) return@detectElementTouchGestures
-                val clip = currentSticker
-                val rel = currentPosMs - clip.timelineStartMs
-                val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
-                if (activeKf != null) {
-                  val updatedKeyframes = clip.keyframes.map { kfItem ->
-                    if (kfItem.id == activeKf.id) {
-                      kfItem.copy(
-                        posX = (kfItem.posX + deltaNormX).coerceIn(-1.8f, 1.8f),
-                        posY = (kfItem.posY + deltaNormY).coerceIn(-1.8f, 1.8f)
-                      )
-                    } else kfItem
-                  }
-                  currentOnUpdateSticker(clip.copy(keyframes = updatedKeyframes))
-                } else {
-                  val newX = (clip.posX + deltaNormX).coerceIn(-1.8f, 1.8f)
-                  val newY = (clip.posY + deltaNormY).coerceIn(-1.8f, 1.8f)
-                  currentOnUpdateSticker(clip.copy(posX = newX, posY = newY))
-                }
+                currentOnUpdateSticker(
+                  StickerUserTransform.applyPositionDelta(
+                    currentSticker,
+                    deltaNormX,
+                    deltaNormY,
+                    currentPosMs
+                  )
+                )
               },
               onTwoFingerTransform = if (sticker.isLocked) null else { scaleFactor, rotDelta ->
-                val clip = currentSticker
-                val rel = currentPosMs - clip.timelineStartMs
-                val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
-                if (activeKf != null) {
-                  val updatedKeyframes = clip.keyframes.map { kfItem ->
-                    if (kfItem.id == activeKf.id) {
-                      val newScaleX = (kfItem.scaleX * scaleFactor).coerceIn(0.15f, 8.0f)
-                      val newScaleY = (kfItem.scaleY * scaleFactor).coerceIn(0.15f, 8.0f)
-                      val newRot = (kfItem.rotation + rotDelta) % 360f
-                      kfItem.copy(scaleX = newScaleX, scaleY = newScaleY, rotation = newRot)
-                    } else kfItem
-                  }
-                  currentOnUpdateSticker(clip.copy(keyframes = updatedKeyframes))
-                } else {
-                  val newScale = (clip.scale * scaleFactor).coerceIn(0.15f, 8.0f)
-                  val newRot = (clip.rotation + rotDelta) % 360f
-                  currentOnUpdateSticker(clip.copy(scale = newScale, rotation = newRot))
-                }
+                currentOnUpdateSticker(
+                  StickerUserTransform.applyScaleRotation(
+                    currentSticker,
+                    scaleFactor,
+                    rotDelta,
+                    currentPosMs
+                  )
+                )
               },
               onTap = {
                 currentOnSelectElement(SelectedTrackElement.Sticker(currentSticker.id))
@@ -572,12 +602,12 @@ fun InteractiveTransformOverlay(
         Canvas(modifier = Modifier.fillMaxSize()) {
           drawIntoCanvas { composeCanvas ->
             val nativeCanvas = composeCanvas.nativeCanvas
-            StickerLayerRenderer.draw(
+            StickerLayerRenderer.drawSprite(
               canvas = nativeCanvas,
-              clip = sticker.copy(posX = 0f, posY = 0f, scale = 1f, rotation = 0f),
-              currentPosMs = currentPosMs,
+              clip = sticker,
               width = size.width.toInt(),
-              height = size.height.toInt()
+              height = size.height.toInt(),
+              opacity = 1f
             )
           }
         }
@@ -597,24 +627,14 @@ fun InteractiveTransformOverlay(
             onUpdateSticker(sticker.copy(scale = 1.0f, rotation = 0f))
           },
           onTransformHandleDrag = { deltaScale, deltaRotation ->
-            val clip = currentSticker
-            val rel = currentPosMs - clip.timelineStartMs
-            val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
-            if (activeKf != null) {
-              val updatedKeyframes = clip.keyframes.map { kfItem ->
-                if (kfItem.id == activeKf.id) {
-                  val newScaleX = (kfItem.scaleX * deltaScale).coerceIn(0.15f, 8.0f)
-                  val newScaleY = (kfItem.scaleY * deltaScale).coerceIn(0.15f, 8.0f)
-                  val newRot = (kfItem.rotation + deltaRotation) % 360f
-                  kfItem.copy(scaleX = newScaleX, scaleY = newScaleY, rotation = newRot)
-                } else kfItem
-              }
-              currentOnUpdateSticker(clip.copy(keyframes = updatedKeyframes))
-            } else {
-              val newScale = (clip.scale * deltaScale).coerceIn(0.15f, 8.0f)
-              val newRot = (clip.rotation + deltaRotation) % 360f
-              currentOnUpdateSticker(clip.copy(scale = newScale, rotation = newRot))
-            }
+            currentOnUpdateSticker(
+              StickerUserTransform.applyScaleRotation(
+                currentSticker,
+                deltaScale,
+                deltaRotation,
+                currentPosMs
+              )
+            )
           }
         )
       }

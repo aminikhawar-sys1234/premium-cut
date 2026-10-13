@@ -7,7 +7,117 @@ import com.example.domain.model.StickerClip
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.sin
+
+/**
+ * Shared sticker size: user scale 1.0 occupies [DEFAULT_CANVAS_FRACTION] of the canvas
+ * short side in both preview and export. Not a device-pixel constant.
+ */
+object StickerDisplayMetrics {
+  const val DEFAULT_CANVAS_FRACTION = 0.24f
+  const val SPRITE_FILL = 0.78f
+  const val MIN_USER_SCALE = 0.15f
+  const val MAX_USER_SCALE = 8.0f
+
+  fun shortSidePx(width: Float, height: Float): Float = min(width, height).coerceAtLeast(1f)
+
+  fun baseSizePx(canvasWidth: Float, canvasHeight: Float, userScale: Float = 1f): Float =
+    shortSidePx(canvasWidth, canvasHeight) * DEFAULT_CANVAS_FRACTION * userScale.coerceIn(MIN_USER_SCALE, MAX_USER_SCALE)
+
+  fun emojiTextSizeForCanvas(canvasWidth: Int, canvasHeight: Int, scale: Float): Float =
+    (shortSidePx(canvasWidth.toFloat(), canvasHeight.toFloat()) * DEFAULT_CANVAS_FRACTION * scale)
+      .coerceAtLeast(8f)
+
+  fun emojiTextSizeForSprite(spriteWidth: Int, spriteHeight: Int): Float =
+    shortSidePx(spriteWidth.toFloat(), spriteHeight.toFloat()) * SPRITE_FILL
+
+  fun ndcScale(viewportWidth: Int, viewportHeight: Int, displayScale: Float): Pair<Float, Float> {
+    val vw = viewportWidth.toFloat().coerceAtLeast(1f)
+    val vh = viewportHeight.toFloat().coerceAtLeast(1f)
+    val size = shortSidePx(vw, vh) * DEFAULT_CANVAS_FRACTION * displayScale.coerceAtLeast(0.05f)
+    return (size / vw).coerceIn(0.02f, 2f) to (size / vh).coerceIn(0.02f, 2f)
+  }
+
+  fun clampUserScale(scale: Float): Float = scale.coerceIn(MIN_USER_SCALE, MAX_USER_SCALE)
+
+  fun spriteTextureSizePx(viewportWidth: Int, viewportHeight: Int): Int =
+    baseSizePx(viewportWidth.toFloat(), viewportHeight.toFloat(), 1f)
+      .toInt()
+      .coerceIn(128, 512)
+}
+
+/**
+ * User residual transform for stickers. Track-bound clips write only
+ * [StickerClip.scale] / [StickerClip.rotation] / [StickerClip.posX] / [StickerClip.posY]
+ * so resize and nudge never overwrite tracking keyframes inside [StickerClip.trackBindJson].
+ */
+object StickerUserTransform {
+  fun applyScaleRotation(
+    clip: StickerClip,
+    scaleFactor: Float,
+    rotDelta: Float,
+    currentPosMs: Long
+  ): StickerClip {
+    val newScale = StickerDisplayMetrics.clampUserScale(clip.scale * scaleFactor)
+    val newRot = (clip.rotation + rotDelta) % 360f
+    if (!clip.trackBindJson.isNullOrBlank()) {
+      return clip.copy(scale = newScale, rotation = newRot)
+    }
+    val rel = currentPosMs - clip.timelineStartMs
+    val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
+    return if (activeKf != null) {
+      clip.copy(
+        keyframes = clip.keyframes.map { kfItem ->
+          if (kfItem.id == activeKf.id) {
+            kfItem.copy(
+              scaleX = (kfItem.scaleX * scaleFactor).coerceIn(
+                StickerDisplayMetrics.MIN_USER_SCALE,
+                StickerDisplayMetrics.MAX_USER_SCALE
+              ),
+              scaleY = (kfItem.scaleY * scaleFactor).coerceIn(
+                StickerDisplayMetrics.MIN_USER_SCALE,
+                StickerDisplayMetrics.MAX_USER_SCALE
+              ),
+              rotation = (kfItem.rotation + rotDelta) % 360f
+            )
+          } else kfItem
+        }
+      )
+    } else {
+      clip.copy(scale = newScale, rotation = newRot)
+    }
+  }
+
+  fun applyPositionDelta(
+    clip: StickerClip,
+    deltaNormX: Float,
+    deltaNormY: Float,
+    currentPosMs: Long
+  ): StickerClip {
+    val newX = (clip.posX + deltaNormX).coerceIn(-1.8f, 1.8f)
+    val newY = (clip.posY + deltaNormY).coerceIn(-1.8f, 1.8f)
+    if (!clip.trackBindJson.isNullOrBlank()) {
+      return clip.copy(posX = newX, posY = newY)
+    }
+    val rel = currentPosMs - clip.timelineStartMs
+    val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
+    return if (activeKf != null) {
+      clip.copy(
+        keyframes = clip.keyframes.map { kfItem ->
+          if (kfItem.id == activeKf.id) {
+            kfItem.copy(
+              posX = (kfItem.posX + deltaNormX).coerceIn(-1.8f, 1.8f),
+              posY = (kfItem.posY + deltaNormY).coerceIn(-1.8f, 1.8f)
+            )
+          } else kfItem
+        }
+      )
+    } else {
+      clip.copy(posX = newX, posY = newY)
+    }
+  }
+}
 
 data class AnimatedStickerState(
   val posX: Float,
@@ -18,6 +128,20 @@ data class AnimatedStickerState(
 )
 
 object StickerLayerRenderer {
+
+  /**
+   * Sprite-only copy for preview boxes and GPU textures. Pose comes from
+   * [evaluateAnimation] / the compositor so [StickerClip.trackBindJson] is not applied twice.
+   */
+  fun forLocalSprite(clip: StickerClip): StickerClip = clip.copy(
+    posX = 0f,
+    posY = 0f,
+    scale = 1f,
+    rotation = 0f,
+    opacity = 1f,
+    trackBindJson = null,
+    keyframes = emptyList()
+  )
 
   fun evaluateAnimation(clip: StickerClip, currentPosMs: Long): AnimatedStickerState {
     val relTimeMs = (currentPosMs - clip.timelineStartMs).coerceAtLeast(0L)
@@ -140,9 +264,52 @@ object StickerLayerRenderer {
     } else if (clip.badgeType != null) {
       drawBadge(canvas, clip.badgeType, state.scale, state.opacity, width, height)
     } else {
-      drawEmojiOrAsset(canvas, clip.emojiOrAsset, state.scale, state.opacity, width)
+      drawEmojiOrAsset(
+        canvas,
+        clip.emojiOrAsset,
+        StickerDisplayMetrics.emojiTextSizeForCanvas(width, height, state.scale),
+        state.opacity
+      )
     }
 
+    canvas.restore()
+  }
+
+  /**
+   * Draws only the sticker graphic, filling [width] x [height]. Pose is applied by the
+   * preview box / GPU matrix so tracking is not baked into the sprite.
+   */
+  fun drawSprite(
+    canvas: Canvas,
+    clip: StickerClip,
+    width: Int,
+    height: Int,
+    opacity: Float = 1f
+  ) {
+    if (opacity <= 0.01f || width <= 0 || height <= 0) return
+    canvas.save()
+    canvas.translate(width / 2f, height / 2f)
+    val local = forLocalSprite(clip)
+    if (local.elementId != null) {
+      com.example.ui.components.elements.ElementRenderer.draw(
+        canvas = canvas,
+        clip = local,
+        scale = 1f,
+        opacity = opacity,
+        width = width,
+        height = height,
+        currentPosMs = 0L
+      )
+    } else if (local.badgeType != null) {
+      drawBadge(canvas, local.badgeType, 1f, opacity, width, height)
+    } else {
+      drawEmojiOrAsset(
+        canvas,
+        local.emojiOrAsset,
+        StickerDisplayMetrics.emojiTextSizeForSprite(width, height),
+        opacity
+      )
+    }
     canvas.restore()
   }
 
@@ -254,12 +421,11 @@ object StickerLayerRenderer {
   private fun drawEmojiOrAsset(
     canvas: Canvas,
     emojiOrAsset: String,
-    scale: Float,
-    opacity: Float,
-    canvasWidth: Int
+    textSizePx: Float,
+    opacity: Float
   ) {
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-      textSize = 58f * scale * (canvasWidth / 400f)
+      textSize = textSizePx.coerceAtLeast(8f)
       alpha = (opacity * 255).toInt().coerceIn(0, 255)
       textAlign = Paint.Align.CENTER
     }

@@ -2,11 +2,7 @@ package com.example.ui.components.filter
 
 import android.content.Context
 import android.graphics.Bitmap
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -50,9 +46,9 @@ import com.example.domain.model.FilterType
 import com.example.domain.model.VideoAdjustments
 import com.example.engine.SelectedTrackElement
 import com.example.engine.color.ColorEngineHost
+import com.example.engine.effects.ColorAdjustmentRanges
+import com.example.engine.effects.FilterCatalog
 import com.ahstudio.color.core.LutState
-import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.ui.graphics.SolidColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -89,17 +85,20 @@ enum class SmartAutoTool(val title: String, val icon: ImageVector) {
 
 enum class CustomiseTool(val title: String, val icon: ImageVector) {
   BRIGHTNESS("Brightness", Icons.Default.WbSunny),
-  SHARPEN("Sharpen", Icons.Default.Details),
-  CLARITY("Clarity", Icons.Default.Deblur),
+  CONTRAST("Contrast", Icons.Default.Contrast),
+  SATURATION("Saturation", Icons.Default.Palette),
+  EXPOSURE("Exposure", Icons.Default.Exposure),
+  TEMPERATURE("Temperature", Icons.Default.Thermostat),
+  TINT("Tint", Icons.Default.InvertColors),
   HIGHLIGHTS("Highlights", Icons.Default.LightMode),
+  SHADOWS("Shadows", Icons.Default.DarkMode),
+  SHARPEN("Sharpening", Icons.Default.Details),
+  CLARITY("Clarity", Icons.Default.Deblur),
   WHITES("Whites", Icons.Default.Brightness7),
   BLACKS("Blacks", Icons.Default.Brightness4),
-  TEMPERATURE("Temperature", Icons.Default.Thermostat),
   FADE("Fade", Icons.Default.Gradient),
   VIGNETTE("Vignette", Icons.Default.Vignette),
-  CONTRAST("Contrast", Icons.Default.Contrast),
-  GRAIN("Grain", Icons.Default.Grain),
-  SHADOWS("Shadows", Icons.Default.DarkMode)
+  GRAIN("Grain", Icons.Default.Grain)
 }
 
 /**
@@ -109,7 +108,7 @@ enum class CustomiseTool(val title: String, val icon: ImageVector) {
  * - Header: Reset (Left) | Filter Tools (Center) | Close X (Right)
  * - Tabs: Filters | Adjust | Video Quality
  * - Filters tab: 4 columns, vertical scroll, "None" first, real GPU filters, zero lag
- * - Adjust tab: Smart Auto (Auto Adjust, Color Fixings, Color Correct) + Customise (12 tools with 1..100 sliders)
+ * - Adjust tab: Smart Auto + Customise (brightness, contrast, saturation, exposure, temp, tint, highlights, shadows, sharpening, plus working extras)
  * - Video Quality tab: Auto Enhance, Denoise, Clarity, HDR, Anti-Flicker, Color Fix
  */
 @Composable
@@ -117,7 +116,10 @@ fun FilterToolsPanel(
   viewModel: StudioViewModel,
   modifier: Modifier = Modifier,
   initialTab: FilterToolsTab = FilterToolsTab.FILTERS,
-  onClose: () -> Unit = { viewModel.setActiveToolbarTab(null) }
+  onClose: () -> Unit = {
+    viewModel.flushLiveLook()
+    viewModel.setActiveToolbarTab(null)
+  }
 ) {
   val context = LocalContext.current
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
@@ -158,9 +160,17 @@ fun FilterToolsPanel(
   var currentAdjustments by remember(activeAdjustments, selectedClip?.id) { mutableStateOf(activeAdjustments) }
   val applyAdjustments: (VideoAdjustments) -> Unit = { adj ->
     currentAdjustments = adj
-    if (!viewModel.timelineEngine.updateClipAdjustments(adj, selectedClip?.id)) {
-      viewModel.timelineEngine.updateAdjustments(adj)
-    }
+    viewModel.publishLiveLook(selectedClip?.id, adj, currentFilter)
+  }
+
+  val applyLook: (FilterSettings) -> Unit = { look ->
+    currentFilter = look
+    viewModel.revealClipForLookPreview(selectedClip)
+    viewModel.publishLiveLook(selectedClip?.id, currentAdjustments, look)
+  }
+
+  DisposableEffect(selectedClip?.id) {
+    onDispose { viewModel.flushLiveLook() }
   }
 
   var activeTab by remember { mutableStateOf(initialTab) }
@@ -222,12 +232,11 @@ fun FilterToolsPanel(
     color = BlueGreenDarkBottom,
     shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp),
     border = BorderStroke(1.dp, BlueGreenBorder),
-    modifier = modifier.fillMaxWidth().wrapContentHeight()
+    modifier = modifier.fillMaxWidth().fillMaxHeight()
   ) {
     Column(
       modifier = Modifier
-        .fillMaxWidth()
-        .wrapContentHeight()
+        .fillMaxSize()
         .background(
           Brush.verticalGradient(
             listOf(BlueGreenDarkTop, BlueGreenDarkBottom)
@@ -250,41 +259,18 @@ fun FilterToolsPanel(
             when (activeTab) {
               FilterToolsTab.FILTERS -> {
                 val reset = FilterSettings(type = FilterType.NONE, intensity = 1.0f)
-                currentFilter = reset
-                viewModel.timelineEngine.updateFilter(reset, selectedClip?.id)
-                viewModel.refreshCurrentFrame()
+                applyLook(reset)
+                lutClip?.id?.let { id ->
+                  ColorEngineHost.applyToEngine(id, ColorEngineHost.decodeOrDefault(lutClip.colorGradeJson).copy(lut = null))
+                  viewModel.timelineEngine.setClipColorGrade(id, null)
+                  viewModel.refreshCurrentFrame(preferClipId = id)
+                }
               }
               FilterToolsTab.ADJUST -> {
-                val reset = currentAdjustments.copy(
-                  brightness = 0f,
-                  contrast = 1f,
-                  saturation = 1f,
-                  exposure = 0f,
-                  temperature = 0f,
-                  tint = 0f,
-                  highlights = 0f,
-                  shadows = 0f,
-                  whites = 0f,
-                  blacks = 0f,
-                  sharpness = 0f,
-                  clarity = 0f,
-                  fade = 0f,
-                  vignette = 0f,
-                  grain = 0f
-                )
-                applyAdjustments(reset)
+                applyAdjustments(ColorAdjustmentRanges.resetPrimary(currentAdjustments))
               }
               FilterToolsTab.VIDEO_QUALITY -> {
-                val reset = currentAdjustments.copy(
-                  autoEnhance = 0f,
-                  superClarity = 0f,
-                  colorCorrect = 0f,
-                  denoise = 0f,
-                  hdrBoost = 0f,
-                  antiFlicker = 0f,
-                  colorFix = 0f
-                )
-                applyAdjustments(reset)
+                applyAdjustments(ColorAdjustmentRanges.resetQuality(currentAdjustments))
               }
             }
           },
@@ -415,15 +401,10 @@ fun FilterToolsPanel(
             FiltersTabContent(
               viewModel = viewModel,
               currentFilter = currentFilter,
-              selectedClipId = selectedClip?.id,
               lutClipId = lutClip?.id,
               lutClipGradeJson = lutClip?.colorGradeJson,
               baseBitmap = baseThumbnailBitmap,
-              onFilterChange = { newFilter ->
-                currentFilter = newFilter
-                viewModel.timelineEngine.updateFilter(newFilter, selectedClip?.id)
-                viewModel.refreshCurrentFrame()
-              }
+              onFilterChange = applyLook
             )
           }
           FilterToolsTab.ADJUST -> {
@@ -465,22 +446,14 @@ private sealed interface LookItem {
   object NoLut : LookItem { override val key: String get() = "lut:none" }
 }
 
-private fun lookName(item: LookItem): String = when (item) {
-  is LookItem.Preset -> item.type.displayName
-  is LookItem.Lut -> item.name
-  LookItem.NoLut -> "No LUT"
-}
-
 /**
  * Tab 1: FILTERS CONTENT
- * Search, Favorites and Recent, built-in presets, and bundled LUT looks (real .cube grading,
- * thumbnails sampled from the LUT itself). 4 columns, vertical scroll, zero-lag thumbnails.
+ * Category chips, then a full-height 4-column thumbnail grid of built-in presets and LUT looks.
  */
 @Composable
 private fun FiltersTabContent(
   viewModel: StudioViewModel,
   currentFilter: FilterSettings,
-  selectedClipId: String?,
   lutClipId: String?,
   lutClipGradeJson: String?,
   baseBitmap: Bitmap?,
@@ -488,8 +461,7 @@ private fun FiltersTabContent(
 ) {
   val context = LocalContext.current
   var selectedCategory by remember { mutableStateOf(CAT_ALL) }
-  var query by remember { mutableStateOf("") }
-  val categories = listOf(CAT_ALL, CAT_FAVOURITES, CAT_RECENT, "Pro Enhancements", "Cinematic & Nature", "Aesthetic Looks", CAT_LUT)
+  val categories = listOf(CAT_ALL, CAT_FAVOURITES, CAT_RECENT, CAT_LUT)
 
   var favourites by remember { mutableStateOf(FilterPrefs.favourites(context)) }
   var recent by remember { mutableStateOf(FilterPrefs.recent(context)) }
@@ -514,7 +486,8 @@ private fun FiltersTabContent(
     val next = grade.copy(lut = lutId?.let { LutState(lutId = it, intensity = intensity) })
     ColorEngineHost.applyToEngine(id, next)
     viewModel.timelineEngine.setClipColorGrade(id, if (next.isIdentity()) null else ColorEngineHost.encode(next))
-    viewModel.refreshCurrentFrame()
+    viewModel.revealClipForLookPreview(viewModel.timelineEngine.timeline.value.videoClips.find { it.id == id })
+    viewModel.refreshCurrentFrame(preferClipId = id)
   }
 
   // LUT files load asynchronously; re-render once the LUT is actually available.
@@ -539,26 +512,26 @@ private fun FiltersTabContent(
     }
   }
 
-  val allPresets = remember { FilterType.values().filter { it != FilterType.NONE } }
+  val allPresets = remember(currentFilter.type) {
+    val catalog = FilterCatalog.SELECTABLE
+    val legacy = currentFilter.type.takeIf { it != FilterType.NONE && it !in catalog }
+    catalog + listOfNotNull(legacy)
+  }
   val luts = remember { ColorEngineHost.BUNDLED_LUTS.map { LookItem.Lut(it.first, it.second) } }
 
   fun resolve(key: String): LookItem? =
     if (key.startsWith("lut:")) luts.firstOrNull { it.key == key }
     else allPresets.firstOrNull { it.name == key }?.let { LookItem.Preset(it) }
 
-  val items: List<LookItem> = remember(selectedCategory, query, favourites, recent) {
-    val q = query.trim()
-    if (q.isNotEmpty()) {
-      (allPresets.map { LookItem.Preset(it) } + luts).filter { lookName(it).contains(q, ignoreCase = true) }
-    } else when (selectedCategory) {
+  val items: List<LookItem> = remember(selectedCategory, favourites, recent, allPresets) {
+    when (selectedCategory) {
       CAT_FAVOURITES -> favourites.mapNotNull { resolve(it) }
       CAT_RECENT -> recent.mapNotNull { resolve(it) }
       CAT_LUT -> listOf<LookItem>(LookItem.NoLut) + luts
-      CAT_ALL -> listOf<LookItem>(LookItem.Preset(FilterType.NONE)) + allPresets.map { LookItem.Preset(it) } + luts
-      else -> listOf<LookItem>(LookItem.Preset(FilterType.NONE)) +
-        allPresets.filter { it.category == selectedCategory }.map { LookItem.Preset(it) }
+      else -> listOf<LookItem>(LookItem.Preset(FilterType.NONE)) + allPresets.map { LookItem.Preset(it) }
     }
   }
+  val capabilityNote = FilterCatalog.capabilityNote(currentFilter.type)
 
   val gridState = rememberLazyGridState()
 
@@ -568,7 +541,6 @@ private fun FiltersTabContent(
       .padding(horizontal = 8.dp, vertical = 4.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp)
   ) {
-    // Category chips
     Row(
       modifier = Modifier
         .fillMaxWidth()
@@ -576,14 +548,14 @@ private fun FiltersTabContent(
       horizontalArrangement = Arrangement.spacedBy(6.dp)
     ) {
       categories.forEach { cat ->
-        val isCatSelected = selectedCategory == cat && query.isBlank()
+        val isCatSelected = selectedCategory == cat
         Surface(
           shape = RoundedCornerShape(12.dp),
           color = if (isCatSelected) BlueGreenAccent.copy(alpha = 0.25f) else Color(0xFF0C2028),
           border = BorderStroke(1.dp, if (isCatSelected) BlueGreenAccent else BlueGreenBorder),
           modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
-            .clickable { selectedCategory = cat; query = "" }
+            .clickable { selectedCategory = cat }
             .testTag("filter_category_${cat.lowercase().replace(" ", "_").replace("&", "and")}")
         ) {
           Text(
@@ -597,206 +569,24 @@ private fun FiltersTabContent(
       }
     }
 
-    // Search
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .height(28.dp)
-        .clip(RoundedCornerShape(8.dp))
-        .background(Color(0xFF0C2028))
-        .border(1.dp, BlueGreenBorder, RoundedCornerShape(8.dp))
-        .padding(horizontal = 8.dp),
-      verticalAlignment = Alignment.CenterVertically
-    ) {
-      Icon(Icons.Default.Search, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(14.dp))
-      Spacer(modifier = Modifier.width(6.dp))
-      Box(modifier = Modifier.weight(1f)) {
-        if (query.isEmpty()) Text("Search looks", color = TextSecondary, fontSize = 11.sp)
-        BasicTextField(
-          value = query,
-          onValueChange = { query = it },
-          singleLine = true,
-          textStyle = androidx.compose.ui.text.TextStyle(color = Color.White, fontSize = 11.sp),
-          cursorBrush = SolidColor(BlueGreenAccent),
-          modifier = Modifier.fillMaxWidth().testTag("filter_search_field")
-        )
-      }
-      if (query.isNotEmpty()) {
-        Icon(
-          Icons.Default.Close,
-          contentDescription = "Clear search",
-          tint = TextSecondary,
-          modifier = Modifier.size(14.dp).clickable { query = "" }
-        )
-      }
-    }
-
-    // Filter Intensity Slider (Visible when active filter != NONE)
-    if (currentFilter.type != FilterType.NONE) {
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0B1E26),
-        border = BorderStroke(1.dp, BlueGreenBorder),
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Column(
-          modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-        ) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Text(
-              text = "${currentFilter.type.displayName} Intensity",
-              color = Color.White,
-              fontWeight = FontWeight.SemiBold,
-              fontSize = 11.sp
-            )
-            Text(
-              text = "${(currentFilter.intensity * 100).roundToInt()}%",
-              color = BlueGreenAccent,
-              fontWeight = FontWeight.Bold,
-              fontSize = 11.sp
-            )
-          }
-
-          Slider(
-            value = currentFilter.intensity,
-            onValueChange = { onFilterChange(currentFilter.copy(intensity = it)) },
-            valueRange = 0.01f..1f,
-            colors = SliderDefaults.colors(
-              thumbColor = BlueGreenAccent,
-              activeTrackColor = BlueGreenAccent,
-              inactiveTrackColor = BlueGreenBorder
-            ),
-            modifier = Modifier
-              .height(24.dp)
-              .testTag("filter_intensity_slider")
-          )
-
-          // Quick presets & Apply to all clips
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-              listOf(0.25f, 0.50f, 0.75f, 1.0f).forEach { preset ->
-                val isPSelected = abs(currentFilter.intensity - preset) < 0.05f
-                Surface(
-                  shape = RoundedCornerShape(4.dp),
-                  color = if (isPSelected) BlueGreenAccent.copy(alpha = 0.25f) else Color(0xFF0E2730),
-                  border = BorderStroke(1.dp, if (isPSelected) BlueGreenAccent else BlueGreenBorder),
-                  modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .clickable { onFilterChange(currentFilter.copy(intensity = preset)) }
-                ) {
-                  Text(
-                    text = "${(preset * 100).toInt()}%",
-                    fontSize = 9.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = if (isPSelected) BlueGreenAccent else TextSecondary,
-                    modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                  )
-                }
-              }
-            }
-
-            Surface(
-              shape = RoundedCornerShape(4.dp),
-              color = Color(0xFF0E2730),
-              border = BorderStroke(1.dp, BlueGreenBorder),
-              modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .clickable {
-                  viewModel.timelineEngine.applyFilterToAllClips(currentFilter)
-                  viewModel.refreshCurrentFrame()
-                }
-                .testTag("filter_apply_all_button")
-            ) {
-              Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-              ) {
-                Icon(
-                  Icons.Default.DoneAll,
-                  contentDescription = null,
-                  tint = BlueGreenAccent,
-                  modifier = Modifier.size(11.dp)
-                )
-                Spacer(modifier = Modifier.width(3.dp))
-                Text(
-                  text = "Apply All Clips",
-                  fontSize = 9.5.sp,
-                  fontWeight = FontWeight.SemiBold,
-                  color = BlueGreenAccent
-                )
-              }
-            }
-          }
-        }
-      }
-    }
-
-    // LUT intensity (visible when a LUT look is active on the selected main-track clip)
-    activeLutId?.let { id ->
-      val lutName = ColorEngineHost.BUNDLED_LUTS.firstOrNull { it.first == id }?.second ?: id
-      Surface(
-        shape = RoundedCornerShape(8.dp),
-        color = Color(0xFF0B1E26),
-        border = BorderStroke(1.dp, BlueGreenBorder),
-        modifier = Modifier.fillMaxWidth()
-      ) {
-        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)) {
-          Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-          ) {
-            Text(text = "$lutName LUT", color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 11.sp)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-              Text(
-                text = "${(lutIntensity * 100).roundToInt()}%",
-                color = BlueGreenAccent, fontWeight = FontWeight.Bold, fontSize = 11.sp
-              )
-              Spacer(modifier = Modifier.width(10.dp))
-              Text(
-                text = "Remove",
-                color = TextSecondary, fontSize = 10.sp,
-                modifier = Modifier.clickable { commitLut(null, 1f) }.testTag("lut_remove_button")
-              )
-            }
-          }
-          Slider(
-            value = lutIntensity.coerceIn(0f, 1f),
-            onValueChange = { commitLut(id, it) },
-            valueRange = 0f..1f,
-            colors = SliderDefaults.colors(
-              thumbColor = BlueGreenAccent,
-              activeTrackColor = BlueGreenAccent,
-              inactiveTrackColor = BlueGreenBorder
-            ),
-            modifier = Modifier.height(24.dp).testTag("lut_intensity_slider")
-          )
-        }
-      }
-    }
-
-    if (!lutEnabled && (selectedCategory == CAT_LUT || query.isNotBlank())) {
+    if (!capabilityNote.isNullOrBlank() && currentFilter.type != FilterType.NONE) {
       Text(
-        text = "LUT looks apply to main-track clips. Select a main-track clip to use them.",
-        color = TextSecondary, fontSize = 10.sp
+        text = capabilityNote,
+        color = TextSecondary,
+        fontSize = 9.5.sp,
+        lineHeight = 12.sp,
+        modifier = Modifier
+          .fillMaxWidth()
+          .testTag("filter_capability_note")
       )
     }
 
     if (items.isEmpty()) {
       Box(modifier = Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
         Text(
-          text = when {
-            query.isNotBlank() -> "No looks match \"${query.trim()}\""
-            selectedCategory == CAT_FAVOURITES -> "No favorites yet. Tap the star on a look."
-            selectedCategory == CAT_RECENT -> "Looks you use will show up here."
+          text = when (selectedCategory) {
+            CAT_FAVOURITES -> "No favorites yet. Tap the star on a look."
+            CAT_RECENT -> "Looks you use will show up here."
             else -> "Nothing here."
           },
           color = TextSecondary, fontSize = 11.sp
@@ -1059,8 +849,7 @@ private fun FilterCardItem(
             modifier = Modifier.fillMaxSize()
           )
         } else {
-          // Clean procedural gradient preview
-          ProceduralFilterPreview(type = type)
+          NeutralLookSwatch(colorFilter = composeColorFilter)
         }
 
         if (type != FilterType.NONE && onToggleFavourite != null) {
@@ -1166,9 +955,9 @@ private fun AdjustTabContent(
           SmartAutoTool.values().forEach { tool ->
             val isSel = selectedSmartAutoTool == tool
             val valueStrength = when (tool) {
-              SmartAutoTool.AUTO_ADJUST -> (currentAdjustments.autoEnhance * 100).roundToInt().coerceIn(1, 100)
-              SmartAutoTool.COLOR_FIXINGS -> (currentAdjustments.colorFix * 100).roundToInt().coerceIn(1, 100)
-              SmartAutoTool.COLOR_CORRECT -> (currentAdjustments.colorCorrect * 100).roundToInt().coerceIn(1, 100)
+              SmartAutoTool.AUTO_ADJUST -> (currentAdjustments.autoEnhance * 100).roundToInt().coerceIn(0, 100)
+              SmartAutoTool.COLOR_FIXINGS -> (currentAdjustments.colorFix * 100).roundToInt().coerceIn(0, 100)
+              SmartAutoTool.COLOR_CORRECT -> (currentAdjustments.colorCorrect * 100).roundToInt().coerceIn(0, 100)
             }
             val isActive = when (tool) {
               SmartAutoTool.AUTO_ADJUST -> currentAdjustments.autoEnhance > 0.01f
@@ -1213,7 +1002,7 @@ private fun AdjustTabContent(
                   overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                  text = "$valueStrength%",
+                  text = if (isActive) "$valueStrength%" else "Off",
                   fontSize = 9.sp,
                   color = if (isActive) BlueGreenAccent else TextSecondary,
                   fontWeight = FontWeight.SemiBold
@@ -1227,9 +1016,9 @@ private fun AdjustTabContent(
 
         // Selected Smart Auto Slider: 1 ───────────── 100
         val currentValue = when (selectedSmartAutoTool) {
-          SmartAutoTool.AUTO_ADJUST -> if (currentAdjustments.autoEnhance <= 0f) 50f else (currentAdjustments.autoEnhance * 100f)
-          SmartAutoTool.COLOR_FIXINGS -> if (currentAdjustments.colorFix <= 0f) 50f else (currentAdjustments.colorFix * 100f)
-          SmartAutoTool.COLOR_CORRECT -> if (currentAdjustments.colorCorrect <= 0f) 50f else (currentAdjustments.colorCorrect * 100f)
+          SmartAutoTool.AUTO_ADJUST -> (currentAdjustments.autoEnhance * 100f).coerceIn(0f, 100f)
+          SmartAutoTool.COLOR_FIXINGS -> (currentAdjustments.colorFix * 100f).coerceIn(0f, 100f)
+          SmartAutoTool.COLOR_CORRECT -> (currentAdjustments.colorCorrect * 100f).coerceIn(0f, 100f)
         }
 
         Surface(
@@ -1274,7 +1063,7 @@ private fun AdjustTabContent(
             Slider(
               value = currentValue,
               onValueChange = { newVal ->
-                val fraction = (newVal / 100f).coerceIn(0.01f, 1f)
+                val fraction = (newVal / 100f).coerceIn(0f, 1f)
                 val updated = when (selectedSmartAutoTool) {
                   SmartAutoTool.AUTO_ADJUST -> currentAdjustments.copy(autoEnhance = fraction)
                   SmartAutoTool.COLOR_FIXINGS -> currentAdjustments.copy(colorFix = fraction)
@@ -1282,7 +1071,7 @@ private fun AdjustTabContent(
                 }
                 onAdjustmentsChange(updated)
               },
-              valueRange = 1f..100f,
+              valueRange = 0f..100f,
               colors = SliderDefaults.colors(
                 thumbColor = BlueGreenAccent,
                 activeTrackColor = BlueGreenAccent,
@@ -1297,7 +1086,7 @@ private fun AdjustTabContent(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.SpaceBetween
             ) {
-              Text("1 (Subtle)", color = TextSecondary, fontSize = 9.5.sp)
+              Text("0 (Off)", color = TextSecondary, fontSize = 9.5.sp)
               TextButton(
                 onClick = {
                   val updated = when (selectedSmartAutoTool) {
@@ -1327,20 +1116,7 @@ private fun AdjustTabContent(
         ) {
           CustomiseTool.values().forEach { tool ->
             val isSel = selectedCustomiseTool == tool
-            val isModified = when (tool) {
-              CustomiseTool.BRIGHTNESS -> abs(currentAdjustments.brightness) > 0.01f
-              CustomiseTool.SHARPEN -> currentAdjustments.sharpness > 0.01f
-              CustomiseTool.CLARITY -> currentAdjustments.clarity > 0.01f
-              CustomiseTool.HIGHLIGHTS -> abs(currentAdjustments.highlights) > 0.01f
-              CustomiseTool.WHITES -> abs(currentAdjustments.whites) > 0.01f
-              CustomiseTool.BLACKS -> abs(currentAdjustments.blacks) > 0.01f
-              CustomiseTool.TEMPERATURE -> abs(currentAdjustments.temperature) > 0.01f
-              CustomiseTool.FADE -> currentAdjustments.fade > 0.01f
-              CustomiseTool.VIGNETTE -> currentAdjustments.vignette > 0.01f
-              CustomiseTool.CONTRAST -> abs(currentAdjustments.contrast - 1f) > 0.01f
-              CustomiseTool.GRAIN -> currentAdjustments.grain > 0.01f
-              CustomiseTool.SHADOWS -> abs(currentAdjustments.shadows) > 0.01f
-            }
+            val isModified = !customiseSpec(tool).isDefault(customiseValue(currentAdjustments, tool))
 
             Surface(
               shape = RoundedCornerShape(10.dp),
@@ -1392,21 +1168,8 @@ private fun AdjustTabContent(
 
         Spacer(modifier = Modifier.height(4.dp))
 
-        // Selected Tool Slider: 1 ───────────────── 100
-        val slider1to100 = when (selectedCustomiseTool) {
-          CustomiseTool.BRIGHTNESS -> ((currentAdjustments.brightness * 50f) + 50f).coerceIn(1f, 100f)
-          CustomiseTool.CONTRAST -> (currentAdjustments.contrast * 50f).coerceIn(1f, 100f)
-          CustomiseTool.HIGHLIGHTS -> ((currentAdjustments.highlights * 50f) + 50f).coerceIn(1f, 100f)
-          CustomiseTool.SHADOWS -> ((currentAdjustments.shadows * 50f) + 50f).coerceIn(1f, 100f)
-          CustomiseTool.WHITES -> ((currentAdjustments.whites * 50f) + 50f).coerceIn(1f, 100f)
-          CustomiseTool.BLACKS -> ((currentAdjustments.blacks * 50f) + 50f).coerceIn(1f, 100f)
-          CustomiseTool.TEMPERATURE -> ((currentAdjustments.temperature * 50f) + 50f).coerceIn(1f, 100f)
-          CustomiseTool.SHARPEN -> ((currentAdjustments.sharpness * 99f) + 1f).coerceIn(1f, 100f)
-          CustomiseTool.CLARITY -> ((currentAdjustments.clarity * 99f) + 1f).coerceIn(1f, 100f)
-          CustomiseTool.FADE -> ((currentAdjustments.fade * 99f) + 1f).coerceIn(1f, 100f)
-          CustomiseTool.VIGNETTE -> ((currentAdjustments.vignette * 99f) + 1f).coerceIn(1f, 100f)
-          CustomiseTool.GRAIN -> ((currentAdjustments.grain * 99f) + 1f).coerceIn(1f, 100f)
-        }
+        val spec = customiseSpec(selectedCustomiseTool)
+        val sliderValue = customiseValue(currentAdjustments, selectedCustomiseTool).coerceIn(spec.min, spec.max)
 
         Surface(
           shape = RoundedCornerShape(10.dp),
@@ -1440,33 +1203,20 @@ private fun AdjustTabContent(
               }
 
               Text(
-                text = "${slider1to100.roundToInt()}",
+                text = spec.format(sliderValue),
                 color = BlueGreenAccent,
                 fontWeight = FontWeight.Bold,
-                fontSize = 13.sp
+                fontSize = 13.sp,
+                modifier = Modifier.testTag("custom_tool_value")
               )
             }
 
             Slider(
-              value = slider1to100,
+              value = sliderValue,
               onValueChange = { newVal ->
-                val updated = when (selectedCustomiseTool) {
-                  CustomiseTool.BRIGHTNESS -> currentAdjustments.copy(brightness = (newVal - 50f) / 50f)
-                  CustomiseTool.CONTRAST -> currentAdjustments.copy(contrast = newVal / 50f)
-                  CustomiseTool.HIGHLIGHTS -> currentAdjustments.copy(highlights = (newVal - 50f) / 50f)
-                  CustomiseTool.SHADOWS -> currentAdjustments.copy(shadows = (newVal - 50f) / 50f)
-                  CustomiseTool.WHITES -> currentAdjustments.copy(whites = (newVal - 50f) / 50f)
-                  CustomiseTool.BLACKS -> currentAdjustments.copy(blacks = (newVal - 50f) / 50f)
-                  CustomiseTool.TEMPERATURE -> currentAdjustments.copy(temperature = (newVal - 50f) / 50f)
-                  CustomiseTool.SHARPEN -> currentAdjustments.copy(sharpness = (newVal - 1f) / 99f)
-                  CustomiseTool.CLARITY -> currentAdjustments.copy(clarity = (newVal - 1f) / 99f)
-                  CustomiseTool.FADE -> currentAdjustments.copy(fade = (newVal - 1f) / 99f)
-                  CustomiseTool.VIGNETTE -> currentAdjustments.copy(vignette = (newVal - 1f) / 99f)
-                  CustomiseTool.GRAIN -> currentAdjustments.copy(grain = (newVal - 1f) / 99f)
-                }
-                onAdjustmentsChange(updated)
+                onAdjustmentsChange(applyCustomiseValue(currentAdjustments, selectedCustomiseTool, spec.coerce(newVal)))
               },
-              valueRange = 1f..100f,
+              valueRange = spec.min..spec.max,
               colors = SliderDefaults.colors(
                 thumbColor = BlueGreenAccent,
                 activeTrackColor = BlueGreenAccent,
@@ -1481,30 +1231,16 @@ private fun AdjustTabContent(
               modifier = Modifier.fillMaxWidth(),
               horizontalArrangement = Arrangement.SpaceBetween
             ) {
-              Text("1", color = TextSecondary, fontSize = 9.5.sp)
+              Text(spec.format(spec.min), color = TextSecondary, fontSize = 9.5.sp)
               TextButton(
                 onClick = {
-                  val reset = when (selectedCustomiseTool) {
-                    CustomiseTool.BRIGHTNESS -> currentAdjustments.copy(brightness = 0f)
-                    CustomiseTool.CONTRAST -> currentAdjustments.copy(contrast = 1f)
-                    CustomiseTool.HIGHLIGHTS -> currentAdjustments.copy(highlights = 0f)
-                    CustomiseTool.SHADOWS -> currentAdjustments.copy(shadows = 0f)
-                    CustomiseTool.WHITES -> currentAdjustments.copy(whites = 0f)
-                    CustomiseTool.BLACKS -> currentAdjustments.copy(blacks = 0f)
-                    CustomiseTool.TEMPERATURE -> currentAdjustments.copy(temperature = 0f)
-                    CustomiseTool.SHARPEN -> currentAdjustments.copy(sharpness = 0f)
-                    CustomiseTool.CLARITY -> currentAdjustments.copy(clarity = 0f)
-                    CustomiseTool.FADE -> currentAdjustments.copy(fade = 0f)
-                    CustomiseTool.VIGNETTE -> currentAdjustments.copy(vignette = 0f)
-                    CustomiseTool.GRAIN -> currentAdjustments.copy(grain = 0f)
-                  }
-                  onAdjustmentsChange(reset)
+                  onAdjustmentsChange(applyCustomiseValue(currentAdjustments, selectedCustomiseTool, spec.default))
                 },
                 contentPadding = PaddingValues(0.dp)
               ) {
                 Text("Reset this tool", color = TextSecondary, fontSize = 10.sp)
               }
-              Text("100", color = TextSecondary, fontSize = 9.5.sp)
+              Text(spec.format(spec.max), color = TextSecondary, fontSize = 9.5.sp)
             }
           }
         }
@@ -1532,10 +1268,10 @@ private fun VideoQualityTabContent(
     QualityToolConfig("Super Clarity", Icons.Default.HighQuality, currentAdjustments.superClarity) {
       onAdjustmentsChange(currentAdjustments.copy(superClarity = it))
     },
-    QualityToolConfig("HDR Boost", Icons.Default.HdrOn, currentAdjustments.hdrBoost) {
+    QualityToolConfig("HDR Look (SDR)", Icons.Default.HdrOn, currentAdjustments.hdrBoost) {
       onAdjustmentsChange(currentAdjustments.copy(hdrBoost = it))
     },
-    QualityToolConfig("Anti-Flicker", Icons.Default.MotionPhotosAuto, currentAdjustments.antiFlicker) {
+    QualityToolConfig("Flicker soften", Icons.Default.MotionPhotosAuto, currentAdjustments.antiFlicker) {
       onAdjustmentsChange(currentAdjustments.copy(antiFlicker = it))
     },
     QualityToolConfig("Color Fix", Icons.Default.ColorLens, currentAdjustments.colorFix) {
@@ -1549,8 +1285,18 @@ private fun VideoQualityTabContent(
       .padding(horizontal = 10.dp, vertical = 6.dp),
     verticalArrangement = Arrangement.spacedBy(6.dp)
   ) {
+    item {
+      Text(
+        text = "HDR Look is an SDR contrast/saturation boost. Export stays Rec.709 — not HDR10 or HLG. " +
+          "Flicker soften is a spatial denoise mix, not a temporal flicker lock.",
+        color = TextSecondary,
+        fontSize = 9.5.sp,
+        lineHeight = 12.sp,
+        modifier = Modifier.testTag("video_quality_capability_note")
+      )
+    }
     items(qualityTools) { tool ->
-      val value1to100 = (tool.currentValue * 100f).coerceIn(1f, 100f)
+      val value1to100 = (tool.currentValue * 100f).coerceIn(0f, 100f)
       val isActive = tool.currentValue > 0.01f
 
       Surface(
@@ -1592,11 +1338,11 @@ private fun VideoQualityTabContent(
           }
 
           Slider(
-            value = if (isActive) value1to100 else 1f,
+            value = value1to100,
             onValueChange = { newVal ->
-              tool.onUpdate((newVal / 100f).coerceIn(0.01f, 1f))
+              tool.onUpdate((newVal / 100f).coerceIn(0f, 1f))
             },
-            valueRange = 1f..100f,
+            valueRange = 0f..100f,
             colors = SliderDefaults.colors(
               thumbColor = if (isActive) BlueGreenAccent else TextSecondary,
               activeTrackColor = BlueGreenAccent,
@@ -1612,6 +1358,61 @@ private fun VideoQualityTabContent(
   }
 }
 
+private fun customiseSpec(tool: CustomiseTool): ColorAdjustmentRanges.Spec = when (tool) {
+  CustomiseTool.BRIGHTNESS -> ColorAdjustmentRanges.brightness
+  CustomiseTool.CONTRAST -> ColorAdjustmentRanges.contrast
+  CustomiseTool.SATURATION -> ColorAdjustmentRanges.saturation
+  CustomiseTool.EXPOSURE -> ColorAdjustmentRanges.exposure
+  CustomiseTool.TEMPERATURE -> ColorAdjustmentRanges.temperature
+  CustomiseTool.TINT -> ColorAdjustmentRanges.tint
+  CustomiseTool.HIGHLIGHTS -> ColorAdjustmentRanges.highlights
+  CustomiseTool.SHADOWS -> ColorAdjustmentRanges.shadows
+  CustomiseTool.SHARPEN -> ColorAdjustmentRanges.sharpness
+  CustomiseTool.CLARITY -> ColorAdjustmentRanges.clarity
+  CustomiseTool.WHITES -> ColorAdjustmentRanges.whites
+  CustomiseTool.BLACKS -> ColorAdjustmentRanges.blacks
+  CustomiseTool.FADE -> ColorAdjustmentRanges.fade
+  CustomiseTool.VIGNETTE -> ColorAdjustmentRanges.vignette
+  CustomiseTool.GRAIN -> ColorAdjustmentRanges.grain
+}
+
+private fun customiseValue(adj: VideoAdjustments, tool: CustomiseTool): Float = when (tool) {
+  CustomiseTool.BRIGHTNESS -> adj.brightness
+  CustomiseTool.CONTRAST -> adj.contrast
+  CustomiseTool.SATURATION -> adj.saturation
+  CustomiseTool.EXPOSURE -> adj.exposure
+  CustomiseTool.TEMPERATURE -> adj.temperature
+  CustomiseTool.TINT -> adj.tint
+  CustomiseTool.HIGHLIGHTS -> adj.highlights
+  CustomiseTool.SHADOWS -> adj.shadows
+  CustomiseTool.SHARPEN -> adj.sharpness
+  CustomiseTool.CLARITY -> adj.clarity
+  CustomiseTool.WHITES -> adj.whites
+  CustomiseTool.BLACKS -> adj.blacks
+  CustomiseTool.FADE -> adj.fade
+  CustomiseTool.VIGNETTE -> adj.vignette
+  CustomiseTool.GRAIN -> adj.grain
+}
+
+private fun applyCustomiseValue(adj: VideoAdjustments, tool: CustomiseTool, value: Float): VideoAdjustments =
+  when (tool) {
+    CustomiseTool.BRIGHTNESS -> adj.copy(brightness = value)
+    CustomiseTool.CONTRAST -> adj.copy(contrast = value)
+    CustomiseTool.SATURATION -> adj.copy(saturation = value)
+    CustomiseTool.EXPOSURE -> adj.copy(exposure = value)
+    CustomiseTool.TEMPERATURE -> adj.copy(temperature = value)
+    CustomiseTool.TINT -> adj.copy(tint = value)
+    CustomiseTool.HIGHLIGHTS -> adj.copy(highlights = value)
+    CustomiseTool.SHADOWS -> adj.copy(shadows = value)
+    CustomiseTool.SHARPEN -> adj.copy(sharpness = value)
+    CustomiseTool.CLARITY -> adj.copy(clarity = value)
+    CustomiseTool.WHITES -> adj.copy(whites = value)
+    CustomiseTool.BLACKS -> adj.copy(blacks = value)
+    CustomiseTool.FADE -> adj.copy(fade = value)
+    CustomiseTool.VIGNETTE -> adj.copy(vignette = value)
+    CustomiseTool.GRAIN -> adj.copy(grain = value)
+  }
+
 private data class QualityToolConfig(
   val name: String,
   val icon: ImageVector,
@@ -1620,47 +1421,44 @@ private data class QualityToolConfig(
 )
 
 /**
- * Procedural fallback preview for filters
+ * Shared neutral swatch so a missing clip thumbnail still shows the real ColorMatrix,
+ * not a per-filter fake color cartoon.
  */
 @Composable
-private fun ProceduralFilterPreview(
-  type: FilterType,
+private fun NeutralLookSwatch(
+  colorFilter: ColorFilter?,
   modifier: Modifier = Modifier
 ) {
-  val baseColors = remember(type) {
-    when (type) {
-      FilterType.NONE -> listOf(Color(0xFF334155), Color(0xFF0F172A))
-      FilterType.FOUR_K -> listOf(Color(0xFF0284C7), Color(0xFF1E3A8A), Color(0xFF0F172A))
-      FilterType.BLACKLIGHT_FIX -> listOf(Color(0xFFD97706), Color(0xFFB45309), Color(0xFF1E1B4B))
-      FilterType.ENHANCE -> listOf(Color(0xFF38BDF8), Color(0xFF818CF8), Color(0xFF312E81))
-      FilterType.HDR -> listOf(Color(0xFFFF007F), Color(0xFF7928CA), Color(0xFF0284C7))
-      FilterType.GLOW -> listOf(Color(0xFFFDE047), Color(0xFFF472B6), Color(0xFF4F46E5))
-      FilterType.FOCUS -> listOf(Color(0xFF10B981), Color(0xFF0369A1), Color(0xFF0F172A))
-      FilterType.QUALITY_RESTORATION -> listOf(Color(0xFF2DD4BF), Color(0xFF2563EB), Color(0xFF0F172A))
-      FilterType.GOLDEN_AUTUMN -> listOf(Color(0xFFF97316), Color(0xFF9A3412), Color(0xFF451A03))
-      FilterType.OCEANIC_VIEW -> listOf(Color(0xFF06B6D4), Color(0xFF0369A1), Color(0xFF082F49))
-      FilterType.ALMOND -> listOf(Color(0xFFFDE68A), Color(0xFFD4A373), Color(0xFF78350F))
-      FilterType.SUNLIGHT_ORANGE_BLUE -> listOf(Color(0xFFFB923C), Color(0xFF0284C7), Color(0xFF0F172A))
-      FilterType.CINEMATIC -> listOf(Color(0xFF0D9488), Color(0xFFF97316), Color(0xFF042F2E))
-      FilterType.WARM -> listOf(Color(0xFFF59E0B), Color(0xFFD97706), Color(0xFF451A03))
-      FilterType.COOL -> listOf(Color(0xFF0284C7), Color(0xFF38BDF8), Color(0xFF082F49))
-      FilterType.PORTRAIT -> listOf(Color(0xFFF43F5E), Color(0xFFFB7185), Color(0xFF881337))
-      FilterType.BLACK_AND_WHITE -> listOf(Color(0xFFE2E8F0), Color(0xFF64748B), Color(0xFF0F172A))
-      FilterType.VINTAGE -> listOf(Color(0xFFB45309), Color(0xFFFDE68A), Color(0xFF451A03))
-      FilterType.SATURATION -> listOf(Color(0xFFEC4899), Color(0xFF3B82F6), Color(0xFF1E1B4B))
-      FilterType.FILM -> listOf(Color(0xFFA16207), Color(0xFF78350F), Color(0xFF1C1917))
-      FilterType.RETRO -> listOf(Color(0xFFD946EF), Color(0xFF8B5CF6), Color(0xFF3B0764))
-      FilterType.NATURE -> listOf(Color(0xFF10B981), Color(0xFF047857), Color(0xFF064E3B))
-      FilterType.FOOD -> listOf(Color(0xFFEA580C), Color(0xFFFACC15), Color(0xFF7C2D12))
-      FilterType.TRAVEL -> listOf(Color(0xFF0284C7), Color(0xFF10B981), Color(0xFF064E3B))
-      FilterType.SOCIAL_MEDIA -> listOf(Color(0xFFFF007F), Color(0xFF8B5CF6), Color(0xFF312E81))
-    }
-  }
+  val bmp = remember { FilterLookSwatch.bitmap() }
+  Image(
+    bitmap = bmp.asImageBitmap(),
+    contentDescription = null,
+    colorFilter = colorFilter,
+    contentScale = ContentScale.Crop,
+    modifier = modifier.fillMaxSize()
+  )
+}
 
-  Canvas(modifier = modifier.fillMaxSize()) {
-    drawRect(
-      brush = Brush.verticalGradient(baseColors),
-      size = size
-    )
+private object FilterLookSwatch {
+  fun bitmap(): Bitmap {
+    val w = 32
+    val h = 32
+    val px = IntArray(w * h)
+    for (y in 0 until h) {
+      val t = y / (h - 1).toFloat()
+      val r = ((0.55f * (1f - t) + 0.22f * t) * 255f).toInt().coerceIn(0, 255)
+      val g = ((0.48f * (1f - t) + 0.28f * t) * 255f).toInt().coerceIn(0, 255)
+      val b = ((0.40f * (1f - t) + 0.18f * t) * 255f).toInt().coerceIn(0, 255)
+      val row = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+      for (x in 0 until w) {
+        val band = when {
+          x < w / 3 -> 0x00_18_28
+          x < (2 * w) / 3 -> 0x00_00_00
+          else -> 0x20_10_00
+        }
+        px[y * w + x] = row + band
+      }
+    }
+    return Bitmap.createBitmap(px, w, h, Bitmap.Config.ARGB_8888)
   }
 }

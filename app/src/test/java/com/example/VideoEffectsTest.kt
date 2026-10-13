@@ -221,6 +221,7 @@ class VideoEffectsTest {
       name = "Laser Grid",
       category = com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS,
       effectType = EffectType.LASER_GRID,
+      shaderKey = "vfx:distort.glitch",
       intensity = 0.85f
     )
     com.example.engine.effects.registry.EffectsAssetRegistry.registerEffect(sampleEffect)

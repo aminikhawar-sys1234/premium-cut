@@ -7,43 +7,19 @@ import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import com.example.engine.effects.registry.EffectCategory
+import com.example.engine.effects.registry.EffectsAssetRegistry
 import com.example.ui.components.navigation.FuturisticBottomNavBarContainer
 import com.example.ui.components.navigation.FuturisticNavItemData
 import com.example.ui.components.navigation.NavItemColorTheme
 
-private val VideoEffectsTheme = NavItemColorTheme(
-  bgCircle = Color(0xFF0F3B37),
-  iconTint = Color(0xFF00E5FF)
-)
-
-private val BodyEffectsTheme = NavItemColorTheme(
-  bgCircle = Color(0xFF0E382A),
-  iconTint = Color(0xFF10B981)
-)
-
-private val FaceEffectsTheme = NavItemColorTheme(
-  bgCircle = Color(0xFF3A2430),
-  iconTint = Color(0xFFF9A8D4)
-)
-
-private val PhotoEffectsTheme = NavItemColorTheme(
-  bgCircle = Color(0xFF132F42),
-  iconTint = Color(0xFF38BDF8)
-)
-
-private val AIEffectsTheme = NavItemColorTheme(
-  bgCircle = Color(0xFF2A1B4E),
-  iconTint = Color(0xFFC084FC)
-)
-
 /**
- * Dedicated Effects Sub-Navigation.
- * Replaces the main editor bottom navigation when "Effects" is selected.
- *
- * Video, Body, Face, Photo, and AI. The row scrolls when it does not fit.
+ * Dedicated Effects sub-navigation. Categories come from the live registry
+ * (ProductionEffectCatalog + any real remote packages), not a hardcoded row.
  */
 @Composable
 fun EffectsToolsBottomBar(
@@ -52,53 +28,20 @@ fun EffectsToolsBottomBar(
   onBackToMainMenu: () -> Unit,
   modifier: Modifier = Modifier
 ) {
-  val items = listOf(
+  val snapshot = EffectsAssetRegistry.snapshot()
+  val categories = remember(snapshot) { EffectsAssetRegistry.populatedCategories() }
+
+  val items = categories.map { category ->
     FuturisticNavItemData(
-      id = EffectCategory.VIDEO_EFFECTS.name,
-      label = EffectCategory.VIDEO_EFFECTS.displayName,
-      icon = Icons.Default.Videocam,
-      theme = VideoEffectsTheme,
-      isSelected = activeCategory == EffectCategory.VIDEO_EFFECTS,
-      testTag = EffectCategory.VIDEO_EFFECTS.tag,
-      onClick = { onSelectCategory(EffectCategory.VIDEO_EFFECTS) }
-    ),
-    FuturisticNavItemData(
-      id = EffectCategory.BODY_EFFECTS.name,
-      label = EffectCategory.BODY_EFFECTS.displayName,
-      icon = Icons.Default.AccessibilityNew,
-      theme = BodyEffectsTheme,
-      isSelected = activeCategory == EffectCategory.BODY_EFFECTS,
-      testTag = EffectCategory.BODY_EFFECTS.tag,
-      onClick = { onSelectCategory(EffectCategory.BODY_EFFECTS) }
-    ),
-    FuturisticNavItemData(
-      id = EffectCategory.FACE_EFFECTS.name,
-      label = EffectCategory.FACE_EFFECTS.displayName,
-      icon = Icons.Default.Face,
-      theme = FaceEffectsTheme,
-      isSelected = activeCategory == EffectCategory.FACE_EFFECTS,
-      testTag = EffectCategory.FACE_EFFECTS.tag,
-      onClick = { onSelectCategory(EffectCategory.FACE_EFFECTS) }
-    ),
-    FuturisticNavItemData(
-      id = EffectCategory.PHOTO_EFFECTS.name,
-      label = EffectCategory.PHOTO_EFFECTS.displayName,
-      icon = Icons.Default.Image,
-      theme = PhotoEffectsTheme,
-      isSelected = activeCategory == EffectCategory.PHOTO_EFFECTS,
-      testTag = EffectCategory.PHOTO_EFFECTS.tag,
-      onClick = { onSelectCategory(EffectCategory.PHOTO_EFFECTS) }
-    ),
-    FuturisticNavItemData(
-      id = EffectCategory.AI_EFFECTS.name,
-      label = EffectCategory.AI_EFFECTS.displayName,
-      icon = Icons.Default.AutoFixHigh,
-      theme = AIEffectsTheme,
-      isSelected = activeCategory == EffectCategory.AI_EFFECTS,
-      testTag = EffectCategory.AI_EFFECTS.tag,
-      onClick = { onSelectCategory(EffectCategory.AI_EFFECTS) }
+      id = category.name,
+      label = category.displayName,
+      icon = iconFor(category),
+      theme = themeFor(category),
+      isSelected = activeCategory == category,
+      testTag = category.tag,
+      onClick = { onSelectCategory(category) }
     )
-  )
+  }
 
   FuturisticBottomNavBarContainer(
     onBackClick = onBackToMainMenu,
@@ -106,4 +49,20 @@ fun EffectsToolsBottomBar(
     modifier = modifier,
     showDividers = true
   )
+}
+
+private fun iconFor(category: EffectCategory): ImageVector = when (category) {
+  EffectCategory.VIDEO_EFFECTS -> Icons.Default.Videocam
+  EffectCategory.BODY_EFFECTS -> Icons.Default.AccessibilityNew
+  EffectCategory.FACE_EFFECTS -> Icons.Default.Face
+  EffectCategory.PHOTO_EFFECTS -> Icons.Default.Image
+  EffectCategory.AI_EFFECTS -> Icons.Default.AutoFixHigh
+}
+
+private fun themeFor(category: EffectCategory): NavItemColorTheme = when (category) {
+  EffectCategory.VIDEO_EFFECTS -> NavItemColorTheme(Color(0xFF0F3B37), Color(0xFF00E5FF))
+  EffectCategory.BODY_EFFECTS -> NavItemColorTheme(Color(0xFF0E382A), Color(0xFF10B981))
+  EffectCategory.FACE_EFFECTS -> NavItemColorTheme(Color(0xFF3A2430), Color(0xFFF9A8D4))
+  EffectCategory.PHOTO_EFFECTS -> NavItemColorTheme(Color(0xFF132F42), Color(0xFF38BDF8))
+  EffectCategory.AI_EFFECTS -> NavItemColorTheme(Color(0xFF2A1B4E), Color(0xFFC084FC))
 }

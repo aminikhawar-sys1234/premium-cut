@@ -18,9 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material.icons.filled.VisibilityOff
@@ -92,8 +90,7 @@ internal fun TextAnimatorSubToolView(
 
   Column(
     modifier = Modifier
-      .fillMaxSize()
-      .verticalScroll(rememberScrollState())
+      .fillMaxWidth()
       .testTag("text_animator_panel"),
     verticalArrangement = Arrangement.spacedBy(6.dp)
   ) {

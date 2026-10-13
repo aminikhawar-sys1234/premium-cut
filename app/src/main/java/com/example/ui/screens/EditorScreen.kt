@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ColorMatrix
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.nativeCanvas
@@ -63,6 +64,9 @@ import com.example.engine.media.VideoThumbnailManager
 import com.example.ui.components.text.*
 import com.example.ui.components.effects.*
 import com.example.engine.effects.registry.*
+import com.example.engine.effects.media3.LivePreviewLook
+import com.example.engine.effects.media3.PreviewDisplayFilter
+import com.example.engine.effects.media3.PreviewLookPolicy
 import com.example.ui.components.navigation.*
 import coil.compose.AsyncImage
 import android.view.ViewGroup
@@ -75,7 +79,6 @@ import com.example.domain.model.*
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.SelectedTrackElement
 import com.example.engine.export.ExportState
-import com.example.engine.media.MediaRelinkManager
 import com.example.engine.text.TextLayerRenderer
 import com.example.ui.components.InteractiveTransformOverlay
 import com.example.ui.components.player.PreviewVideoSurfaceRegistry
@@ -111,15 +114,21 @@ fun EditorScreen(
   val projectName by viewModel.activeProjectName.collectAsState()
   val aspectRatio by viewModel.activeAspectRatio.collectAsState()
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
+  val livePreviewLook by viewModel.livePreviewLook.collectAsState()
   val currentPosMs by viewModel.timelineEngine.currentPositionMs.collectAsState()
   val isPlaying by viewModel.timelineEngine.isPlaying.collectAsState()
   // Overlay clips whose video player exists, so PIP layers switch from placeholder to video
   // as soon as the player is created.
   val overlayPlayerIds by viewModel.playbackEngine.overlayPlayerIds.collectAsState()
+  val compositorActive by viewModel.playbackEngine.compositorActive.collectAsState()
+  val compositorEngine = if (compositorActive) viewModel.playbackEngine else null
+  val playerGeneration by viewModel.playbackEngine.playerGeneration.collectAsState()
+  val previewPlayer = remember(playerGeneration) { viewModel.playbackEngine.player }
   val canUndo by viewModel.timelineEngine.canUndo.collectAsState()
   val canRedo by viewModel.timelineEngine.canRedo.collectAsState()
   val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
   val activeTab by viewModel.activeToolbarTab.collectAsState()
+  val trackingUiState by viewModel.motionTrackingState.collectAsState()
   val isSnapping by viewModel.timelineEngine.isSnappingEnabled.collectAsState()
   val timelineZoom by viewModel.timelineEngine.timelineZoom.collectAsState()
   val selectedClipIds by viewModel.timelineEngine.selectedClipIds.collectAsState()
@@ -476,6 +485,119 @@ fun EditorScreen(
     }
   }
 
+  val trackedOverlayPickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.PickVisualMedia()
+  ) { uri: Uri? ->
+    if (uri == null) {
+      viewModel.cancelPendingTrackedAttachment()
+      return@rememberLauncherForActivityResult
+    }
+    coroutineScope.launch {
+      try {
+        val fileName = try {
+          var result: String? = null
+          if (uri.scheme == "content") {
+            val cursor = context.contentResolver.query(uri, null, null, null, null)
+            cursor?.use {
+              if (it.moveToFirst()) {
+                val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                if (index != -1) result = it.getString(index)
+              }
+            }
+          }
+          result ?: uri.lastPathSegment ?: "Overlay Image"
+        } catch (e: Exception) {
+          uri.lastPathSegment ?: "Overlay Image"
+        }
+        val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
+          context = context,
+          sourceUriString = uri.toString(),
+          suggestedName = fileName
+        )
+        val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
+          context,
+          persistentPath,
+          defaultImageDurationMs = 3000L
+        )
+        val added = viewModel.addTrackedOverlayFromPersistedMedia(
+          uri = persistentPath,
+          name = fileName,
+          isVideo = metadata.isVideo,
+          durationMs = metadata.durationMs,
+          width = metadata.width,
+          height = metadata.height,
+          rotationDegrees = metadata.rotationDegrees,
+          frameRate = metadata.frameRate,
+          mimeType = metadata.mimeType,
+          hasAudio = metadata.hasAudio
+        )
+        if (!added) {
+          android.util.Log.w("EditorScreen", "Tracked overlay import skipped for $fileName")
+        }
+      } catch (e: Throwable) {
+        android.util.Log.e("EditorScreen", "Error importing tracked overlay image", e)
+        viewModel.cancelPendingTrackedAttachment()
+      }
+    }
+  }
+
+  val genericTrackedOverlayPickerLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.GetContent()
+  ) { uri: Uri? ->
+    if (uri == null) {
+      viewModel.cancelPendingTrackedAttachment()
+      return@rememberLauncherForActivityResult
+    }
+    coroutineScope.launch {
+      try {
+        val fileName = uri.lastPathSegment ?: "Overlay Image"
+        val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
+          context = context,
+          sourceUriString = uri.toString(),
+          suggestedName = fileName
+        )
+        val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
+          context,
+          persistentPath,
+          defaultImageDurationMs = 3000L
+        )
+        viewModel.addTrackedOverlayFromPersistedMedia(
+          uri = persistentPath,
+          name = fileName,
+          isVideo = metadata.isVideo,
+          durationMs = metadata.durationMs,
+          width = metadata.width,
+          height = metadata.height,
+          rotationDegrees = metadata.rotationDegrees,
+          frameRate = metadata.frameRate,
+          mimeType = metadata.mimeType,
+          hasAudio = metadata.hasAudio
+        )
+      } catch (e: Throwable) {
+        android.util.Log.e("EditorScreen", "Error importing tracked overlay fallback image", e)
+        viewModel.cancelPendingTrackedAttachment()
+      }
+    }
+  }
+
+  val pendingTrackedOverlayPick by viewModel.pendingTrackedOverlayPick.collectAsState()
+  LaunchedEffect(pendingTrackedOverlayPick) {
+    if (!pendingTrackedOverlayPick) return@LaunchedEffect
+    viewModel.consumeTrackedOverlayPickRequest()
+    try {
+      trackedOverlayPickerLauncher.launch(
+        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+      )
+    } catch (e: Throwable) {
+      try {
+        genericTrackedOverlayPickerLauncher.launch("image/*")
+      } catch (e2: Throwable) {
+        android.util.Log.e("EditorScreen", "Failed to launch tracked overlay picker", e2)
+        viewModel.cancelPendingTrackedAttachment()
+      }
+    }
+  }
+
   val handleToolClick: (EditorToolItem) -> Unit = { tool ->
     when {
       tool.actionKey.contains("SPLIT", ignoreCase = true) -> {
@@ -512,11 +634,11 @@ fun EditorScreen(
       tool.actionKey.equals("TOOL_TEXT", ignoreCase = true) ||
         tool.id.equals("tool_text", ignoreCase = true) ||
         tool.name.contains("Text", ignoreCase = true) -> {
-        // Close/hide main editor bottom nav, open dedicated Text Tools bottom nav
+        // Close/hide main editor bottom nav, open text tools + the lightweight Add Text panel
         isTextToolsOpen = true
         isEffectsToolsOpen = false
         isEditToolsOpen = false
-        activeTextToolModal = null
+        activeTextToolModal = TextToolCategory.ADD_TEXT
         viewModel.setActiveToolbarTab(null)
       }
       tool.actionKey.equals("TOOL_EDIT", ignoreCase = true) -> {
@@ -581,9 +703,15 @@ fun EditorScreen(
       val timelineHeight = if (isLandscape) 150.dp else 214.dp
       // Text & Filter Tools expand to 45% screen height per user requirement, while other tool panels maintain 37% cap
       val isTextToolActive = activeTextToolModal != null || activeTab == EditorToolbarTab.TEXT
-      val isFilterToolActive = activeTab == EditorToolbarTab.FILTERS || activeTab == EditorToolbarTab.ADJUST
-      val maxToolPanelHeight = if (isTextToolActive || isFilterToolActive) maxHeight * 0.45f else maxHeight * 0.37f
-      val isFilterToolsOpen = activeTab == EditorToolbarTab.FILTERS || activeTab == EditorToolbarTab.ADJUST
+      val isFilterToolActive = activeTab == EditorToolbarTab.FILTERS ||
+        activeTab == EditorToolbarTab.ADJUST ||
+        activeTab == EditorToolbarTab.VIDEO_QUALITY
+      val isTransitionToolActive = activeTab == EditorToolbarTab.TRANSITIONS
+      val maxToolPanelHeight = if (isTextToolActive || isFilterToolActive || isTransitionToolActive) {
+        maxHeight * 0.45f
+      } else {
+        maxHeight * 0.37f
+      }
       val isTransitionsOpen = activeTab == EditorToolbarTab.TRANSITIONS
       val isStickersOpen = activeTab == EditorToolbarTab.STICKERS
       val responsiveSpacerHeight = 0.dp
@@ -657,9 +785,12 @@ fun EditorScreen(
             isTextToolsOpen = true
             activeTextToolModal = TextToolCategory.ADD_TEXT
           },
-          player = viewModel.playbackEngine.player,
+          player = previewPlayer,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
+          onBindOverlaySurface = { clipId, view -> viewModel.playbackEngine.bindOverlaySurface(clipId, view) },
+          liveLook = livePreviewLook,
+          compositorEngine = compositorEngine,
           isPrimarySurface = true,
           onToggleFullscreen = { isFullscreenPreview = true },
           onAddMedia = safeLaunchMediaPicker,
@@ -668,9 +799,9 @@ fun EditorScreen(
             .testTag("video_preview")
         )
 
-        // Motion Tracking Interactive Target & Trajectory Overlay
-        if (activeTab == EditorToolbarTab.MOTION_TRACKING) {
-          val trackingUiState by viewModel.motionTrackingState.collectAsState()
+        // Diagnostic trails/boxes only while the Motion Tracking panel is open.
+        // Tracked stickers/text keep rendering through InteractiveTransformOverlay.
+        if (trackingUiState.shouldShowDiagnostics(activeTab == EditorToolbarTab.MOTION_TRACKING)) {
           val activeTrackClip = viewModel.getSelectedVideoClip()
           com.example.ui.components.tracking.MotionTrackingPreviewOverlay(
             uiState = trackingUiState,
@@ -679,10 +810,14 @@ fun EditorScreen(
             videoHeight = activeTrackClip?.height ?: 0,
             naturalRotation = activeTrackClip?.naturalRotation ?: 0,
             canvasAspect = aspectRatio.ratio,
+            interactive = activeTab == EditorToolbarTab.MOTION_TRACKING,
             onUpdateRegion = { viewModel.updateTrackingRegion(it) },
+            onSelectDetection = { viewModel.selectLiveDetection(it) },
+            onAttach = { viewModel.attachTrackingToLayer(it) },
             modifier = Modifier
               .fillMaxHeight(0.98f)
               .aspectRatio(aspectRatio.ratio, matchHeightConstraintsFirst = true)
+              .testTag("motion_tracking_preview_overlay")
           )
         }
 
@@ -1082,8 +1217,7 @@ fun EditorScreen(
                   )
                   TextToolCategory.ADD_TEXT -> AddTextPanel(
                     viewModel = viewModel,
-                    onClose = { activeTextToolModal = null },
-                    onOpenPainting = { showDrawingDialog = true }
+                    onClose = { activeTextToolModal = null }
                   )
                   TextToolCategory.TEXT_TEMPLATES -> TextTemplatesBrowserPanel(
                     viewModel = viewModel,
@@ -1118,6 +1252,7 @@ fun EditorScreen(
               activeTab == EditorToolbarTab.FILTERS -> {
                 com.example.ui.components.filter.FilterToolsPanel(
                   viewModel = viewModel,
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.FILTERS,
                   onClose = { viewModel.setActiveToolbarTab(null) }
                 )
@@ -1125,6 +1260,7 @@ fun EditorScreen(
               activeTab == EditorToolbarTab.ADJUST -> {
                 com.example.ui.components.filter.FilterToolsPanel(
                   viewModel = viewModel,
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.ADJUST,
                   onClose = { viewModel.setActiveToolbarTab(null) }
                 )
@@ -1133,7 +1269,8 @@ fun EditorScreen(
                 TransitionsPanel(
                   viewModel = viewModel,
                   onClose = { viewModel.setActiveToolbarTab(null) },
-                  onStartDragTransition = { draggedTransitionType = it }
+                  onStartDragTransition = { draggedTransitionType = it },
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight)
                 )
               }
               activeTab == EditorToolbarTab.STICKERS -> {
@@ -1197,13 +1334,9 @@ fun EditorScreen(
               )
               activeTab == EditorToolbarTab.EFFECTS -> EffectsToolPanel(viewModel)
               activeTab == EditorToolbarTab.TEXT -> {
-                com.example.ui.components.text.AddTextPanel(
+                AddTextPanel(
                   viewModel = viewModel,
-                  onClose = { viewModel.setActiveToolbarTab(null) },
-                  onOpenPainting = {
-                    viewModel.setActiveToolbarTab(null)
-                    showDrawingDialog = true
-                  }
+                  onClose = { viewModel.setActiveToolbarTab(null) }
                 )
               }
               activeTab == EditorToolbarTab.ELEMENTS -> com.example.ui.components.elements.ElementsToolPanel(
@@ -1222,6 +1355,7 @@ fun EditorScreen(
               activeTab == EditorToolbarTab.VIDEO_QUALITY -> {
                 com.example.ui.components.filter.FilterToolsPanel(
                   viewModel = viewModel,
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.VIDEO_QUALITY,
                   onClose = { viewModel.setActiveToolbarTab(null) }
                 )
@@ -1475,14 +1609,34 @@ fun EditorScreen(
             isTextToolsOpen = true
             activeTextToolModal = TextToolCategory.ADD_TEXT
           },
-          player = viewModel.playbackEngine.player,
+          player = previewPlayer,
           onGetOverlayPlayer = { clipId -> viewModel.playbackEngine.getOverlayPlayer(clipId) },
           overlayPlayerIds = overlayPlayerIds,
+          onBindOverlaySurface = { clipId, view -> viewModel.playbackEngine.bindOverlaySurface(clipId, view) },
+          liveLook = livePreviewLook,
+          compositorEngine = compositorEngine,
           isPrimarySurface = false,
           onToggleFullscreen = { isFullscreenPreview = false },
           onAddMedia = safeLaunchMediaPicker,
           modifier = Modifier.fillMaxSize()
         )
+
+        if (trackingUiState.shouldShowDiagnostics(activeTab == EditorToolbarTab.MOTION_TRACKING)) {
+          val activeTrackClip = viewModel.getSelectedVideoClip()
+          com.example.ui.components.tracking.MotionTrackingPreviewOverlay(
+            uiState = trackingUiState,
+            sourceTimeUs = (activeTrackClip?.timelineToSourceMs(currentPosMs) ?: currentPosMs) * 1000L,
+            videoWidth = activeTrackClip?.width ?: 0,
+            videoHeight = activeTrackClip?.height ?: 0,
+            naturalRotation = activeTrackClip?.naturalRotation ?: 0,
+            canvasAspect = aspectRatio.ratio,
+            interactive = activeTab == EditorToolbarTab.MOTION_TRACKING,
+            onUpdateRegion = { viewModel.updateTrackingRegion(it) },
+            onSelectDetection = { viewModel.selectLiveDetection(it) },
+            onAttach = { viewModel.attachTrackingToLayer(it) },
+            modifier = Modifier.fillMaxSize()
+          )
+        }
 
         // Top bar overlay
         Row(
@@ -1694,6 +1848,13 @@ fun VideoPreviewSurface(
   onGetOverlayPlayer: ((String) -> ExoPlayer?)? = null,
   /** Overlay clips whose ExoPlayer exists (observable so the video layer appears with the player). */
   overlayPlayerIds: Set<String> = emptySet(),
+  onBindOverlaySurface: ((String, android.view.TextureView) -> Unit)? = null,
+  liveLook: LivePreviewLook? = null,
+  /**
+   * Set while the GPU compositor draws the picture: it replaces the player layer, the Compose
+   * effects layer and the overlay media. Text, stickers and edit handles are still drawn here.
+   */
+  compositorEngine: com.example.engine.playback.VideoPlaybackEngine? = null,
   /** The inline preview owns the player surface; a fullscreen dialog surface is secondary. */
   isPrimarySurface: Boolean = true,
   onToggleFullscreen: (() -> Unit)? = null,
@@ -1771,6 +1932,20 @@ fun VideoPreviewSurface(
     }
   }
 
+  val transitionEvaluator = remember { com.example.engine.timeline.TimelineEvaluator() }
+  val transitionPose = remember(timeline, currentPosMs, activeClip?.id) {
+    val transition = transitionEvaluator.evaluate(timeline, currentPosMs).activeTransition
+    if (transition == null || activeClip == null) {
+      null
+    } else {
+      com.example.engine.composition.TransitionPreviewMotion.resolve(
+        transition.type,
+        transition.progress,
+        incoming = activeClip.id == transition.clipAfter.id
+      )
+    }
+  }
+
   // Keyframe calculations
   val clipTransform = remember(activeClip, currentPosMs) {
     if (activeClip != null) {
@@ -1779,12 +1954,24 @@ fun VideoPreviewSurface(
     } else null
   }
 
+  val liveApplies = PreviewLookPolicy.appliesTo(liveLook, activeClip?.id)
+  val previewAdjustments = if (liveApplies && liveLook != null) {
+    liveLook.adjustments
+  } else {
+    activeClip?.adjustments ?: timeline.adjustments
+  }
+  val previewFilter = if (liveApplies && liveLook != null) {
+    liveLook.filter
+  } else {
+    activeClip?.filter ?: timeline.filter
+  }
+
   // Color Matrix for video adjustments, filter presets, and active color effects matching export pipeline
-  val androidCombinedMatrix = remember(timeline.adjustments, activeClip?.adjustments, timeline.filter, activeClip?.filter, activeEffects, currentPosMs) {
+  val androidCombinedMatrix = remember(previewAdjustments, previewFilter, timeline.filter, activeEffects, currentPosMs) {
     val baseMatrix = com.example.engine.composition.ColorFilterGenerator.createCombinedMatrix(
-      activeClip?.adjustments ?: timeline.adjustments,
+      previewAdjustments,
       timeline.filter,
-      activeClip?.filter
+      previewFilter
     )
     val resultMatrix = android.graphics.ColorMatrix(baseMatrix)
     if (activeEffects.isNotEmpty()) {
@@ -1866,7 +2053,9 @@ fun VideoPreviewSurface(
           }
       ) {
         // Background Video / Image Layer
-        if (activeClip != null) {
+        if (compositorEngine != null) {
+          com.example.ui.components.player.PreviewCompositorView(compositorEngine, Modifier.fillMaxSize())
+        } else if (activeClip != null) {
           Box(
             modifier = Modifier
               .fillMaxSize()
@@ -1877,22 +2066,42 @@ fun VideoPreviewSurface(
                 val baseTransX = (clipTransform?.posX ?: 0f) * size.width
                 val baseTransY = (clipTransform?.posY ?: 0f) * size.height
                 val baseAlpha = clipTransform?.opacity ?: 1f
+                val pose = transitionPose
 
-                scaleX = baseScaleX * effectMotion.scaleX
-                scaleY = baseScaleY * effectMotion.scaleY
-                rotationZ = baseRot + effectMotion.rotation
-                translationX = baseTransX + effectMotion.translationX * size.width
-                translationY = baseTransY + effectMotion.translationY * size.height
-                alpha = (baseAlpha * effectMotion.alpha).coerceIn(0f, 1f)
+                scaleX = baseScaleX * effectMotion.scaleX * (pose?.scale ?: 1f)
+                scaleY = baseScaleY * effectMotion.scaleY * (pose?.scale ?: 1f)
+                rotationZ = baseRot + effectMotion.rotation + (pose?.rotationDeg ?: 0f)
+                translationX = baseTransX + effectMotion.translationX * size.width + (pose?.translateX ?: 0f) * size.width
+                translationY = baseTransY + effectMotion.translationY * size.height + (pose?.translateY ?: 0f) * size.height
+                alpha = (baseAlpha * effectMotion.alpha * (pose?.opacity ?: 1f)).coerceIn(0f, 1f)
+              }
+              .drawWithContent {
+                val pose = transitionPose
+                if (pose?.clipStart != null && pose.clipEnd != null) {
+                  clipRect(
+                    left = pose.clipStart * size.width,
+                    top = 0f,
+                    right = pose.clipEnd * size.width,
+                    bottom = size.height
+                  ) {
+                    this@drawWithContent.drawContent()
+                  }
+                } else {
+                  drawContent()
+                }
               },
             contentAlignment = Alignment.Center
           ) {
-            val isRealPlayable = remember(activeClip.uri) {
-              MediaRelinkManager.isRealPlayableMedia(context, activeClip.uri)
-            }
-            if (activeClip.isVideo && isRealPlayable && player != null && !isMainVideoTrackHidden) {
+            // Always attach the TextureView for a video clip that has a player. Gating on a
+            // remembered isRealPlayableMedia() check left reopened projects without a surface
+            // (black picture, no audio) even after the clip URI was hydrated to a local file.
+            if (activeClip.isVideo && player != null && !isMainVideoTrackHidden) {
               val clipRot = if (activeClip.naturalRotation != 0) activeClip.naturalRotation else activeClip.rotationDegrees
               val (clipW, clipH) = AspectRatio.resolveEffectiveDimensions(activeClip.width, activeClip.height, clipRot)
+              val videoFilterMatrix = remember(previewAdjustments, previewFilter) {
+                PreviewDisplayFilter.matrixFor(previewAdjustments, previewFilter)
+              }
+              key(player) {
               AndroidView(
                 factory = { ctx ->
                   android.view.TextureView(ctx).apply {
@@ -1918,6 +2127,7 @@ fun VideoPreviewSurface(
                       applyTextureViewAspectFit(this, clipW, clipH)
                     }
                     applyTextureViewAspectFit(this, clipW, clipH)
+                    PreviewDisplayFilter.apply(this, videoFilterMatrix)
                   }
                 },
                 update = { tv ->
@@ -1926,6 +2136,7 @@ fun VideoPreviewSurface(
                   // without any surface, frozen on its last frame).
                   PreviewVideoSurfaceRegistry.attach(player, tv, isPrimarySurface)
                   applyTextureViewAspectFit(tv, clipW, clipH)
+                  PreviewDisplayFilter.apply(tv, videoFilterMatrix)
                 },
                 onReset = { /* Preserve texture view across recompositions */ },
                 onRelease = { tv ->
@@ -1933,6 +2144,7 @@ fun VideoPreviewSurface(
                 },
                 modifier = Modifier.fillMaxSize()
               )
+              }
             } else if (isMainVideoTrackHidden) {
               // Video track hidden: no picture, but the player keeps running so its audio
               // stays in the mix exactly like the export pipeline does it.
@@ -1950,6 +2162,14 @@ fun VideoPreviewSurface(
                 currentPosMs = currentPosMs,
                 colorFilter = combinedColorFilter,
                 modifier = Modifier.fillMaxSize()
+              )
+            }
+            val flash = transitionPose?.flash ?: 0f
+            if (flash > 0.01f) {
+              Box(
+                modifier = Modifier
+                  .fillMaxSize()
+                  .background(Color.White.copy(alpha = (flash * 0.85f).coerceIn(0f, 1f)))
               )
             }
           }
@@ -2000,7 +2220,7 @@ fun VideoPreviewSurface(
         }
 
         // Active Visual Effects Overlay (procedural shaders, flares, sparks, scanlines, glitch, wings, grids)
-        if (activeEffects.isNotEmpty()) {
+        if (compositorEngine == null && activeEffects.isNotEmpty()) {
           androidx.compose.foundation.Canvas(
             modifier = Modifier.fillMaxSize()
           ) {
@@ -2040,6 +2260,10 @@ fun VideoPreviewSurface(
           onEditText = onEditText,
           getOverlayPlayer = onGetOverlayPlayer,
           overlayPlayerIds = overlayPlayerIds,
+          renderOverlayMedia = compositorEngine == null,
+          onBindOverlaySurface = onBindOverlaySurface,
+          timeline = timeline,
+          liveLook = liveLook,
           modifier = Modifier.fillMaxSize()
         )
 
@@ -2641,13 +2865,8 @@ private fun EditorBottomToolbar(
   viewModel: StudioViewModel
 ) {
   if (isEffectsToolsOpen) {
-    // Dedicated Effects Sub-Navigation:
-    // Replaces the previous main editor bottom navigation completely when "Effects" is selected!
-    // Contains exactly 4 horizontally arranged options:
-    // 1. Video Effects
-    // 2. Body Effects
-    // 3. Photo Effects
-    // 4. AI Effects
+    // Dedicated Effects sub-navigation. Categories come from the live registry
+    // (Video / Body / Face / Photo / AI when they have real effects).
     EffectsToolsBottomBar(
       activeCategory = activeEffectsCategoryModal,
       onSelectCategory = onSelectEffectsCategory,
@@ -3346,12 +3565,8 @@ private fun SyntheticClipPreview(
   }
 
   val (startColor, endColor, iconEmoji) = remember(clip.id, clip.name, stockItem) {
-    if (stockItem != null) {
+    if (stockItem != null && stockItem.uri.isNotBlank()) {
       Triple(Color(stockItem.gradientStart), Color(stockItem.gradientEnd), stockItem.iconEmoji)
-    } else if (clip.name.contains("Mountain", ignoreCase = true) || clip.name.contains("Stream", ignoreCase = true) || clip.uri.contains("nature", ignoreCase = true)) {
-      Triple(Color(0xFF0077B6), Color(0xFF00B4D8), "🏔️")
-    } else if (clip.name.contains("Skyline", ignoreCase = true) || clip.name.contains("Sunset", ignoreCase = true) || clip.name.contains("Golden", ignoreCase = true) || clip.uri.contains("urban", ignoreCase = true)) {
-      Triple(Color(0xFFE85D04), Color(0xFF7209B7), "🌇")
     } else {
       Triple(Color(0xFF1E293B), Color(0xFF0F172A), "🎬")
     }

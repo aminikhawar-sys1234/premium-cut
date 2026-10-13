@@ -26,11 +26,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.engine.audio.AudioMediaDuration
+import com.example.engine.audio.synthesizeSpeechToFile
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StudioDark
 import com.example.ui.theme.StudioSurface
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.util.Locale
 
@@ -49,9 +53,6 @@ fun TextToAudioFullPanel(
     mutableStateOf("Welcome to this video! Today we explore amazing stories and creative effects.")
   }
 
-  // Active voice selection tab: "Voice Over" vs "AI Voices"
-  var mainCategoryTab by remember { mutableStateOf("Voice Over") }
-  // Sub-category under Voice Over: "All", "Urdu", "English", "Characters", "Other Languages"
   var subCategory by remember { mutableStateOf("All") }
 
   var selectedVoice by remember { mutableStateOf(TTSVoicesCatalog.VOICES.first()) }
@@ -77,18 +78,14 @@ fun TextToAudioFullPanel(
     }
   }
 
-  val filteredVoices = remember(mainCategoryTab, subCategory) {
-    if (mainCategoryTab == "AI Voices") {
-      TTSVoicesCatalog.VOICES.filter { it.isAi }
-    } else {
-      val base = TTSVoicesCatalog.VOICES.filter { !it.isAi }
-      when (subCategory) {
-        "Urdu" -> base.filter { it.id.startsWith("ur_") }
-        "English" -> base.filter { it.id.startsWith("en_us_") || it.id.startsWith("en_uk_") || it.id.startsWith("en_au_") }
-        "Characters" -> base.filter { it.id.contains("char") }
-        "Other Languages" -> base.filter { it.id.startsWith("ar_") || it.id.startsWith("hi_") || it.id.startsWith("es_") }
-        else -> base
-      }
+  val filteredVoices = remember(subCategory) {
+    val base = TTSVoicesCatalog.VOICES
+    when (subCategory) {
+      "Urdu" -> base.filter { it.id.startsWith("ur_") }
+      "English" -> base.filter { it.id.startsWith("en_us_") || it.id.startsWith("en_uk_") || it.id.startsWith("en_au_") }
+      "Characters" -> base.filter { it.id.contains("char") }
+      "Other Languages" -> base.filter { it.id.startsWith("ar_") || it.id.startsWith("hi_") || it.id.startsWith("es_") }
+      else -> base
     }
   }
 
@@ -244,60 +241,26 @@ fun TextToAudioFullPanel(
         }
       }
 
-      // Voice Selection Category Tabs: "Voice Over" & "AI Voices"
       item {
-        Row(
-          modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .background(Color(0xFF151C2C))
-            .padding(3.dp)
+        LazyRow(
+          horizontalArrangement = Arrangement.spacedBy(6.dp),
+          modifier = Modifier.fillMaxWidth()
         ) {
-          listOf("Voice Over", "AI Voices").forEach { tab ->
-            val isSelected = mainCategoryTab == tab
-            Box(
-              modifier = Modifier
-                .weight(1f)
-                .clip(RoundedCornerShape(8.dp))
-                .background(if (isSelected) CyanAccent else Color.Transparent)
-                .clickable { mainCategoryTab = tab }
-                .padding(vertical = 8.dp),
-              contentAlignment = Alignment.Center
+          items(listOf("All", "Urdu", "English", "Characters", "Other Languages")) { cat ->
+            val isSelected = subCategory == cat
+            Surface(
+              shape = RoundedCornerShape(14.dp),
+              color = if (isSelected) Color(0xFF1B2E4B) else Color(0xFF151C2C),
+              border = BorderStroke(1.dp, if (isSelected) CyanAccent else Color(0xFF1E283E)),
+              modifier = Modifier.clickable { subCategory = cat }
             ) {
               Text(
-                text = tab,
-                color = if (isSelected) Color.Black else Color.White,
-                fontSize = 12.sp,
-                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Medium
+                text = cat,
+                color = if (isSelected) CyanAccent else Color(0xFFC4CBD8),
+                fontSize = 11.sp,
+                fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
               )
-            }
-          }
-        }
-      }
-
-      // Sub-category row for Voice Over
-      if (mainCategoryTab == "Voice Over") {
-        item {
-          LazyRow(
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.fillMaxWidth()
-          ) {
-            items(listOf("All", "Urdu", "English", "Characters", "Other Languages")) { cat ->
-              val isSelected = subCategory == cat
-              Surface(
-                shape = RoundedCornerShape(14.dp),
-                color = if (isSelected) Color(0xFF1B2E4B) else Color(0xFF151C2C),
-                border = BorderStroke(1.dp, if (isSelected) CyanAccent else Color(0xFF1E283E)),
-                modifier = Modifier.clickable { subCategory = cat }
-              ) {
-                Text(
-                  text = cat,
-                  color = if (isSelected) CyanAccent else Color(0xFFC4CBD8),
-                  fontSize = 11.sp,
-                  fontWeight = if (isSelected) FontWeight.Bold else FontWeight.Normal,
-                  modifier = Modifier.padding(horizontal = 12.dp, vertical = 5.dp)
-                )
-              }
             }
           }
         }
@@ -419,27 +382,35 @@ fun TextToAudioFullPanel(
               Toast.makeText(context, "Please enter some text first", Toast.LENGTH_SHORT).show()
               return@Button
             }
+            val engine = ttsEngine
+            if (!ttsReady || engine == null) {
+              Toast.makeText(context, "Speech engine is still initializing", Toast.LENGTH_SHORT).show()
+              return@Button
+            }
 
             isGenerating = true
             coroutineScope.launch {
               try {
-                val wordCount = inputText.trim().split(Regex("\\s+")).size.coerceAtLeast(1)
-                val estimatedDurationMs = ((wordCount / (2.5f * speedVal)) * 1000L).toLong().coerceIn(2000L, 60000L)
-
                 val outputFile = File(context.filesDir, "tts_voice_${System.currentTimeMillis()}.wav")
-                ttsEngine?.let { engine ->
-                  engine.language = selectedVoice.locale
-                  engine.setPitch(pitchVal)
-                  engine.setSpeechRate(speedVal)
-                  engine.synthesizeToFile(inputText, null, outputFile, "tts_${System.currentTimeMillis()}")
+                engine.language = selectedVoice.locale
+                engine.setPitch(pitchVal)
+                engine.setSpeechRate(speedVal)
+                val synthesized = synthesizeSpeechToFile(engine, inputText, outputFile)
+                if (!synthesized) {
+                  throw IllegalStateException("Speech synthesis did not produce an audio file")
                 }
 
-                // Generate waveform
-                val waveform = com.example.engine.audio.SoundEffectsCatalog.generateWaveform(selectedVoice.name, 36)
+                val durationMs = withContext(Dispatchers.IO) {
+                  AudioMediaDuration.durationMs(context, outputFile.absolutePath)
+                } ?: throw IllegalStateException("Synthesized speech duration could not be read")
+
+                val waveform = withContext(Dispatchers.IO) {
+                  viewModel.audioEngine.extractWaveformFromFile(outputFile)
+                }
 
                 viewModel.timelineEngine.addAudioClip(
                   title = "Voice: ${selectedVoice.name}",
-                  durationMs = estimatedDurationMs,
+                  durationMs = durationMs,
                   uri = outputFile.absolutePath,
                   waveformData = waveform
                 )
@@ -453,6 +424,7 @@ fun TextToAudioFullPanel(
               }
             }
           },
+          enabled = !isGenerating && ttsReady,
           modifier = Modifier
             .fillMaxWidth()
             .height(46.dp),

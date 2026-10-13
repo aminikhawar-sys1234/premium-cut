@@ -1,5 +1,6 @@
 package com.example.engine.export
 
+import com.example.domain.model.ClipKeyframe
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -82,6 +83,23 @@ class AudioExportWindowTest {
     assertEquals(20_000L, end)
     assertTrue("must cover the played span, got start=${start}ms", start <= 16_000L)
     assertTrue("and not decode the whole file, got start=${start}ms", start >= 15_000L)
+  }
+
+  @Test
+  fun volumeKeyframeReplacesStaticVolume() {
+    val keyed = track(durationMs = 1_000L).copy(
+      volume = 1f,
+      keyframes = listOf(ClipKeyframe(timeMs = 0L, volume = 0.5f))
+    )
+    assertEquals(0.5f, exportMixLinearGain(keyed, 0, 48_000, 48_000), 0.001f)
+  }
+
+  @Test
+  fun staticVolumeKeepsLinearFadeWhenThereAreNoKeyframes() {
+    val fading = track(durationMs = 1_000L).copy(volume = 0.8f, fadeInMs = 500L)
+    assertEquals(0f, exportMixLinearGain(fading, 0, 48_000, 48_000), 0.001f)
+    // 250 ms into a 500 ms fade is half the envelope: 0.8 * 0.5.
+    assertEquals(0.4f, exportMixLinearGain(fading, 12_000, 48_000, 48_000), 0.02f)
   }
 
   @Test

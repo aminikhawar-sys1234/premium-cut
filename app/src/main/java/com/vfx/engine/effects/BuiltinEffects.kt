@@ -2,11 +2,11 @@ package com.vfx.engine.effects
 
 import com.vfx.engine.core.effect.EffectCategory
 import com.vfx.engine.core.effect.EffectDefinition
-import com.vfx.engine.core.effect.EffectRegistry
+import com.vfx.engine.core.registry.EffectRegistry
 
 /**
- * Registers all 30+ production GPU effects into an [EffectRegistry].
- * Call once at app startup: `BuiltinEffects.registerAll(registry)`
+ * Registers every built-in GPU effect definition into an [EffectRegistry].
+ * The Effects tools catalog picks a curated subset; the VFX stack panel lists all of them.
  */
 object BuiltinEffects {
 
@@ -19,11 +19,13 @@ object BuiltinEffects {
             addAll(StylizeEffects.all())
             addAll(LutEffects.all())
             addAll(TemporalEffects.all())
-        }
+        }.distinctBy { it.id }
     }
 
     fun registerAll(registry: EffectRegistry) {
-        ALL.forEach { registry.register(it) }
+        ALL.forEach { def ->
+            if (!registry.hasEffect(def.id)) registry.registerEffect(def)
+        }
     }
 
     fun byCategory(category: EffectCategory): List<EffectDefinition> =

@@ -7,6 +7,7 @@ import com.example.engine.KeyframeInterpolator
 import com.example.engine.composition.*
 import com.example.engine.composition.ColorFilterGenerator
 import com.example.engine.composition.VideoEffectRenderer
+import com.example.engine.controller.PreviewMixPolicy
 import com.example.engine.text.TextLayerRenderer
 
 /**
@@ -30,7 +31,6 @@ class TimelineEvaluator {
     val isTextHidden = timeline.trackSettings[TrackType.TEXT]?.isHidden == true
     val isStickerHidden = timeline.trackSettings[TrackType.STICKER]?.isHidden == true
     val isEffectHidden = timeline.trackSettings[TrackType.EFFECT]?.isHidden == true
-    val isAudioHidden = timeline.trackSettings[TrackType.AUDIO]?.isHidden == true
 
     // 1. Main Video Clip
     val activeClip = if (!isVideoHidden) {
@@ -104,7 +104,9 @@ class TimelineEvaluator {
             posY = kf.posY,
             scale = kf.scale,
             rotation = kf.rotation,
-            opacity = kf.opacity
+            opacity = kf.opacity,
+            trackBindJson = null,
+            keyframes = emptyList()
           )
         } else clip
         val state = TextLayerRenderer.evaluateAnimation(effectiveClip, posMs)
@@ -159,14 +161,13 @@ class TimelineEvaluator {
       }
     } else emptyList()
 
-    // 7. Active Audio Clips (respecting track mute/solo)
-    val hasSolo = timeline.audioClips.any { it.isSolo }
-    val activeAudios = if (!isAudioHidden) {
-      timeline.audioClips.filter { clip ->
-        !clip.isHidden && (!hasSolo || clip.isSolo) &&
-          posMs >= clip.timelineStartMs && posMs < clip.timelineStartMs + clip.durationMs
-      }
-    } else emptyList()
+    // 7. Active Audio Clips (track mute/solo — hide does not silence, matching export mix)
+    val hasClipSolo = timeline.audioClips.any { it.isSolo }
+    val activeAudios = timeline.audioClips.filter { clip ->
+      !clip.isHidden &&
+        PreviewMixPolicy.audioClipGain(clip, timeline, hasClipSolo) > 0f &&
+        posMs >= clip.timelineStartMs && posMs < clip.timelineStartMs + clip.durationMs
+    }
 
     // 8. Adjustments & Color Filters
     val baseMatrix = ColorFilterGenerator.createCombinedMatrix(activeClip.effectiveAdjustments(timeline), FilterSettings(), activeClip?.filter)
@@ -198,7 +199,15 @@ class TimelineEvaluator {
       activeClipTransform = activeClipTransform,
       colorMatrix = colorMatrix,
       colorFilter = colorFilter,
-      activeMasks = activeClip?.mask?.let { mapOf(activeClip.id to it) } ?: emptyMap(),
+      activeMasks = activeClip?.let { clip ->
+        mapOf(
+          clip.id to com.example.engine.ai.OverlayTrackCodec.applyToMask(
+            clip.mask,
+            clip.motionTrackJson,
+            sourcePosMs * 1000L
+          )
+        )
+      } ?: emptyMap(),
       trackVisibility = timeline.trackSettings.mapValues { !it.value.isHidden },
       trackMute = timeline.trackSettings.mapValues { it.value.isMuted },
       trackSolo = timeline.trackSettings.mapValues { it.value.isSolo },

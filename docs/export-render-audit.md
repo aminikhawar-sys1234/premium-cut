@@ -144,6 +144,24 @@ For a fallback export the remaining work is the decode path itself: the clip has
 and the decoder error that precedes the "could not be decoded by hardware or software codecs"
 warning tells you which codec/stream combination to fix (that log is already emitted per clip).
 
+## Follow-up: preview and export disagreed about opacity, looks, and volume
+
+### Opacity was applied twice on the native compositor
+
+`NextGenGpuCompositionEngine` multiplied RGB by layer opacity and then used straight-alpha `SRC_ALPHA` blending. A PIP at 50% opacity painted at about 25% brightness. Premultiplied text and stickers need that RGB scale (`GL_ONE` blend); video does not. The shader now scales RGB only when the layer is premultiplied (`uPremultiply`). The Kotlin fallback compositor had the opposite bug: it turned blending off for the first video layer, so a faded clip (alpha already in the texture) still painted at full strength. It blends every layer.
+
+### Clip-local color and motion leaked onto other layers
+
+One color matrix, built from every active effect at the clip's static intensity, was uploaded for the main clip and every PIP. A look aimed at one clip now stays on that clip (adjustment layers with no target still apply everywhere), and the matrix uses the keyframed intensity.
+
+### Canvas fallback dropped keyframe opacity
+
+`VideoCompositionEngine.renderFrame` computed keyframe opacity and then set `paint.alpha = 255` whenever there was no transition, and several transitions replaced that alpha instead of scaling it. Transitions now scale the opacity that was already computed.
+
+### Volume envelopes never reached the mix
+
+`AudioExportProcessor` stored keyframes on each track and then mixed `track.volume` only. The export gain is now the interpolated envelope (keyframes replace the slider) times the linear fade and `gainDb`. The preview player uses the same envelope, including `gainDb`, which it used to ignore. Adding a volume keyframe no longer bakes the fade into the stored point (the fade is applied when the curve is drawn and when the mix runs). `getEffectiveAudioVolumeAt` / `getVideoClipAudioVolumeAt` no longer multiply the slider by an absolute keyframe level.
+
 ## Deliberately not changed (and why)
 
 1. **Decode/GPU pipelining (double-buffered decode).** The pipeline decodes frame *N+1* only after

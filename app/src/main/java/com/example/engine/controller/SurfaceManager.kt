@@ -87,6 +87,15 @@ class SurfaceManager(
 
   fun getLastValidFrame(): Bitmap? = lastValidFrame
 
+  /** Re-attaches the current Surface to a newly created player after session reset. */
+  fun rebind() {
+    val surface = activeSurface
+    if (surface != null && surface.isValid) {
+      isSurfaceAvailable = true
+      playbackController.setSurface(surface)
+    }
+  }
+
   fun release() {
     isSurfaceAvailable = false
     playbackController.clearSurface()

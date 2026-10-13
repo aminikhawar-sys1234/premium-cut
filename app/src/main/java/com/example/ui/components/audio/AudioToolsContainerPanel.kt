@@ -1,6 +1,5 @@
 package com.example.ui.components.audio
 
-import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -31,21 +30,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.example.engine.SelectedTrackElement
+import com.example.engine.audio.AudioMediaDuration
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.CyanAccent
 import com.example.ui.theme.StudioDark
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
-
-private fun selectedAudioCapableClipId(viewModel: StudioViewModel): String? {
-  return when (val sel = viewModel.timelineEngine.selectedElement.value) {
-    is SelectedTrackElement.Audio -> sel.clipId
-    is SelectedTrackElement.Video -> sel.clipId
-    is SelectedTrackElement.Overlay -> sel.clipId
-    else -> viewModel.timelineEngine.selectedClipIds.value.firstOrNull()
-  }
-}
 
 data class AudioMainToolItem(
   val id: String,
@@ -80,35 +72,30 @@ fun AudioToolsContainerPanel(
           val mime = context.contentResolver.getType(uri) ?: ""
           val isVideo = mime.startsWith("video/")
 
-          val audioPath: String
-          val clipTitle: String
-          var durationMs = 8000L
-
-          if (isVideo) {
-            val extracted = viewModel.audioEngine.extractAudioFromVideo(uri.toString())
-            audioPath = extracted?.absolutePath ?: uri.toString()
-            clipTitle = "Extracted Audio"
-          } else {
-            val fileName = "imported_audio_${System.currentTimeMillis()}.m4a"
-            val dest = File(context.filesDir, fileName)
-            context.contentResolver.openInputStream(uri)?.use { input ->
-              dest.outputStream().use { output -> input.copyTo(output) }
+          val (audioPath, clipTitle) = withContext(Dispatchers.IO) {
+            if (isVideo) {
+              val extracted = viewModel.audioEngine.extractAudioFromVideo(uri.toString())
+                ?: throw IllegalStateException("Could not extract audio from this video")
+              extracted.absolutePath to "Extracted Audio"
+            } else {
+              val dest = File(context.filesDir, "imported_audio_${System.currentTimeMillis()}.m4a")
+              context.contentResolver.openInputStream(uri)?.use { input ->
+                dest.outputStream().use { output -> input.copyTo(output) }
+              } ?: throw IllegalStateException("Could not read the selected audio file")
+              if (!dest.exists() || dest.length() == 0L) {
+                throw IllegalStateException("Imported audio file is empty")
+              }
+              dest.absolutePath to "Imported Audio"
             }
-            audioPath = dest.absolutePath
-            clipTitle = "Imported Audio"
           }
 
-          val mmr = MediaMetadataRetriever()
-          try {
-            mmr.setDataSource(context, Uri.fromFile(File(audioPath)))
-            val durStr = mmr.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)
-            if (durStr != null) durationMs = durStr.toLong()
-          } catch (ignored: Exception) {
-          } finally {
-            try { mmr.release() } catch (ignored: Exception) {}
-          }
+          val durationMs = withContext(Dispatchers.IO) {
+            AudioMediaDuration.durationMs(context, audioPath)
+          } ?: throw IllegalStateException("Could not read audio duration")
 
-          val waveform = viewModel.audioEngine.extractWaveformFromFile(File(audioPath))
+          val waveform = withContext(Dispatchers.IO) {
+            viewModel.audioEngine.extractWaveformFromFile(File(audioPath))
+          }
 
           viewModel.timelineEngine.addAudioClip(
             title = clipTitle,
@@ -293,16 +280,6 @@ fun AudioToolsContainerPanel(
             onConfirm = { enabled, level ->
               voiceEnhanceEnabled = enabled
               voiceEnhanceLevel = level
-              val targetClipId = selectedAudioCapableClipId(viewModel)
-              if (targetClipId != null) {
-                val currentFx = viewModel.timelineEngine.getClipAudioEffects(targetClipId) ?: com.example.domain.model.AudioEffectsSettings()
-                val updatedFx = currentFx.copy(
-                  noiseReductionDb = if (enabled) (level / 100f) * 20f else 0f,
-                  highGainDb = if (enabled) (level / 100f) * 4f else 0f,
-                  normalizeVolume = enabled
-                )
-                viewModel.timelineEngine.setClipAudioEffects(targetClipId, updatedFx)
-              }
               currentSubPanel = AudioSubPanel.RECORD
             },
             onClose = { currentSubPanel = AudioSubPanel.RECORD }
@@ -315,15 +292,6 @@ fun AudioToolsContainerPanel(
             currentSelectedEffect = activeVoiceEffect,
             onConfirm = { selected ->
               activeVoiceEffect = selected
-              val targetClipId = selectedAudioCapableClipId(viewModel)
-              if (targetClipId != null) {
-                val currentFx = viewModel.timelineEngine.getClipAudioEffects(targetClipId) ?: com.example.domain.model.AudioEffectsSettings()
-                val updatedFx = currentFx.copy(
-                  voiceEffect = selected?.voiceEffect ?: com.example.domain.model.VoiceEffect.NONE,
-                  pitchShiftSemitones = selected?.pitchShift ?: 0f
-                )
-                viewModel.timelineEngine.setClipAudioEffects(targetClipId, updatedFx)
-              }
               currentSubPanel = AudioSubPanel.RECORD
             },
             onClose = { currentSubPanel = AudioSubPanel.RECORD }

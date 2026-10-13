@@ -1,7 +1,6 @@
 package com.example.engine.composition.gpu
 
 import android.opengl.GLES20
-import android.opengl.GLES30
 import android.util.Log
 import com.ahstudio.face.deformation.FaceWarpMapper
 import com.ahstudio.face.deformation.FaceWarpRegistry
@@ -57,7 +56,7 @@ class FaceWarpStage {
     val prevProgram = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_CURRENT_PROGRAM, prevProgram, 0)
     val prevActive = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_ACTIVE_TEXTURE, prevActive, 0)
     val prevTex2d = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_TEXTURE_BINDING_2D, prevTex2d, 0)
-    val prevVao = IntArray(1); GLES30.glGetIntegerv(GLES30.GL_VERTEX_ARRAY_BINDING, prevVao, 0)
+    val prevVao = GlEsCompat.currentVao()
     val prevArrayBuf = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_ARRAY_BUFFER_BINDING, prevArrayBuf, 0)
     val blendWasOn = GLES20.glIsEnabled(GLES20.GL_BLEND)
     val depthWasOn = GLES20.glIsEnabled(GLES20.GL_DEPTH_TEST)
@@ -66,7 +65,7 @@ class FaceWarpStage {
     return try {
       fbo.setup(width, height)
       // The warp pass feeds its quad from client memory, which is only legal on the default VAO.
-      GLES30.glBindVertexArray(0)
+      GlEsCompat.bindVao(0)
       GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, 0)
       GLES20.glDisable(GLES20.GL_BLEND)
       GLES20.glDisable(GLES20.GL_DEPTH_TEST)
@@ -79,7 +78,7 @@ class FaceWarpStage {
       disabled = true
       srcTex
     } finally {
-      GLES30.glBindVertexArray(prevVao[0])
+      GlEsCompat.bindVao(prevVao)
       GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, prevArrayBuf[0])
       GLES20.glUseProgram(prevProgram[0])
       GLES20.glActiveTexture(prevActive[0])

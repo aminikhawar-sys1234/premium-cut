@@ -496,18 +496,18 @@ fun VolumeToolPanel(
 @Composable
 fun EffectsToolPanel(
   viewModel: StudioViewModel,
-  modifier: Modifier = Modifier
+  modifier: Modifier = Modifier,
+  category: com.example.engine.effects.registry.EffectCategory =
+    com.example.engine.effects.registry.EffectsAssetRegistry.populatedCategories()
+      .firstOrNull()
+      ?: com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS
 ) {
   com.example.ui.components.effects.EffectsCategoryPanel(
-    category = com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS,
+    category = category,
     viewModel = viewModel,
     onClose = { viewModel.setActiveToolbarTab(null) },
-    onApply = { effect ->
-      viewModel.applyCatalogEffect(effect, com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS)
-    },
-    onIntensity = { effect, amount ->
-      viewModel.applyCatalogEffect(effect, com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS, amount)
-    },
+    onApply = { effect -> viewModel.applyCatalogEffect(effect, category) },
+    onIntensity = { effect, amount -> viewModel.applyCatalogEffect(effect, category, amount) },
     modifier = modifier
   )
 }
@@ -971,7 +971,7 @@ fun CaptionsToolPanel(
         ) {
           CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp, color = CyanAccent)
           Text(
-            text = aiStatusMessage.ifBlank { "Gemini API analyzing audio track & generating captions..." },
+            text = aiStatusMessage.ifBlank { "Firebase speech engine analyzing audio and generating captions..." },
             style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary, fontWeight = FontWeight.SemiBold)
           )
         }
@@ -1139,7 +1139,7 @@ fun CaptionsToolPanel(
               Icon(Icons.Default.Subtitles, contentDescription = null, tint = TextSecondary, modifier = Modifier.size(32.dp))
               Spacer(modifier = Modifier.height(6.dp))
               Text("No captions on timeline yet.", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))
-              Text("Tap 'Generate Captions' above to transcribe audio with Gemini API.", style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent))
+              Text("Tap 'Generate Captions' above to transcribe audio with the Firebase speech engine.", style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent))
             }
           }
         } else {

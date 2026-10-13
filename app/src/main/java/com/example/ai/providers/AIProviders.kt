@@ -1,18 +1,7 @@
 package com.example.ai.providers
 
-import android.content.Context
-import android.graphics.Bitmap
 import com.example.domain.model.TextClip
-import com.example.domain.model.Timeline
 import java.io.File
-
-data class VideoHighlightSegment(
-  val title: String,
-  val startTimeMs: Long,
-  val endTimeMs: Long,
-  val score: Float,
-  val description: String
-)
 
 /**
  * SpeechToText provider interface.
@@ -39,18 +28,6 @@ interface TranslationProvider {
 typealias Translation = TranslationProvider
 
 /**
- * BackgroundRemoval provider interface.
- * Processes an actual bitmap or video frame and returns a transparent result or mask.
- */
-interface BackgroundRemovalProvider {
-  val isAvailable: Boolean
-  val providerName: String
-  suspend fun removeBackground(inputBitmap: Bitmap): Result<Bitmap>
-  suspend fun generateAlphaMask(inputBitmap: Bitmap): Result<Bitmap>
-}
-typealias BackgroundRemoval = BackgroundRemovalProvider
-
-/**
  * NoiseReduction provider interface.
  * Processes real audio files to reduce background noise, hiss, and hum.
  */
@@ -71,17 +48,3 @@ interface TextToSpeechProvider {
   suspend fun synthesizeSpeech(text: String, pitch: Float, speed: Float): Result<File>
 }
 typealias TextToSpeech = TextToSpeechProvider
-
-/**
- * HighlightDetection provider interface.
- * Analyzes video timeline and content metadata to detect peak moments.
- */
-interface HighlightDetectionProvider {
-  val isAvailable: Boolean
-  val providerName: String
-  suspend fun detectHighlights(videoTitle: String, durationMs: Long): Result<List<VideoHighlightSegment>>
-  suspend fun analyzeHighlights(videoTitle: String, durationMs: Long): Result<List<VideoHighlightSegment>> = detectHighlights(videoTitle, durationMs)
-  suspend fun analyzeTimelineHighlights(timeline: Timeline): Result<List<VideoHighlightSegment>>
-}
-typealias HighlightDetection = HighlightDetectionProvider
-typealias HighlightAnalysisProvider = HighlightDetectionProvider

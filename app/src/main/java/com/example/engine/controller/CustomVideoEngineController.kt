@@ -1,7 +1,6 @@
 package com.example.engine.controller
 
 import android.content.Context
-import android.net.Uri
 import android.util.Log
 import android.view.SurfaceView
 import android.view.TextureView
@@ -11,6 +10,7 @@ import com.example.domain.model.Timeline
 import com.example.domain.model.TrackType
 import com.example.domain.model.VideoClip
 import com.example.engine.composition.VideoCompositionEngine
+import com.example.engine.media.MediaPlayableUri
 import com.example.engine.media.MediaRelinkManager
 import com.example.engine.playback.ProxyMediaEngine
 import kotlinx.coroutines.CoroutineScope
@@ -129,9 +129,17 @@ class CustomVideoEngineController(
 
     val clip = activeClip
     if (clip != null && clip.isVideo && isPlayableInPlayer(clip.uri)) {
-      ensureClipLoaded(clip)
+      val needsReload = try {
+        playbackController.player.mediaItemCount == 0 ||
+          playbackController.player.playbackState == Player.STATE_IDLE ||
+          playbackController.player.playerError != null
+      } catch (_: Throwable) {
+        true
+      }
+      ensureClipLoaded(clip, force = needsReload)
       playbackController.setPlaybackSpeed(clip.speed)
-      playbackController.setVolume(PreviewMixPolicy.clipGain(clip, timeline, TrackType.MAIN_VIDEO))
+      val rel = (currentPosMs - clip.timelineStartMs).coerceAtLeast(0L)
+      playbackController.setVolume(PreviewMixPolicy.clipGainAt(clip, timeline, TrackType.MAIN_VIDEO, rel))
       if (!isPlaying) {
         playbackController.seekTo(clip.timelineToSourceMs(currentPosMs), resumeAfter = false, exact = true)
       }
@@ -204,6 +212,11 @@ class CustomVideoEngineController(
     activeClip = timelineSyncManager.findClipAt(currentPosMs)
     timelineSyncManager.setActiveClip(activeClip)
 
+    val clip = activeClip
+    if (clip != null && clip.isVideo && isPlayableInPlayer(clip.uri)) {
+      ensureClipLoaded(clip, targetSeekMs = clip.timelineToSourceMs(currentPosMs), force = true)
+    }
+
     playbackController.playTimeline(currentPosMs)
     timelineSyncManager.startSyncLoop(currentPosMs)
     _engineState.value = _engineState.value.copy(
@@ -241,7 +254,8 @@ class CustomVideoEngineController(
     if (nextClip != null && nextClip.isVideo && isPlayableInPlayer(nextClip.uri)) {
       ensureClipLoaded(nextClip)
       playbackController.setPlaybackSpeed(nextClip.speed)
-      playbackController.setVolume(PreviewMixPolicy.clipGain(nextClip, currentTimeline, TrackType.MAIN_VIDEO))
+      val rel = (nextTimelinePos - nextClip.timelineStartMs).coerceAtLeast(0L)
+      playbackController.setVolume(PreviewMixPolicy.clipGainAt(nextClip, currentTimeline, TrackType.MAIN_VIDEO, rel))
       playbackController.seekTo(
         nextClip.timelineToSourceMs(nextTimelinePos),
         resumeAfter = resumeAfter && timelineSyncManager.isPlaying,
@@ -258,26 +272,38 @@ class CustomVideoEngineController(
     )
   }
 
-  private fun ensureClipLoaded(clip: VideoClip, targetSeekMs: Long = clip.sourceStartMs) {
-    val uriString = proxyMediaEngine.getProxyUri(clip)
-    if (uriString == loadedUri && playbackController.player.playbackState != Player.STATE_IDLE) {
+  private fun ensureClipLoaded(clip: VideoClip, targetSeekMs: Long = clip.sourceStartMs, force: Boolean = false) {
+    val uriString = MediaPlayableUri.resolvePlayableString(context, proxyMediaEngine.getProxyUri(clip))
+    val playable = MediaPlayableUri.toExoPlayerUri(context, uriString)
+    val key = playable.toString()
+    val playerEmpty = try { playbackController.player.mediaItemCount == 0 } catch (_: Throwable) { true }
+    val idle = try { playbackController.player.playbackState == Player.STATE_IDLE } catch (_: Throwable) { true }
+    if (!force && key == loadedUri && !idle && !playerEmpty) {
       loadedClipId = clip.id
       return
     }
     loadedClipId = clip.id
-    loadedUri = uriString
-    val uri = try { Uri.parse(uriString) } catch (e: Exception) {
-      Log.e(TAG, "Invalid clip URI: $uriString", e)
-      return
-    }
+    loadedUri = key
     _engineState.value = _engineState.value.copy(playbackState = EnginePlaybackState.PREPARING)
-    playbackController.loadMedia(uri, targetSeekMs.coerceAtLeast(0L), autoPlay = false)
+    playbackController.loadMedia(playable, targetSeekMs.coerceAtLeast(0L), autoPlay = false)
   }
 
   private fun isPlayableInPlayer(uriString: String): Boolean = MediaRelinkManager.isRealPlayableMedia(context, uriString)
 
   private fun handlePlayerError(error: PlaybackException) {
     Log.e(TAG, "Player exception: ${error.errorCodeName}: ${error.message}", error)
+    val processingFailure = error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSING_FAILED ||
+      error.errorCode == PlaybackException.ERROR_CODE_VIDEO_FRAME_PROCESSOR_INIT_FAILED
+    if (processingFailure) {
+      // Shader / GPU look failed: keep the loaded clip and last valid picture.
+      // VideoPlaybackEngine rolls the effect list back; clearing the URI here would
+      // reload the decoder and produce a black preview.
+      _engineState.value = _engineState.value.copy(
+        error = error.message ?: error.errorCodeName,
+        decoderState = decoderManager.decoderState
+      )
+      return
+    }
     decoderManager.handleCodecError(error)
     loadedClipId = null
     loadedUri = null
@@ -289,6 +315,29 @@ class CustomVideoEngineController(
     _engineState.value = _engineState.value.copy(error = null, decoderState = decoderManager.decoderState)
     activeClip?.let(::ensureClipLoaded)
     seekTo(currentPosMs)
+  }
+
+  /**
+   * Completely releases the previous ExoPlayer / MediaCodec / VideoFrameProcessor chain
+   * so opening a new project cannot inherit a deadlocked decoder surface.
+   */
+  fun resetPlaybackSession() {
+    timelineSyncManager.stopSyncLoop()
+    loadedClipId = null
+    loadedUri = null
+    currentPosMs = 0L
+    currentTimeline = Timeline()
+    activeClip = null
+    decoderManager.reset()
+    playbackController.resetPlaybackSession()
+    surfaceManager.rebind()
+    _engineState.value = _engineState.value.copy(
+      playbackState = EnginePlaybackState.IDLE,
+      isPlaying = false,
+      error = null,
+      decoderState = decoderManager.decoderState
+    )
+    Log.i(TAG, "Playback session reset; player recreated")
   }
 
   fun release() {

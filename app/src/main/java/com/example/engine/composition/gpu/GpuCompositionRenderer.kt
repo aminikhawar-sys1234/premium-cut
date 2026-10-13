@@ -11,11 +11,14 @@ import com.example.domain.model.*
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
 import com.example.engine.composition.ComposedFrame
+import com.example.engine.composition.TransitionPreviewMotion
 import com.example.engine.composition.ComposedOverlay
 import com.example.engine.composition.ComposedSticker
 import com.example.engine.composition.ComposedText
+import com.example.engine.composition.StickerDisplayMetrics
 import com.example.engine.composition.StickerLayerRenderer
 import com.example.engine.composition.VideoEffectRenderer
+import com.example.engine.effects.FilterCatalog
 import com.example.engine.text.Text3DGlRenderer
 import com.example.engine.text.TextLayerRenderer
 import java.nio.ByteBuffer
@@ -277,6 +280,8 @@ class GpuCompositionRenderer(private val context: Context) {
     mainTexMatrix: FloatArray? = null,
     overlayTextures: Map<String, Int> = emptyMap(),
     overlayTexMatrices: Map<String, FloatArray> = emptyMap(),
+    /** Actual texture type per overlay. Absent entries keep the old guess (a video clip is OES). */
+    overlayIsOes: Map<String, Boolean> = emptyMap(),
     viewportWidth: Int,
     viewportHeight: Int,
     timelineAdjustments: VideoAdjustments = VideoAdjustments(),
@@ -311,12 +316,12 @@ class GpuCompositionRenderer(private val context: Context) {
 
     val nativeLayers = mutableListOf<NativeLayer>()
 
-    val fxColorMatrix = if (frame.activeEffects.isNotEmpty()) {
-      VideoEffectRenderer.calculateEffectColorMatrix(
-        frame.activeEffects.map { it.clip },
-        frame.timelinePosMs
-      )
-    } else null
+    // Clip-local looks stay on their target. A thermal grade on the main clip must not
+    // recolor a PIP, and keyframed intensity (not the clip's static slider) is what is drawn.
+    val fxColorMatrix = VideoEffectRenderer.calculateEffectColorMatrix(
+      effectClipsFor(frame, frame.activeClip?.id),
+      frame.timelinePosMs
+    )
 
     // 1. Process Main Base Video Clip
     // When both sides of an active transition are supplied (export path), render it with the
@@ -469,7 +474,7 @@ class GpuCompositionRenderer(private val context: Context) {
       val overlay = frame.activeOverlays[i]
       val overlayTexId = overlayTextures[overlay.clip.id]
       if (overlayTexId != null && overlayTexId > 0) {
-        val isOvOes = overlay.clip.isVideo
+        val isOvOes = overlayIsOes[overlay.clip.id] ?: overlay.clip.isVideo
         val ovRawTexId = processOverlayVideoTo2D(
           overlay = overlay,
           textureId = overlayTexId,
@@ -478,7 +483,10 @@ class GpuCompositionRenderer(private val context: Context) {
           viewportWidth = viewportWidth,
           viewportHeight = viewportHeight,
           chromaKey = chromaKey,
-          effectColorMatrix = fxColorMatrix,
+          effectColorMatrix = VideoEffectRenderer.calculateEffectColorMatrix(
+            effectClipsFor(frame, overlay.clip.id),
+            frame.timelinePosMs
+          ),
           timelinePosMs = frame.timelinePosMs
         )
 
@@ -538,7 +546,7 @@ class GpuCompositionRenderer(private val context: Context) {
           val flipX = if (overlay.clip.flipHorizontal) -overlay.clip.cropScale else overlay.clip.cropScale
           val flipY = if (overlay.clip.flipVertical) -overlay.clip.cropScale else overlay.clip.cropScale
 
-          val totalRot = ((ovNaturalRot.toFloat() + overlay.clip.rotationDegrees.toFloat() + overlay.rotation) % 360f + 360f) % 360f
+          val totalRot = ((ovNaturalRot.toFloat() + overlay.rotation) % 360f + 360f) % 360f
           val isTransposed = (totalRot == 90f || totalRot == 270f)
 
           val baseScaleX = ovScreenFitX * overlay.scaleX * 0.5f * flipX
@@ -549,7 +557,11 @@ class GpuCompositionRenderer(private val context: Context) {
 
           val ovMatrix = FloatArray(16)
           Matrix.setIdentityM(ovMatrix, 0)
-          Matrix.translateM(ovMatrix, 0, overlay.clip.cropOffsetX + overlay.posX, -(overlay.clip.cropOffsetY + overlay.posY), 0f)
+          val (ovTx, ovTy) = com.example.engine.ai.TrackingCoordinateSpace.exportTranslationNdc(
+            overlay.posX,
+            overlay.posY
+          )
+          Matrix.translateM(ovMatrix, 0, ovTx, ovTy, 0f)
           Matrix.rotateM(ovMatrix, 0, com.example.engine.export.ExportOrientationPolicy.glRotationDegrees(totalRot), 0f, 0f, 1f)
           Matrix.scaleM(ovMatrix, 0, localScaleX, localScaleY, 1f)
 
@@ -601,10 +613,19 @@ class GpuCompositionRenderer(private val context: Context) {
       val cached = getOrCreateStickerTexture(sticker.clip, viewportWidth, viewportHeight)
       if (cached != null && cached.texId > 0) {
         cached.lastFrameUsed = currentFrameCounter
-        val aspect = viewportWidth.toFloat() / max(1, viewportHeight)
-        val stickerAspect = cached.width.toFloat() / max(1, cached.height)
-        val scaleY = ((cached.height.toFloat() / viewportHeight) * 2f * sticker.scale).coerceAtLeast(0.01f)
-        val scaleX = (scaleY * stickerAspect / aspect).coerceAtLeast(0.01f)
+        val isGraphicSticker = sticker.clip.badgeType == null && sticker.clip.elementId == null
+        val scaleX: Float
+        val scaleY: Float
+        if (isGraphicSticker) {
+          val ndc = StickerDisplayMetrics.ndcScale(viewportWidth, viewportHeight, sticker.scale)
+          scaleX = ndc.first
+          scaleY = ndc.second
+        } else {
+          val aspect = viewportWidth.toFloat() / max(1, viewportHeight)
+          val stickerAspect = cached.width.toFloat() / max(1, cached.height)
+          scaleY = ((cached.height.toFloat() / viewportHeight) * 2f * sticker.scale).coerceAtLeast(0.01f)
+          scaleX = (scaleY * stickerAspect / aspect).coerceAtLeast(0.01f)
+        }
 
         val stkMatrix = FloatArray(16)
         Matrix.setIdentityM(stkMatrix, 0)
@@ -777,12 +798,13 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uEffectParamHandle >= 0) GLES20.glUniform1f(uEffectParamHandle, 0f)
 
     val sortedLayers = layers.filter { it.isVisible && it.textureId > 0 }.sortedBy { it.zOrder }
+    val uPremultiplyHandle = GLES20.glGetUniformLocation(program2D, "uPremultiply")
 
-    for ((idx, layer) in sortedLayers.withIndex()) {
-      if (idx == 0 && (layer.type == NativeLayerType.BASE_VIDEO || layer.type == NativeLayerType.VIDEO)) {
-        GLES20.glDisable(GLES20.GL_BLEND)
-      } else {
-        GLES20.glEnable(GLES20.GL_BLEND)
+    for (layer in sortedLayers) {
+      // Always blend. Disabling blend on the first video layer wrote its RGB even when the
+      // texture alpha was a fade, so a transparent clip still painted at full strength.
+      GLES20.glEnable(GLES20.GL_BLEND)
+      run {
         when (layer.blendMode) {
           NativeBlendMode.ADDITIVE -> GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE)
           NativeBlendMode.MULTIPLY -> GLES20.glBlendFunc(GLES20.GL_DST_COLOR, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -796,6 +818,11 @@ class GpuCompositionRenderer(private val context: Context) {
             }
           }
         }
+      }
+      if (uPremultiplyHandle >= 0) {
+        val premul = layer.blendMode == NativeBlendMode.PREMULTIPLIED ||
+          layer.type == NativeLayerType.TEXT || layer.type == NativeLayerType.IMAGE_STICKER
+        GLES20.glUniform1f(uPremultiplyHandle, if (premul) 1f else 0f)
       }
 
       val mMatrix = FloatArray(16)
@@ -828,6 +855,15 @@ class GpuCompositionRenderer(private val context: Context) {
 
     GLES20.glDisable(GLES20.GL_BLEND)
   }
+
+  /**
+   * Effects that should hit [targetClipId]: project-wide adjustment layers (no target) plus
+   * looks aimed at that clip. Intensity is the keyframed value from the composed frame.
+   */
+  private fun effectClipsFor(frame: ComposedFrame, targetClipId: String?): List<com.example.domain.model.EffectClip> =
+    frame.activeEffects
+      .filter { it.clip.targetClipId == null || it.clip.targetClipId == targetClipId }
+      .map { it.clip.copy(intensity = it.intensity) }
 
   private fun processMainVideoTo2D(
     frame: ComposedFrame,
@@ -961,7 +997,7 @@ class GpuCompositionRenderer(private val context: Context) {
     }
 
     if (frame.activeEffects.isNotEmpty()) {
-      val motion = VideoEffectRenderer.calculateMotionTransform(frame.activeEffects.map { it.clip }, frame.timelinePosMs)
+      val motion = VideoEffectRenderer.calculateMotionTransform(effectClipsFor(frame, clip?.id), frame.timelinePosMs)
       Matrix.scaleM(mvpMatrix, 0, motion.scaleX, motion.scaleY, 1f)
       Matrix.rotateM(mvpMatrix, 0, -motion.rotation, 0f, 0f, 1f)
       Matrix.translateM(mvpMatrix, 0, motion.translationX * 2f, -motion.translationY * 2f, 0f)
@@ -978,75 +1014,36 @@ class GpuCompositionRenderer(private val context: Context) {
       }
     }
 
+    var transitionClipStart = -1f
+    var transitionClipEnd = -1f
     if (frame.activeTransition != null) {
       val tr = frame.activeTransition
       val p = tr.progress.coerceIn(0f, 1f)
-      when (tr.type) {
-        TransitionType.FADE, TransitionType.DISSOLVE -> {
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        TransitionType.SLIDE_LEFT -> {
-          Matrix.translateM(mvpMatrix, 0, -p * 2.0f, 0f, 0f)
-        }
-        TransitionType.SLIDE_RIGHT -> {
-          Matrix.translateM(mvpMatrix, 0, p * 2.0f, 0f, 0f)
-        }
-        TransitionType.PUSH_UP -> {
-          Matrix.translateM(mvpMatrix, 0, 0f, p * 2.0f, 0f)
-        }
-        TransitionType.ZOOM_IN -> {
-          val zoom = 1.0f + p * 0.6f
-          Matrix.scaleM(mvpMatrix, 0, zoom, zoom, 1f)
-          finalOpacity = (finalOpacity * (1.0f - p * 0.4f)).coerceIn(0f, 1f)
-        }
-        TransitionType.ZOOM_OUT -> {
-          val zoom = (1.0f - p * 0.4f).coerceAtLeast(0.1f)
-          Matrix.scaleM(mvpMatrix, 0, zoom, zoom, 1f)
-          finalOpacity = (finalOpacity * (1.0f - p * 0.4f)).coerceIn(0f, 1f)
-        }
-        TransitionType.SPIN -> {
-          Matrix.rotateM(mvpMatrix, 0, p * 360f, 0f, 0f, 1f)
-          val zoom = (1.0f - p * 0.5f).coerceAtLeast(0.1f)
-          Matrix.scaleM(mvpMatrix, 0, zoom, zoom, 1f)
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        TransitionType.BLUR, TransitionType.ZOOM_BLUR -> {
-          keyframeBlur = (keyframeBlur + (1.0f - kotlin.math.abs(p - 0.5f) * 2.0f) * 0.04f).coerceIn(0f, 1f)
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        TransitionType.FLASH -> {
-          val flashIntensity = (1.0f - kotlin.math.abs(p - 0.5f) * 2.0f).coerceIn(0f, 1f)
-          finalAdjustments = finalAdjustments.copy(
-            brightness = (finalAdjustments.brightness + flashIntensity * 0.8f).coerceIn(-1f, 1f),
-            exposure = (finalAdjustments.exposure + flashIntensity * 0.6f).coerceIn(-1f, 1f)
-          )
-          if (p >= 0.5f) finalOpacity = (finalOpacity * (1.0f - (p - 0.5f) * 2f)).coerceIn(0f, 1f)
-        }
-        TransitionType.GLITCH, TransitionType.GLITCH_WIPE -> {
-          if (p in 0.15f..0.85f) {
-            val jitterX = (transitionNoise(p, 1) * 0.1f)
-            val jitterY = (transitionNoise(p, 2) * 0.05f)
-            Matrix.translateM(mvpMatrix, 0, jitterX, jitterY, 0f)
-          }
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        TransitionType.WHIP_PAN -> {
-          Matrix.translateM(mvpMatrix, 0, -p * 2.5f, 0f, 0f)
-          keyframeBlur = (keyframeBlur + kotlin.math.sin(p * 3.14159f) * 0.03f).coerceIn(0f, 1f)
-        }
-        TransitionType.WIPE -> {
-          Matrix.translateM(mvpMatrix, 0, -p * 1.5f, 0f, 0f)
-          finalOpacity = (finalOpacity * (1.0f - p * 0.5f)).coerceIn(0f, 1f)
-        }
-        TransitionType.LIGHT_LEAK -> {
-          val flare = kotlin.math.sin(p * 3.14159f).coerceIn(0f, 1f)
-          finalAdjustments = finalAdjustments.copy(
-            brightness = (finalAdjustments.brightness + flare * 0.4f).coerceIn(-1f, 1f),
-            temperature = (finalAdjustments.temperature + flare * 0.5f).coerceIn(-1f, 1f)
-          )
-          finalOpacity = (finalOpacity * (1.0f - p)).coerceIn(0f, 1f)
-        }
-        else -> {}
+      val incoming = clip?.id == tr.clipAfter.id
+      val pose = TransitionPreviewMotion.resolve(tr.type, p, incoming)
+      finalOpacity = (finalOpacity * pose.opacity).coerceIn(0f, 1f)
+      if (pose.translateX != 0f || pose.translateY != 0f) {
+        Matrix.translateM(mvpMatrix, 0, pose.translateX * 2f, -pose.translateY * 2f, 0f)
+      }
+      if (pose.scale != 1f) {
+        Matrix.scaleM(mvpMatrix, 0, pose.scale, pose.scale, 1f)
+      }
+      if (pose.rotationDeg != 0f) {
+        Matrix.rotateM(mvpMatrix, 0, pose.rotationDeg, 0f, 0f, 1f)
+      }
+      if (pose.extraBlur > 0f) {
+        keyframeBlur = (keyframeBlur + pose.extraBlur).coerceIn(0f, 1f)
+      }
+      if (pose.brightness != 0f || pose.temperature != 0f || pose.flash > 0f) {
+        finalAdjustments = finalAdjustments.copy(
+          brightness = (finalAdjustments.brightness + pose.brightness + pose.flash * 0.85f).coerceIn(-1f, 1f),
+          exposure = (finalAdjustments.exposure + pose.flash * 0.5f).coerceIn(-1f, 1f),
+          temperature = (finalAdjustments.temperature + pose.temperature).coerceIn(-1f, 1f)
+        )
+      }
+      if (pose.clipStart != null && pose.clipEnd != null) {
+        transitionClipStart = pose.clipStart
+        transitionClipEnd = pose.clipEnd
       }
     }
 
@@ -1073,16 +1070,27 @@ class GpuCompositionRenderer(private val context: Context) {
       }
     )
 
-    if (useRowWarp) {
-      GLES20.glGetUniformLocation(program, "uOuterMatrix").let {
-        if (it >= 0) GLES20.glUniformMatrix4fv(it, 1, false, stabOuterMatrix, 0)
+    val scissorTransition = transitionClipStart >= 0f && transitionClipEnd > transitionClipStart
+    if (scissorTransition) {
+      val x = (transitionClipStart * viewportWidth).toInt().coerceIn(0, viewportWidth)
+      val right = (transitionClipEnd * viewportWidth).toInt().coerceIn(0, viewportWidth)
+      GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
+      GLES20.glScissor(x, 0, (right - x).coerceAtLeast(0), viewportHeight)
+    }
+    try {
+      if (useRowWarp) {
+        GLES20.glGetUniformLocation(program, "uOuterMatrix").let {
+          if (it >= 0) GLES20.glUniformMatrix4fv(it, 1, false, stabOuterMatrix, 0)
+        }
+        GLES20.glGetUniformLocation(program, "uRowQuad").let {
+          if (it >= 0) GLES20.glUniform2f(it, rowQuadX, rowQuadY)
+        }
+        drawGeometry(program, stabMeshBuffer, GLES20.GL_TRIANGLES, STAB_MESH_VERTEX_COUNT)
+      } else {
+        drawQuad(program)
       }
-      GLES20.glGetUniformLocation(program, "uRowQuad").let {
-        if (it >= 0) GLES20.glUniform2f(it, rowQuadX, rowQuadY)
-      }
-      drawGeometry(program, stabMeshBuffer, GLES20.GL_TRIANGLES, STAB_MESH_VERTEX_COUNT)
-    } else {
-      drawQuad(program)
+    } finally {
+      if (scissorTransition) GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
     }
     if (targetFbo === fboMain2D && clip != null) {
       val finalMvp = FloatArray(16)
@@ -1324,6 +1332,7 @@ class GpuCompositionRenderer(private val context: Context) {
         clip.rotation.hashCode() xor
         clip.posX.hashCode() xor
         clip.posY.hashCode() xor
+        (clip.trackBindJson?.hashCode() ?: 0) xor
         clip.alignment.hashCode() xor
         animTimeStep xor
         viewportWidth xor
@@ -1411,26 +1420,29 @@ class GpuCompositionRenderer(private val context: Context) {
     }
 
     val isBadge = clip.badgeType != null
-    val targetWidth = if (isBadge) {
-      (160f * (viewportWidth.toFloat() / 600f)).toInt().coerceIn(128, 384)
+    val isElement = clip.elementId != null
+    val targetWidth: Int
+    val targetHeight: Int
+    if (isBadge) {
+      targetWidth = (160f * (viewportWidth.toFloat() / 600f)).toInt().coerceIn(128, 384)
+      targetHeight = (targetWidth * 0.42f).toInt().coerceIn(54, 160)
+    } else if (isElement) {
+      targetWidth = (80f * (viewportWidth.toFloat() / 600f)).toInt().coerceIn(64, 256)
+      targetHeight = targetWidth
     } else {
-      (80f * (viewportWidth.toFloat() / 600f)).toInt().coerceIn(64, 256)
-    }
-    val targetHeight = if (isBadge) {
-      (targetWidth * 0.42f).toInt().coerceIn(54, 160)
-    } else {
-      targetWidth
+      val sprite = StickerDisplayMetrics.spriteTextureSizePx(viewportWidth, viewportHeight)
+      targetWidth = sprite
+      targetHeight = sprite
     }
 
     val bitmap = Bitmap.createBitmap(targetWidth, targetHeight, Bitmap.Config.ARGB_8888)
     val canvas = Canvas(bitmap)
-
-    StickerLayerRenderer.draw(
+    StickerLayerRenderer.drawSprite(
       canvas = canvas,
-      clip = clip.copy(posX = 0f, posY = 0f, scale = 1f, rotation = 0f, opacity = 1f),
-      currentPosMs = clip.timelineStartMs,
+      clip = clip,
       width = targetWidth,
-      height = targetHeight
+      height = targetHeight,
+      opacity = 1f
     )
 
     val oldTexId = cached?.texId ?: 0
@@ -1581,6 +1593,8 @@ class GpuCompositionRenderer(private val context: Context) {
     GLES20.glUniformMatrix4fv(uMVPMatrixHandle, 1, false, mvpMatrix, 0)
     GLES20.glUniformMatrix4fv(uTexMatrixHandle, 1, false, texMatrix, 0)
     GLES20.glUniform1f(uOpacityHandle, opacity)
+    val uPremultiplyHandle = GLES20.glGetUniformLocation(program, "uPremultiply")
+    if (uPremultiplyHandle >= 0) GLES20.glUniform1f(uPremultiplyHandle, 0f)
     if (uBlurHandle >= 0) GLES20.glUniform1f(uBlurHandle, blur)
     if (uEffectParamHandle >= 0) GLES20.glUniform1f(uEffectParamHandle, effectParam)
     val uMotionVecHandle = GLES20.glGetUniformLocation(program, "uMotionVec")
@@ -1601,12 +1615,21 @@ class GpuCompositionRenderer(private val context: Context) {
     val uTintHandle = GLES20.glGetUniformLocation(program, "uTint")
     val uHighlightsHandle = GLES20.glGetUniformLocation(program, "uHighlights")
     val uShadowsHandle = GLES20.glGetUniformLocation(program, "uShadows")
+    val uWhitesHandle = GLES20.glGetUniformLocation(program, "uWhites")
+    val uBlacksHandle = GLES20.glGetUniformLocation(program, "uBlacks")
+    val uFadeHandle = GLES20.glGetUniformLocation(program, "uFade")
+    val uAutoEnhanceHandle = GLES20.glGetUniformLocation(program, "uAutoEnhance")
+    val uHdrBoostHandle = GLES20.glGetUniformLocation(program, "uHdrBoost")
+    val uColorFixHandle = GLES20.glGetUniformLocation(program, "uColorFix")
+    val uDenoiseHandle = GLES20.glGetUniformLocation(program, "uDenoise")
+    val uGlowHandle = GLES20.glGetUniformLocation(program, "uGlow")
     val uVignetteHandle = GLES20.glGetUniformLocation(program, "uVignette")
     val uGrainHandle = GLES20.glGetUniformLocation(program, "uGrain")
     val uSharpnessHandle = GLES20.glGetUniformLocation(program, "uSharpness")
     val uClarityHandle = GLES20.glGetUniformLocation(program, "uClarity")
     val uTexelSizeHandle = GLES20.glGetUniformLocation(program, "uTexelSize")
 
+    val extras = FilterCatalog.spatialExtras(filter)
     if (uBrightnessHandle >= 0) GLES20.glUniform1f(uBrightnessHandle, adjustments.brightness)
     if (uContrastHandle >= 0) GLES20.glUniform1f(uContrastHandle, adjustments.contrast)
     if (uSaturationHandle >= 0) GLES20.glUniform1f(uSaturationHandle, adjustments.saturation)
@@ -1615,10 +1638,18 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uTintHandle >= 0) GLES20.glUniform1f(uTintHandle, adjustments.tint)
     if (uHighlightsHandle >= 0) GLES20.glUniform1f(uHighlightsHandle, adjustments.highlights)
     if (uShadowsHandle >= 0) GLES20.glUniform1f(uShadowsHandle, adjustments.shadows)
+    if (uWhitesHandle >= 0) GLES20.glUniform1f(uWhitesHandle, adjustments.whites)
+    if (uBlacksHandle >= 0) GLES20.glUniform1f(uBlacksHandle, adjustments.blacks)
+    if (uFadeHandle >= 0) GLES20.glUniform1f(uFadeHandle, adjustments.fade)
+    if (uAutoEnhanceHandle >= 0) GLES20.glUniform1f(uAutoEnhanceHandle, (adjustments.autoEnhance + extras.enhance).coerceIn(0f, 1f))
+    if (uHdrBoostHandle >= 0) GLES20.glUniform1f(uHdrBoostHandle, (adjustments.hdrBoost + adjustments.colorCorrect + extras.hdrLook).coerceIn(0f, 1f))
+    if (uColorFixHandle >= 0) GLES20.glUniform1f(uColorFixHandle, adjustments.colorFix)
+    if (uDenoiseHandle >= 0) GLES20.glUniform1f(uDenoiseHandle, (adjustments.denoise + adjustments.antiFlicker * 0.5f).coerceIn(0f, 1f))
+    if (uGlowHandle >= 0) GLES20.glUniform1f(uGlowHandle, extras.glow.coerceIn(0f, 1f))
     if (uVignetteHandle >= 0) GLES20.glUniform1f(uVignetteHandle, adjustments.vignette)
     if (uGrainHandle >= 0) GLES20.glUniform1f(uGrainHandle, adjustments.grain)
-    if (uSharpnessHandle >= 0) GLES20.glUniform1f(uSharpnessHandle, adjustments.sharpness)
-    if (uClarityHandle >= 0) GLES20.glUniform1f(uClarityHandle, (adjustments.clarity + adjustments.superClarity).coerceIn(0f, 1f))
+    if (uSharpnessHandle >= 0) GLES20.glUniform1f(uSharpnessHandle, (adjustments.sharpness + extras.sharpness).coerceIn(0f, 1f))
+    if (uClarityHandle >= 0) GLES20.glUniform1f(uClarityHandle, (adjustments.clarity + adjustments.superClarity + extras.clarity).coerceIn(0f, 1f))
     if (uTexelSizeHandle >= 0) GLES20.glUniform2f(uTexelSizeHandle, 1.0f / max(1, viewportWidth), 1.0f / max(1, viewportHeight))
 
     val uChromaEnabledHandle = GLES20.glGetUniformLocation(program, "uChromaEnabled")
@@ -1658,7 +1689,11 @@ class GpuCompositionRenderer(private val context: Context) {
     val uColorOffsetHandle = GLES20.glGetUniformLocation(program, "uColorOffset")
     val uUseColorMatrixHandle = GLES20.glGetUniformLocation(program, "uUseColorMatrix")
 
-    val filterMatrix = com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(filter.type, filter.intensity)
+    val filterMatrix = if (filter.enabled) {
+      com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(filter.type, filter.intensity)
+    } else {
+      null
+    }
     val finalMatrix = when {
       filterMatrix != null && effectColorMatrix != null -> {
         val combined = android.graphics.ColorMatrix(filterMatrix)
@@ -2098,11 +2133,4 @@ class GpuCompositionRenderer(private val context: Context) {
     }
     imageTextureCache.clear()
   }
-}
-
-/** Deterministic pseudo-noise in [-0.5, 0.5) from transition progress, so preview and export render identical frames. */
-private fun transitionNoise(progress: Float, salt: Int): Float {
-  val step = kotlin.math.floor(progress * 24f)
-  val v = kotlin.math.sin((step + salt * 13.37f) * 127.1f) * 43758.5453f
-  return (v - kotlin.math.floor(v)) - 0.5f
 }

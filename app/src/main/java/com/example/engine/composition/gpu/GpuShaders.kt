@@ -63,6 +63,9 @@ object GpuShaders {
       
       // Opacity
       uniform float uOpacity;
+      // 1 = texture RGB is already premultiplied (text, stickers). Scale RGB with opacity.
+      // 0 = straight alpha (video). SRC_ALPHA blend applies opacity; scaling RGB here darkens twice.
+      uniform float uPremultiply;
       
       // Keyframe Blur & Effect
       uniform float uBlur;
@@ -79,6 +82,14 @@ object GpuShaders {
       uniform float uTint;
       uniform float uHighlights;
       uniform float uShadows;
+      uniform float uWhites;
+      uniform float uBlacks;
+      uniform float uFade;
+      uniform float uAutoEnhance;
+      uniform float uHdrBoost;
+      uniform float uColorFix;
+      uniform float uDenoise;
+      uniform float uGlow;
       uniform float uVignette;
       uniform float uGrain;
       uniform float uSharpness;
@@ -158,6 +169,12 @@ object GpuShaders {
           color = c - uSharpness * laplacian;
         } else {
           color = texture2D(uTexture, clampedCoord);
+        }
+
+        // Video / OES frames often arrive with A=0. Keep chroma-key free to
+        // rewrite alpha; otherwise force opaque so filters cannot export black.
+        if (uPremultiply < 0.5 && uChromaEnabled == 0) {
+          color.a = 1.0;
         }
 
         // Clarity / Super Clarity: mid-tone weighted local contrast (wide-radius unsharp mask)
@@ -286,10 +303,59 @@ object GpuShaders {
           color.rgb += uShadows * shadowMask * 0.2;
           color.rgb += uHighlights * highlightMask * 0.2;
         }
+
+        // 6b. Whites & Blacks
+        if (uWhites != 0.0 || uBlacks != 0.0) {
+          float l = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+          float whiteW = smoothstep(0.65, 1.0, l);
+          float blackW = 1.0 - smoothstep(0.0, 0.35, l);
+          color.rgb += vec3(uWhites * whiteW * 0.18 + uBlacks * blackW * 0.18);
+        }
+
+        // 6c. Video Quality (same maths as ColorGradingGlEffect / ColorFilterGenerator)
+        if (uAutoEnhance > 0.01) {
+          float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+          color.rgb = mix(vec3(lum), color.rgb, 1.0 + uAutoEnhance * 0.20);
+          color.rgb = (color.rgb - 0.5) * (1.0 + uAutoEnhance * 0.15) + 0.5 + vec3(uAutoEnhance * 0.04);
+        }
+        if (uHdrBoost > 0.01) {
+          float lum = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+          color.rgb = mix(vec3(lum), color.rgb, 1.0 + uHdrBoost * 0.25);
+          color.rgb = (color.rgb - 0.5) * (1.0 + uHdrBoost * 0.22) + 0.5 + vec3(uHdrBoost * 0.02);
+        }
+        if (uColorFix > 0.01) {
+          color.r *= 1.0 - uColorFix * 0.04;
+          color.g *= 1.0 - uColorFix * 0.03;
+          color.b *= 1.0 + uColorFix * 0.06;
+        }
+        if (uDenoise > 0.01) {
+          vec3 blur = texture2D(uTexture, clamp(clampedCoord + vec2(uTexelSize.x, 0.0), 0.0, 1.0)).rgb
+                    + texture2D(uTexture, clamp(clampedCoord - vec2(uTexelSize.x, 0.0), 0.0, 1.0)).rgb
+                    + texture2D(uTexture, clamp(clampedCoord + vec2(0.0, uTexelSize.y), 0.0, 1.0)).rgb
+                    + texture2D(uTexture, clamp(clampedCoord - vec2(0.0, uTexelSize.y), 0.0, 1.0)).rgb;
+          color.rgb = mix(color.rgb, blur * 0.25, uDenoise * 0.65);
+        }
+        if (uFade > 0.01) {
+          color.rgb = mix(color.rgb, vec3(0.5), uFade * 0.55);
+        }
+
+        // 6d. Glow bloom (same taps as ColorGradingGlEffect)
+        if (uGlow > 0.01) {
+          vec2 gs = uTexelSize * 3.5;
+          vec3 blur = texture2D(uTexture, clamp(clampedCoord + vec2(-gs.x, -gs.y), 0.0, 1.0)).rgb * 0.15
+                    + texture2D(uTexture, clamp(clampedCoord + vec2( gs.x, -gs.y), 0.0, 1.0)).rgb * 0.15
+                    + texture2D(uTexture, clamp(clampedCoord + vec2(-gs.x,  gs.y), 0.0, 1.0)).rgb * 0.15
+                    + texture2D(uTexture, clamp(clampedCoord + vec2( gs.x,  gs.y), 0.0, 1.0)).rgb * 0.15
+                    + texture2D(uTexture, clampedCoord).rgb * 0.40;
+          vec3 bloom = max(blur - 0.35, 0.0) * 1.6;
+          color.rgb += bloom * uGlow;
+        }
         
         // 7. Color Matrix Filter
         if (uUseColorMatrix == 1) {
+          float srcA = color.a;
           color = (uColorMatrix * color) + uColorOffset;
+          color.a = srcA;
         }
         
         // 8. Vignette
@@ -308,6 +374,9 @@ object GpuShaders {
         
         // 10. Opacity
         color.rgb = clamp(color.rgb, 0.0, 1.0);
+        if (uPremultiply > 0.5) {
+          color.rgb *= uOpacity;
+        }
         color.a *= uOpacity;
         
         gl_FragColor = color;

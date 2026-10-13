@@ -16,6 +16,9 @@ enum class TimelineActionType(val displayName: String) {
   SPLIT_CLIP("Split Clip"),
   ADD_CLIP("Add Clip"),
   DUPLICATE_CLIP("Duplicate Clip"),
+  CREATE_COMPOUND_CLIP("Create Compound Clip"),
+  BREAK_COMPOUND_CLIP("Break Apart Compound Clip"),
+  REPLACE_COMPOUND_TIMELINE("Edit Compound Clip"),
   CHANGE_SPEED("Change Speed"),
   REPLACE_MEDIA("Replace Media"),
   APPLY_FILTER("Filter"),
@@ -35,6 +38,7 @@ enum class TimelineActionType(val displayName: String) {
   AR_OVERLAY_EDIT("AR Filter"),
   AUDIO_EFFECTS_EDIT("Audio Effects & EQ"),
   TRACK_SETTINGS_EDIT("Track Settings"),
+  AUTO_DUCKING_EDIT("Auto-Ducking"),
   GENERIC_EDIT("Timeline Edit")
 }
 

@@ -9,6 +9,7 @@ import com.example.domain.model.FilterType
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoAdjustments
 import com.example.domain.model.VideoClip
+import com.vfx.engine.core.lut.CubeLut
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -31,7 +32,11 @@ class Media3EffectPipelineTest {
       adjustments = VideoAdjustments(),
       filterSettings = FilterSettings(type = FilterType.NONE)
     )
-    assertTrue("Default adjustments without filter should be no-op", defaultEffect.isNoOp(1920, 1080))
+    assertFalse(
+      "Media3 must keep the resident grading program so publishLive can take effect",
+      defaultEffect.isNoOp(1920, 1080)
+    )
+    assertTrue("Default adjustments without filter are an identity look", defaultEffect.isIdentityLook())
   }
 
   @Test
@@ -228,6 +233,43 @@ class Media3EffectPipelineTest {
   }
 
   @Test
+  fun testColorGradingGlEffect_videoQualityAndFadeAreNotNoOp() {
+    val fade = ColorGradingGlEffect.fromTimeline(VideoAdjustments(fade = 0.5f))
+    assertFalse(fade.isNoOp(1920, 1080))
+    val hdr = ColorGradingGlEffect.fromTimeline(VideoAdjustments(hdrBoost = 0.7f))
+    assertFalse(hdr.isNoOp(1920, 1080))
+    assertEquals(0.7f, hdr.hdrBoost, 0.001f)
+    val whites = ColorGradingGlEffect.fromTimeline(VideoAdjustments(whites = 0.4f, blacks = -0.25f))
+    assertFalse(whites.isNoOp(1920, 1080))
+  }
+
+  @Test
+  fun testBuildRealtimePreviewEffects_includesCustomLut() {
+    val lut = LutGlEffect.createIdentityLut(16)
+    val effects = Media3EffectPipeline.buildRealtimePreviewEffects(
+      adjustments = VideoAdjustments(),
+      filterSettings = FilterSettings(type = FilterType.NONE),
+      customLut = lut,
+      customLutIntensity = 1f
+    )
+    assertTrue(effects.isNotEmpty())
+    val without = Media3EffectPipeline.buildRealtimePreviewEffects(
+      adjustments = VideoAdjustments(),
+      filterSettings = FilterSettings(type = FilterType.NONE)
+    )
+    assertTrue(effects.size > without.size)
+  }
+
+  @Test
+  fun testLutStripBaker_identityCubeIsVerticalStrip() {
+    val cube = CubeLut.identity3d(8)
+    val bmp = LutStripBaker.toVerticalStrip(cube, 8)
+    assertEquals(8, bmp.width)
+    assertEquals(64, bmp.height)
+    assertEquals(LutGlEffect.LutFormat.VERTICAL_STRIP, LutGlEffect.detectLutFormat(bmp))
+  }
+
+  @Test
   fun testPreviewFilterEffects_selectedPresetIsNotNoOp() {
     val clip = VideoClip(
       name = "Look",
@@ -235,8 +277,38 @@ class Media3EffectPipelineTest {
     )
     val timeline = Timeline(videoClips = listOf(clip))
     val effects = PreviewFilterEffects.effectsFor(clip, timeline)
-    assertTrue(effects.any { it is ColorGradingGlEffect && !it.isNoOp(1920, 1080) })
+    assertTrue(
+      "Artistic filters use the live ColorGradingGlEffect so playback is not painted black",
+      effects.any { it is ColorGradingGlEffect }
+    )
+    assertNotNull(PreviewDisplayFilter.matrixFor(clip, timeline))
     val reset = PreviewFilterEffects.effectsFor(clip.copy(filter = FilterSettings()), Timeline())
-    assertTrue(reset.none { it is ColorGradingGlEffect })
+    val resetGrading = reset.filterIsInstance<ColorGradingGlEffect>()
+    assertEquals(1, resetGrading.size)
+    assertTrue(resetGrading.single().isIdentityLook())
+    assertNull(PreviewDisplayFilter.matrixFor(clip.copy(filter = FilterSettings()), Timeline()))
+  }
+
+  @Test
+  fun testPreviewFilterEffects_includesCatalogVfxOnTheLivePreviewPath() {
+    val clip = VideoClip(name = "Fx")
+    val glitch = com.example.engine.effects.ProductionEffectCatalog.byId("video.glitch")!!
+    val looked = com.example.engine.effects.ProductionEffectApplicator.apply(clip, glitch, 0.8f)
+    val effects = PreviewFilterEffects.effectsFor(looked, Timeline())
+    assertTrue(effects.any { it is CustomShaderGlEffect && it.name == "GlitchEffect" })
+    val sketch = com.example.engine.effects.ProductionEffectCatalog.byId("ai.sketch")!!
+    val styled = com.example.engine.effects.ProductionEffectApplicator.apply(looked, sketch, 1f)
+    val styledEffects = PreviewFilterEffects.effectsFor(styled, Timeline())
+    assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "GlitchEffect" })
+    assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "SketchCharcoalEffect" })
+    assertNotEquals(PreviewFilterEffects.signature(clip, Timeline()), PreviewFilterEffects.signature(styled, Timeline()))
+  }
+
+  @Test
+  fun testIdentityPassthroughIsInstalledWhenEffectGraphMustStayAlive() {
+    val identity = Media3EffectPipeline.identityEffects()
+    assertEquals(1, identity.size)
+    assertTrue(identity.single() is IdentityPassthroughGlEffect)
+    assertFalse((identity.single() as IdentityPassthroughGlEffect).isNoOp(1280, 720))
   }
 }

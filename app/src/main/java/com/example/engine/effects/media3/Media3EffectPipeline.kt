@@ -39,14 +39,66 @@ enum class StyleTransferType(val displayName: String) {
 @OptIn(UnstableApi::class)
 object Media3EffectPipeline {
 
+  enum class ApplyResult {
+    APPLIED,
+    FALLBACK_IDENTITY,
+    FAILED
+  }
+
+  fun identityEffects(): List<Effect> = listOf(IdentityPassthroughGlEffect)
+
   /**
-   * Applies the generated list of Media3 effects to ExoPlayer in real-time.
+   * Pushes [effects] onto ExoPlayer without dropping audio or the current play/pause state.
+   * `setVideoEffects` rebuilds the video graph; callers must re-bind the TextureView afterwards.
+   *
+   * A failing custom effect is replaced with [IdentityPassthroughGlEffect] so VideoFrameProcessor
+   * stays alive and MediaCodec can keep calling releaseOutputBuffer(). Returning false means the
+   * player itself is unusable and must be recreated.
    */
-  fun applyRealtimeEffects(exoPlayer: ExoPlayer, effects: List<Effect>) {
-    try {
-      exoPlayer.setVideoEffects(effects)
+  fun applyRealtimeEffects(exoPlayer: ExoPlayer, effects: List<Effect>): Boolean {
+    return applyRealtimeEffectsDetailed(exoPlayer, effects) != ApplyResult.FAILED
+  }
+
+  fun applyRealtimeEffectsDetailed(exoPlayer: ExoPlayer, effects: List<Effect>): ApplyResult {
+    val playWhenReady = runCatching { exoPlayer.playWhenReady }.getOrDefault(false)
+    val volume = runCatching { exoPlayer.volume }.getOrDefault(1f)
+    val state = runCatching { exoPlayer.playbackState }.getOrDefault(-1)
+    android.util.Log.i(
+      "Media3EffectPipeline",
+      "setVideoEffects count=${effects.size} playWhenReady=$playWhenReady volume=$volume state=$state"
+    )
+    return try {
+      pushEffects(exoPlayer, effects, playWhenReady, volume)
+      ApplyResult.APPLIED
     } catch (e: Exception) {
-      android.util.Log.w("Media3EffectPipeline", "Failed to apply real-time video effects to ExoPlayer", e)
+      android.util.Log.e("Media3EffectPipeline", "Failed to apply real-time video effects; installing identity passthrough", e)
+      try {
+        pushEffects(exoPlayer, identityEffects(), playWhenReady, volume)
+        ApplyResult.FALLBACK_IDENTITY
+      } catch (fallback: Exception) {
+        android.util.Log.e("Media3EffectPipeline", "Identity passthrough also failed; player must be recreated", fallback)
+        ApplyResult.FAILED
+      }
+    }
+  }
+
+  private fun pushEffects(
+    exoPlayer: ExoPlayer,
+    effects: List<Effect>,
+    playWhenReady: Boolean,
+    volume: Float
+  ) {
+    exoPlayer.setVideoEffects(effects)
+    if (exoPlayer.volume != volume) {
+      android.util.Log.w("Media3EffectPipeline", "setVideoEffects changed volume $volume -> ${exoPlayer.volume}; restoring")
+      exoPlayer.volume = volume
+    }
+    if (exoPlayer.playWhenReady != playWhenReady) {
+      android.util.Log.w(
+        "Media3EffectPipeline",
+        "setVideoEffects changed playWhenReady $playWhenReady -> ${exoPlayer.playWhenReady}; restoring"
+      )
+      exoPlayer.playWhenReady = playWhenReady
     }
   }
 
@@ -65,11 +117,10 @@ object Media3EffectPipeline {
   ): List<Effect> {
     val effects = mutableListOf<Effect>()
 
-    // 1. OpenGL Color Grading Shader (Brightness, Contrast, Saturation, Temp, Tint, Matrix Filter)
-    val colorGrading = createColorGradingEffect(adjustments, filterSettings)
-    if (colorGrading != null && !colorGrading.isNoOp(1920, 1080)) {
-      effects.add(colorGrading)
-    }
+    // Resident OpenGL color-grading node. Identity uniforms are a copy+opaque
+    // pass so filter / adjust / quality ticks can publishLive without calling
+    // setVideoEffects (that rebuild dropped the TextureView and source audio).
+    effects.add(ColorGradingGlEffect.fromTimeline(adjustments, filterSettings))
 
     // 2. Custom 3D / 2D LUT Shader
     if (customLut != null && customLutIntensity > 0.01f) {
@@ -129,7 +180,7 @@ object Media3EffectPipeline {
 
     // 3. OpenGL Color Grading Shader (Brightness, Contrast, Saturation, Temp, Tint, Matrix Filter)
     val colorGrading = createColorGradingEffect(timeline.adjustments, timeline.filter)
-    if (colorGrading != null && !colorGrading.isNoOp(exportWidth, exportHeight)) {
+    if (colorGrading != null && !colorGrading.isIdentityLook()) {
       effects.add(colorGrading)
     }
 
@@ -179,7 +230,7 @@ object Media3EffectPipeline {
     // 3. Combined Color Grading: Clip filter or Timeline filter + adjustments
     val effectiveFilter = clip.filter ?: timeline.filter
     val colorGrading = createColorGradingEffect(clip.adjustments ?: timeline.adjustments, effectiveFilter)
-    if (colorGrading != null && !colorGrading.isNoOp(exportWidth, exportHeight)) {
+    if (colorGrading != null && !colorGrading.isIdentityLook()) {
       effects.add(colorGrading)
     }
 
@@ -194,7 +245,7 @@ object Media3EffectPipeline {
     filterSettings: FilterSettings
   ): ColorGradingGlEffect? {
     val effect = ColorGradingGlEffect.fromTimeline(adjustments, filterSettings)
-    return if (effect.isNoOp(1920, 1080)) null else effect
+    return if (effect.isIdentityLook()) null else effect
   }
 
   /**

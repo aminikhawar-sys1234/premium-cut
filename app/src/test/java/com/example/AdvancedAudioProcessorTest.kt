@@ -85,4 +85,28 @@ class AdvancedAudioProcessorTest {
     val maxVal = processed.maxOf { abs(it.toInt()) }
     assertTrue("Normalized volume should reach near full scale, was $maxVal", maxVal > 25000)
   }
+
+  @Test
+  fun namedVoiceEffectAlsoAppliesCatalogPitchShift() {
+    val sampleRate = 8000
+    val pcm = ShortArray(sampleRate) { i -> (12000.0 * sin(i * 0.08)).toInt().toShort() }
+    val namedOnly = AdvancedAudioProcessor.processPcmBuffer(
+      pcm,
+      sampleRate,
+      1,
+      AudioEffectsSettings(voiceEffect = VoiceEffect.DEEP_VOICE, pitchShiftSemitones = 0f)
+    )
+    val namedPlusPitch = AdvancedAudioProcessor.processPcmBuffer(
+      pcm,
+      sampleRate,
+      1,
+      AudioEffectsSettings(voiceEffect = VoiceEffect.DEEP_VOICE, pitchShiftSemitones = -5f)
+    )
+    assertTrue(namedOnly.isNotEmpty())
+    assertTrue(namedPlusPitch.isNotEmpty())
+    assertTrue(
+      "Extra semitones must change length after a named voice effect",
+      namedPlusPitch.size != namedOnly.size
+    )
+  }
 }

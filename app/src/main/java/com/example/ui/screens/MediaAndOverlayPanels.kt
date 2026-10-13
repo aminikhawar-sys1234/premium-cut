@@ -557,89 +557,78 @@ fun MediaImportPanel(
       }
     }
 
-    // Stock & Sample Media Catalog Section
-    Row(
-      modifier = Modifier.fillMaxWidth(),
-      horizontalArrangement = Arrangement.SpaceBetween,
-      verticalAlignment = Alignment.CenterVertically
-    ) {
+    val stockItems = StockMediaCatalog.stockItems
+    if (stockItems.isNotEmpty()) {
       Text(
-        text = "Stock & Sample Media",
+        text = "Stock Media",
         style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold, color = TextPrimary)
       )
-      Text(
-        text = "1-Tap Import",
-        style = MaterialTheme.typography.labelSmall.copy(color = CyanAccent)
-      )
-    }
 
-    // Filter Chips Row
-    val categories = listOf("All", "Drone & Travel", "Urban & Cyberpunk", "Nature & Landscapes", "Portraits & Aesthetic", "Textures & Solids")
-    Row(
-      modifier = Modifier
-        .fillMaxWidth()
-        .horizontalScroll(rememberScrollState()),
-      horizontalArrangement = Arrangement.spacedBy(8.dp)
-    ) {
-      categories.forEach { cat ->
-        val isSel = selectedFilterCategory == cat
-        FilterChip(
-          selected = isSel,
-          onClick = { selectedFilterCategory = cat },
-          label = { Text(cat, fontSize = 11.sp) },
-          colors = FilterChipDefaults.filterChipColors(
-            selectedContainerColor = CyanAccent.copy(alpha = 0.2f),
-            selectedLabelColor = CyanAccent,
-            containerColor = Color(0xFF1E293B),
-            labelColor = TextSecondary
-          ),
-          border = FilterChipDefaults.filterChipBorder(
-            enabled = true,
+      val categories = remember(stockItems) {
+        listOf("All") + stockItems.map { it.category }.distinct()
+      }
+      Row(
+        modifier = Modifier
+          .fillMaxWidth()
+          .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(8.dp)
+      ) {
+        categories.forEach { cat ->
+          val isSel = selectedFilterCategory == cat
+          FilterChip(
             selected = isSel,
-            borderColor = if (isSel) CyanAccent else StudioBorder
+            onClick = { selectedFilterCategory = cat },
+            label = { Text(cat, fontSize = 11.sp) },
+            colors = FilterChipDefaults.filterChipColors(
+              selectedContainerColor = CyanAccent.copy(alpha = 0.2f),
+              selectedLabelColor = CyanAccent,
+              containerColor = Color(0xFF1E293B),
+              labelColor = TextSecondary
+            ),
+            border = FilterChipDefaults.filterChipBorder(
+              enabled = true,
+              selected = isSel,
+              borderColor = if (isSel) CyanAccent else StudioBorder
+            )
           )
-        )
+        }
       }
-    }
 
-    // Stock Items Horizontal Row / Grid
-    val filteredStock = remember(selectedFilterCategory) {
-      if (selectedFilterCategory == "All") {
-        StockMediaCatalog.stockItems
-      } else {
-        StockMediaCatalog.stockItems.filter { it.category == selectedFilterCategory }
+      val filteredStock = remember(selectedFilterCategory, stockItems) {
+        if (selectedFilterCategory == "All") stockItems
+        else stockItems.filter { it.category == selectedFilterCategory }
       }
-    }
 
-    LazyRow(
-      horizontalArrangement = Arrangement.spacedBy(10.dp),
-      modifier = Modifier.fillMaxWidth()
-    ) {
-      items(filteredStock, key = { it.id }) { item ->
-        StockMediaCard(
-          item = item,
-          target = selectedTarget,
-          onAdd = {
-            val duration = if (item.isVideo) item.durationMs else (imageDurationSec * 1000).toLong()
-            if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
-              viewModel.timelineEngine.addVideoClip(
-                uri = item.uri.ifBlank { "stock://${item.id}" },
-                name = item.title,
-                isVideo = item.isVideo,
-                durationMs = duration,
-                atPlayhead = insertAtPlayhead
-              )
-            } else {
-              viewModel.timelineEngine.addOverlayClip(
-                uri = item.uri.ifBlank { "stock://${item.id}" },
-                name = item.title,
-                isVideo = item.isVideo,
-                durationMs = duration
-              )
+      LazyRow(
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxWidth()
+      ) {
+        items(filteredStock.filter { it.uri.isNotBlank() }, key = { it.id }) { item ->
+          StockMediaCard(
+            item = item,
+            target = selectedTarget,
+            onAdd = {
+              val duration = if (item.isVideo) item.durationMs else (imageDurationSec * 1000).toLong()
+              if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
+                viewModel.timelineEngine.addVideoClip(
+                  uri = item.uri,
+                  name = item.title,
+                  isVideo = item.isVideo,
+                  durationMs = duration,
+                  atPlayhead = insertAtPlayhead
+                )
+              } else {
+                viewModel.timelineEngine.addOverlayClip(
+                  uri = item.uri,
+                  name = item.title,
+                  isVideo = item.isVideo,
+                  durationMs = duration
+                )
+              }
+              onDismiss()
             }
-            onDismiss()
-          }
-        )
+          )
+        }
       }
     }
   }

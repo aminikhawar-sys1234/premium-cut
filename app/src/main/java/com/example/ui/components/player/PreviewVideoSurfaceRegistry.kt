@@ -1,5 +1,6 @@
 package com.example.ui.components.player
 
+import android.os.Handler
 import android.os.Looper
 import android.view.TextureView
 import androidx.media3.exoplayer.ExoPlayer
@@ -35,14 +36,30 @@ object PreviewVideoSurfaceRegistry {
   private const val PRIORITY_SECONDARY = 1
 
   private val lock = Any()
+  private val mainHandler = Handler(Looper.getMainLooper())
   private val boundView = java.util.WeakHashMap<ExoPlayer, WeakReference<TextureView>>()
   private val boundPriority = java.util.WeakHashMap<ExoPlayer, Int>()
   private val primaryView = java.util.WeakHashMap<ExoPlayer, WeakReference<TextureView>>()
+  private var lastPrimaryView: WeakReference<TextureView>? = null
+
+  /**
+   * Invoked on the main thread after a TextureView is (re)bound to a player.
+   * Used to present the paused frame: ExoPlayer does not redraw after setVideoTextureView
+   * while paused, which left reopened projects on a black preview.
+   */
+  @Volatile
+  var onPlayerSurfaceBound: ((ExoPlayer) -> Unit)? = null
+
+  private fun onMain(block: () -> Unit) {
+    if (Looper.myLooper() == Looper.getMainLooper()) block()
+    else mainHandler.post(block)
+  }
 
   /** Binds [view] and remembers it as the surface the player must fall back to. */
   fun bindPrimary(player: ExoPlayer, view: TextureView) {
     synchronized(lock) {
       primaryView[player] = WeakReference(view)
+      lastPrimaryView = WeakReference(view)
     }
     bind(player, view, PRIORITY_PRIMARY)
   }
@@ -65,7 +82,10 @@ object PreviewVideoSurfaceRegistry {
   }
 
   private fun bind(player: ExoPlayer, view: TextureView, priority: Int) {
-    if (Looper.myLooper() != Looper.getMainLooper()) return
+    onMain { bindOnMain(player, view, priority) }
+  }
+
+  private fun bindOnMain(player: ExoPlayer, view: TextureView, priority: Int) {
     synchronized(lock) {
       val owner = boundView[player]?.get()
       if (owner === view) {
@@ -86,7 +106,59 @@ object PreviewVideoSurfaceRegistry {
         boundPriority[player] = priority
       } catch (_: Throwable) {
         // A released player throws here: ignore, its surface is gone anyway.
+        return
       }
+    }
+    onPlayerSurfaceBound?.invoke(player)
+  }
+
+  /**
+   * Re-attaches the currently bound TextureView. `setVideoEffects` rebuilds the video graph
+   * and silently drops the output surface; calling this restores live frames without creating
+   * a new TextureView.
+   */
+  /** Drops every binding for [player] so a released instance cannot keep a TextureView. */
+  fun forget(player: ExoPlayer) {
+    onMain {
+      synchronized(lock) {
+        boundView.remove(player)
+        boundPriority.remove(player)
+        primaryView.remove(player)
+      }
+      try {
+        player.clearVideoSurface()
+      } catch (_: Throwable) {
+      }
+    }
+  }
+
+  /** Attaches the last inline TextureView to a newly created ExoPlayer. */
+  fun attachRememberedPrimary(player: ExoPlayer) {
+    val view = synchronized(lock) { lastPrimaryView?.get() } ?: return
+    if (!view.isAvailable) return
+    bindPrimary(player, view)
+  }
+
+  /** True when [player] currently has an on-screen TextureView as its video output. */
+  fun hasBoundSurface(player: ExoPlayer): Boolean {
+    val view = synchronized(lock) { boundView[player]?.get() } ?: return false
+    return try { view.isAvailable } catch (_: Throwable) { false }
+  }
+
+  fun rebindCurrent(player: ExoPlayer, afterMs: Long = 0L) {
+    val bind: () -> Unit = bind@{
+      val view = synchronized(lock) { boundView[player]?.get() } ?: return@bind
+      if (!view.isAvailable) return@bind
+      try {
+        player.setVideoTextureView(view)
+      } catch (t: Throwable) {
+        android.util.Log.e("PreviewVideoSurfaceRegistry", "Failed to rebind preview TextureView", t)
+      }
+    }
+    if (afterMs <= 0L) {
+      onMain(bind)
+    } else {
+      mainHandler.postDelayed({ onMain(bind) }, afterMs)
     }
   }
 
@@ -95,7 +167,10 @@ object PreviewVideoSurfaceRegistry {
    * registered primary view gets the output back so the inline preview keeps showing live frames.
    */
   fun release(player: ExoPlayer, view: TextureView) {
-    if (Looper.myLooper() != Looper.getMainLooper()) return
+    onMain { releaseOnMain(player, view) }
+  }
+
+  private fun releaseOnMain(player: ExoPlayer, view: TextureView) {
     synchronized(lock) {
       val wasPrimary = primaryView[player]?.get() === view
       if (wasPrimary) primaryView.remove(player)

@@ -1,6 +1,7 @@
 package com.example.engine.ai.tracking
 
 import com.example.engine.ai.NormalizedRect
+import com.example.engine.ai.TrackingEngineState
 import kotlin.math.min
 import kotlin.math.sqrt
 
@@ -27,6 +28,8 @@ object TrackingSampler {
     const val TRACK_WIDTH = 320
     const val FEATURE_WIDTH = 480
     const val PROGRESS_MIN_MS = 80L
+    const val LOCK_PROGRESS = 0.12f
+    const val TRACK_PROGRESS_START = 0.15f
 
     /**
      * Sparse initial-detection timestamps: current frame first, then 250 ms steps
@@ -142,6 +145,49 @@ object TrackingSampler {
             right = (cx + w / 2f).coerceIn(0f, 1f),
             bottom = (cy + h / 2f).coerceIn(0f, 1f)
         ).clamped()
+    }
+
+    /**
+     * Maps engine-internal progress onto a single 0→100 bar that never rewinds:
+     * lock/detect occupies 5–14%, the track loop occupies 15–100%.
+     * The track loop reports a time fraction that starts near 0 after lock (~12%),
+     * so callers must remap it instead of showing the raw fraction.
+     */
+    fun mapAnalyzeProgress(raw: Float, state: TrackingEngineState): Float {
+        val p = raw.coerceIn(0f, 1f)
+        return when (state) {
+            TrackingEngineState.DETECTING -> {
+                if (p <= 0f) 0.05f else p.coerceIn(0.05f, LOCK_PROGRESS)
+            }
+            TrackingEngineState.TRACKING,
+            TrackingEngineState.REDETECTING,
+            TrackingEngineState.RECOVERING,
+            TrackingEngineState.LOST -> TRACK_PROGRESS_START + p * (1f - TRACK_PROGRESS_START)
+            TrackingEngineState.COMPLETED -> 1f
+            TrackingEngineState.FAILED,
+            TrackingEngineState.CANCELLED,
+            TrackingEngineState.IDLE -> p
+        }
+    }
+
+    /**
+     * Long clips at a fixed 24 fps decode every frame through MediaMetadataRetriever
+     * and feel stuck after lock. Cap the sample rate so analyze stays responsive.
+     */
+    fun adaptiveAccuracyFps(durationUs: Long, requested: Int): Int {
+        val seconds = durationUs / 1_000_000f
+        val cap = when {
+            seconds <= 6f -> 24
+            seconds <= 15f -> 16
+            seconds <= 30f -> 12
+            else -> 10
+        }
+        return requested.coerceIn(8, 60).coerceAtMost(cap)
+    }
+
+    fun trackTimeStepUs(durationUs: Long, requestedFps: Int): Long {
+        val fps = adaptiveAccuracyFps(durationUs, requestedFps)
+        return (1_000_000L / fps.toLong()).coerceAtLeast(1L)
     }
 
     /**

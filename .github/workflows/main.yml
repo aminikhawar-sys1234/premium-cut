@@ -47,6 +47,19 @@ jobs:
       - name: Run Unit Tests
         run: ./gradlew test --stacktrace
 
+      # Preinstall CMake into the runner SDK so parallel ABI configure tasks
+      # do not race AGP's auto-download (that race produced a corrupt ZIP).
+      - name: Install CMake 3.22.1
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "sdkmanager not found under $SDK_ROOT"
+            exit 1
+          fi
+          yes | "$SDKMANAGER" --licenses >/dev/null || true
+          "$SDKMANAGER" --install "cmake;3.22.1"
+
       - name: Build Debug APK
         run: ./gradlew assembleDebug --stacktrace
 

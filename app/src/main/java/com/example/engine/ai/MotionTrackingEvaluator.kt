@@ -72,6 +72,8 @@ class MotionTrackingEvaluator(private val trackingResult: TrackingResult) {
             }
         } else emptyList()
 
+        val landmarks = interpolateLandmarks(k1.landmarkPoints, k2.landmarkPoints, t)
+
         return MotionKeyframe(
             timestampUs = timestampUs,
             centerX = spline { it.centerX },
@@ -80,6 +82,7 @@ class MotionTrackingEvaluator(private val trackingResult: TrackingResult) {
             scaleY = spline { it.scaleY },
             rotationDeg = rot,
             confidence = k1.confidence + (k2.confidence - k1.confidence) * t,
+            landmarkPoints = landmarks,
             cornerPin = pin
         )
     }
@@ -132,6 +135,29 @@ class MotionTrackingEvaluator(private val trackingResult: TrackingResult) {
     }
 
     companion object {
+        fun interpolateLandmarks(
+            a: List<Pair<Float, Float>>,
+            b: List<Pair<Float, Float>>,
+            t: Float
+        ): List<Pair<Float, Float>> {
+            if (a.isEmpty() && b.isEmpty()) return emptyList()
+            if (a.isEmpty()) return b
+            if (b.isEmpty()) return a
+            val n = minOf(a.size, b.size)
+            return (0 until n).map { i ->
+                val (ax, ay) = a[i]
+                val (bx, by) = b[i]
+                val aOk = ax >= 0f && ay >= 0f
+                val bOk = bx >= 0f && by >= 0f
+                when {
+                    aOk && bOk -> Pair(ax + (bx - ax) * t, ay + (by - ay) * t)
+                    aOk -> a[i]
+                    bOk -> b[i]
+                    else -> Pair(-1f, -1f)
+                }
+            }
+        }
+
         fun catmullRom(p0: Float, p1: Float, p2: Float, p3: Float, t: Float): Float {
             val t2 = t * t
             val t3 = t2 * t

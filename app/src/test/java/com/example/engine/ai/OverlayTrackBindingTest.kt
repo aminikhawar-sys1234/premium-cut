@@ -10,6 +10,7 @@ import com.example.domain.model.TextClip
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
 import com.example.engine.KeyframeInterpolator
+import com.example.engine.text.TextLayerRenderer
 import com.example.engine.timeline.TimelineEvaluator
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
@@ -287,10 +288,114 @@ class OverlayTrackBindingTest {
     }
 
     @Test
+    fun trackedTextKeepsInterpolatorPose() {
+        val h = host()
+        val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(movingFace(), h, true, true, true, 0f, 0f))
+        val text = TextClip(id = "t", text = "Hi", timelineStartMs = 0L, durationMs = 2000L, animationType = "None", trackBindJson = json)
+        val kf = KeyframeInterpolator.interpolate(text, 0L)
+        val state = TextLayerRenderer.evaluateAnimation(text, 0L)
+        assertEquals(kf.posX, state.posX, 1e-3f)
+        assertEquals(kf.posY, state.posY, 1e-3f)
+        assertEquals(kf.scale, state.scale, 1e-3f)
+    }
+
+    @Test
+    fun localSpriteDoesNotReapplyTrackBind() {
+        val h = host()
+        val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(movingFace(), h, true, true, true, 0f, 0f))
+        val sticker = StickerClip(id = "s", durationMs = 2000L, posX = 0.2f, posY = -0.1f, scale = 1.4f, trackBindJson = json)
+        val tracked = KeyframeInterpolator.interpolate(sticker, 0L)
+        val local = com.example.engine.composition.StickerLayerRenderer.forLocalSprite(sticker)
+        assertTrue(local.trackBindJson.isNullOrBlank())
+        assertEquals(0f, local.posX, 0f)
+        val localPose = com.example.engine.composition.StickerLayerRenderer.evaluateAnimation(local, 0L)
+        assertEquals(0f, localPose.posX, 1e-4f)
+        assertTrue(kotlin.math.abs(tracked.posX) > 0.05f)
+    }
+
+    @Test
+    fun timelineEvaluatorSamplesMaskAndStickerForExport() {
+        val h = host()
+        val result = movingFace()
+        val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(result, h, true, true, true, 0f, 0f))
+        val trackedHost = h.copy(
+            motionTrackJson = MotionTrackCodec.encode(result),
+            mask = MaskSettings(enabled = true, shape = MaskShape.RECTANGLE, width = 0.4f, height = 0.4f, followTracking = true)
+        )
+        val sticker = StickerClip(id = "s", durationMs = 4000L, trackBindJson = json)
+        val timeline = Timeline(videoClips = listOf(trackedHost), stickerClips = listOf(sticker), aspectRatio = AspectRatio.RATIO_9_16)
+        val start = TimelineEvaluator().evaluate(timeline, 0L)
+        val mid = TimelineEvaluator().evaluate(timeline, 1000L)
+        assertTrue(mid.activeStickers.single().posX > start.activeStickers.single().posX)
+        val startMask = start.activeMasks.getValue(h.id)
+        val midMask = mid.activeMasks.getValue(h.id)
+        assertTrue(midMask.posX > startMask.posX)
+    }
+
+    @Test
     fun blurEffectStoresIndependentBinding() {
         val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(movingFace(), host(), true, true, true, 0f, 0f))
         val effect = EffectClip(effectType = EffectType.BLUR, durationMs = 3000L, trackBindJson = json)
         assertEquals("face-a", OverlayTrackCodec.decode(effect.trackBindJson)!!.targetId)
+    }
+
+    @Test
+    fun exportTranslationUsesComposedPoseOnce() {
+        val (tx, ty) = TrackingCoordinateSpace.exportTranslationNdc(0.25f, -0.10f)
+        assertEquals(0.25f, tx, 1e-5f)
+        assertEquals(0.10f, ty, 1e-5f)
+    }
+
+    @Test
+    fun trackedOverlayPreviewMatchesExportWithoutExtraCrop() {
+        val h = host()
+        val result = movingFace()
+        val json = OverlayTrackCodec.encode(OverlayTrackCodec.fromHost(result, h, true, true, true, 0f, 0f))
+        val overlay = h.copy(
+            id = "ov",
+            timelineStartMs = 0L,
+            durationMs = 4000L,
+            cropOffsetX = 0.12f,
+            cropOffsetY = -0.08f,
+            cropScale = 0.45f,
+            trackBindJson = json
+        )
+        val preview = TrackingEvalContext.withTimeline(Timeline(videoClips = listOf(h), overlayClips = listOf(overlay))) {
+            KeyframeInterpolator.interpolate(overlay, 500L)
+        }
+        val exported = TimelineEvaluator().evaluate(
+            Timeline(videoClips = listOf(h), overlayClips = listOf(overlay), aspectRatio = AspectRatio.RATIO_9_16),
+            500L
+        ).activeOverlays.single()
+        assertEquals(preview.posX, exported.posX, 1e-4f)
+        assertEquals(preview.posY, exported.posY, 1e-4f)
+        val (gpuX, gpuY) = TrackingCoordinateSpace.exportTranslationNdc(exported.posX, exported.posY)
+        assertEquals(exported.posX, gpuX, 1e-5f)
+        assertEquals(-exported.posY, gpuY, 1e-5f)
+        assertTrue(kotlin.math.abs(gpuX - (exported.posX + overlay.cropOffsetX)) > 0.05f)
+    }
+
+    @Test
+    fun rebindHostReplacesTrackAndKeepsUserOffset() {
+        val h = host()
+        val live = MotionTrackingAttach.resultFromLive(
+            clip = h,
+            detections = listOf(
+                LiveDetection(1, TrackingCategory.FACE, NormalizedRect(0.2f, 0.2f, 0.4f, 0.4f), "Face", 0.9f)
+            ),
+            selectedId = 1,
+            category = TrackingCategory.FACE,
+            playheadSourceUs = 0L
+        )!!
+        val original = OverlayTrackCodec.fromHost(live, h, true, true, true, 0.05f, -0.02f)
+        val encoded = OverlayTrackCodec.encode(original)
+        val rebound = OverlayTrackCodec.decode(OverlayTrackCodec.rebindHost(encoded, movingFace(), h)!!)!!
+        assertEquals(0.05f, rebound.offsetX, 1e-4f)
+        assertEquals(-0.02f, rebound.offsetY, 1e-4f)
+        assertEquals("face-a", rebound.targetId)
+        assertEquals(3, MotionTrackCodec.decode(rebound.encodedTrack)!!.keyframes.size)
+        val ignored = OverlayTrackCodec.rebindHost(encoded, movingFace(), host(id = "other").copy(uri = "file://other.mp4"))
+        assertEquals(encoded, ignored)
     }
 
     @Test

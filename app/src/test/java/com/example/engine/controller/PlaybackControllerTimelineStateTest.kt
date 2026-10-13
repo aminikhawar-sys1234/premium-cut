@@ -1,7 +1,9 @@
 package com.example.engine.controller
 
 import android.content.Context
+import androidx.media3.common.Player
 import androidx.test.core.app.ApplicationProvider
+import java.io.File
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
 import com.example.engine.timeline.TimelineSplitEngine
@@ -233,5 +235,71 @@ class PlaybackControllerTimelineStateTest {
     assertEquals(3, state.timeline.videoClips.map { it.id }.toSet().size)
     assertNotNull(state.activeClip)
     state.timeline.videoClips.forEach { assertTrue(it.sourceStartMs <= it.sourceEndMs) }
+  }
+
+  @Test
+  fun filterOnlyTimelineUpdateWhilePlayingDoesNotStopClockOrMute() {
+    val clip = VideoClip(
+      id = "clip_1",
+      name = "vid1.mp4",
+      uri = "content://media/vid1.mp4",
+      durationMs = 8000L,
+      timelineStartMs = 0L,
+      sourceStartMs = 0L,
+      sourceEndMs = 8000L,
+      isVideo = true,
+      volume = 0.8f,
+      isMuted = false
+    )
+    playbackController.updateTimeline(Timeline(videoClips = listOf(clip)))
+    playbackController.playTimeline(1500L)
+    playbackController.updateTimelinePosition(1800L)
+
+    val filtered = clip.copy(filter = com.example.domain.model.FilterSettings(
+      type = com.example.domain.model.FilterType.CINEMATIC,
+      intensity = 0.9f
+    ))
+    playbackController.updateTimeline(Timeline(videoClips = listOf(filtered)))
+
+    val state = playbackController.timelineState.value
+    assertTrue("Filter apply must not pause the master clock", state.isPlaying)
+    assertEquals(1800L, state.positionMs)
+    assertEquals(0.8f, state.activeClip?.volume)
+    assertFalse(state.activeClip?.isMuted == true)
+    assertEquals(com.example.domain.model.FilterType.CINEMATIC, state.activeClip?.filter?.type)
+  }
+
+  @Test
+  fun resetPlaybackSessionThenPlayReloadsLocalFileClip() {
+    val media = File(context.filesDir, "reopen_clip.mp4").apply { writeBytes(ByteArray(64) { 1 }) }
+    val clip = VideoClip(
+      id = "clip_reopen",
+      name = "reopen.mp4",
+      uri = media.absolutePath,
+      durationMs = 4000L,
+      timelineStartMs = 0L,
+      sourceStartMs = 0L,
+      sourceEndMs = 4000L,
+      isVideo = true
+    )
+    playbackController.updateTimeline(Timeline(videoClips = listOf(clip)))
+    playbackController.playTimeline(0L)
+    assertTrue(playbackController.timelineState.value.isPlaying)
+
+    playbackController.resetPlaybackSession()
+    assertFalse(playbackController.timelineState.value.isPlaying)
+    assertEquals(0L, playbackController.timelineState.value.positionMs)
+    assertEquals(0, playbackController.timelineState.value.timeline.videoClips.size)
+
+    playbackController.updateTimeline(Timeline(videoClips = listOf(clip)))
+    playbackController.playTimeline(0L)
+    val state = playbackController.timelineState.value
+    assertTrue(state.isPlaying)
+    assertEquals("clip_reopen", state.activeClip?.id)
+    assertTrue(
+      "Reopened local file must be loaded into ExoPlayer",
+      playbackController.player.mediaItemCount > 0 ||
+        playbackController.player.playbackState != Player.STATE_IDLE
+    )
   }
 }

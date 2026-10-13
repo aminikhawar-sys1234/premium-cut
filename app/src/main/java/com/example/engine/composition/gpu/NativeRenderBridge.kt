@@ -13,12 +13,14 @@ data class NativeLayer(
   val width: Float = 1f, val height: Float = 1f, val opacity: Float = 1f,
   val uOffset: Float = 0f, val vOffset: Float = 0f, val uScale: Float = 1f, val vScale: Float = 1f,
   val blendMode: NativeBlendMode = NativeBlendMode.NORMAL, val useCustomMatrix: Boolean = false,
-  val transformMatrix: FloatArray? = null
+  val transformMatrix: FloatArray? = null,
+  /** True only for a live SurfaceTexture / OES id. Compose layers are always GL_TEXTURE_2D. */
+  val isExternal: Boolean = false
 )
 
 object NativeRenderBridge {
   private const val TAG = "NativeRenderBridge"
-  private const val LAYER_STRIDE = 35
+  private const val LAYER_STRIDE = 36
   private var isLibraryLoaded = false
   val isLoaded: Boolean get() = isLibraryLoaded
 
@@ -56,6 +58,7 @@ object NativeRenderBridge {
       buffer[o+5] = layer.posX; buffer[o+6] = layer.posY; buffer[o+7] = layer.scaleX; buffer[o+8] = layer.scaleY; buffer[o+9] = layer.rotation; buffer[o+10] = layer.width; buffer[o+11] = layer.height; buffer[o+12] = layer.opacity
       buffer[o+13] = layer.uOffset; buffer[o+14] = layer.vOffset; buffer[o+15] = layer.uScale; buffer[o+16] = layer.vScale; buffer[o+17] = layer.blendMode.id.toFloat(); buffer[o+18] = if (layer.useCustomMatrix && layer.transformMatrix != null) 1f else 0f
       if (layer.useCustomMatrix && layer.transformMatrix != null && layer.transformMatrix.size >= 16) System.arraycopy(layer.transformMatrix, 0, buffer, o+19, 16)
+      buffer[o+35] = if (layer.isExternal) 1f else 0f
       o += LAYER_STRIDE
     }
     try { nativeRenderFrame(handle, buffer, layers.size) } catch (e: Throwable) { Log.e(TAG, "nativeRenderFrame failed", e) }
