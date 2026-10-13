@@ -35,6 +35,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.platform.LocalContext
+import coil.compose.AsyncImage
+import com.example.data.firebase.FirebaseElementsRepository
 import com.example.domain.model.StickerClip
 import com.example.ui.StudioViewModel
 
@@ -176,7 +179,11 @@ fun ElementsToolPanel(
     ) {
       items(categories) { category ->
         val isSelected = selectedCategory == category && searchQuery.isEmpty()
-        val count = remember(category) { ElementsCatalog.getByCategory(category).size }
+        val count = remember(category, remoteElements) {
+          remoteElements.count { it.category == category }
+            .takeIf { remoteElements.isNotEmpty() }
+            ?: ElementsCatalog.getByCategory(category).size
+        }
 
         Surface(
           onClick = {
@@ -370,17 +377,29 @@ private fun ElementThumbnailCard(
           .fillMaxWidth(),
         contentAlignment = Alignment.Center
       ) {
-        Canvas(modifier = Modifier.fillMaxSize(0.85f)) {
-          drawIntoCanvas { composeCanvas ->
-            ElementRenderer.draw(
-              canvas = composeCanvas.nativeCanvas,
-              clip = previewClip,
-              scale = 0.85f,
-              opacity = 1.0f,
-              width = size.width.toInt(),
-              height = size.height.toInt(),
-              currentPosMs = 0L
-            )
+        if (element.thumbnailUrl != null) {
+          // Firebase PNG thumbnail (Coil memory/disk cached; full SVG is only
+          // fetched from storagePath when the asset is actually used).
+          AsyncImage(
+            model = element.thumbnailUrl,
+            contentDescription = element.title,
+            modifier = Modifier
+              .fillMaxSize(0.85f)
+              .testTag("element_thumb_${element.id}")
+          )
+        } else {
+          Canvas(modifier = Modifier.fillMaxSize(0.85f)) {
+            drawIntoCanvas { composeCanvas ->
+              ElementRenderer.draw(
+                canvas = composeCanvas.nativeCanvas,
+                clip = previewClip,
+                scale = 0.85f,
+                opacity = 1.0f,
+                width = size.width.toInt(),
+                height = size.height.toInt(),
+                currentPosMs = 0L
+              )
+            }
           }
         }
       }

@@ -10,3 +10,5 @@ build/
 *.jks
 .env
 terminals/
+serviceAccountKey.json
+tools/assets/serviceAccountKey.json

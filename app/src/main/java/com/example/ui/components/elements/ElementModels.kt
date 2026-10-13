@@ -41,5 +41,12 @@ data class ElementItem(
   val primaryColor: Long = 0xFF00E5FF,
   val secondaryColor: Long = 0xFF7000FF,
   val isAnimated: Boolean = false,
-  val renderData: String? = null
+  val renderData: String? = null,
+  /** True when this item came from the Firebase asset library (`assets/{id}`). */
+  val isRemote: Boolean = false,
+  /** Firebase Storage download URL of the PNG thumbnail (Coil-cached in the panel). */
+  val thumbnailUrl: String? = null,
+  /** Firebase Storage path of the full asset file, e.g. `elements/files/shapes/x.svg`. */
+  val storagePath: String? = null,
+  val format: String? = null
 )

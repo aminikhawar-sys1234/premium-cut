@@ -33,5 +33,12 @@ service firebase.storage {
       allow read: if true;
       allow write: if false;
     }
+
+    // Elements asset library files + PNG thumbnails (Shapes panel).
+    // Public read so thumbnails load without auth; writes only via admin tooling.
+    match /elements/{file=**} {
+      allow read: if true;
+      allow write: if false;
+    }
   }
 }
