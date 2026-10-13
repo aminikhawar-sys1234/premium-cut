@@ -161,7 +161,9 @@ object TextTemplateCatalog {
 
     if (stringValue(normalized, "name").isNullOrBlank()) {
       val title = stringValue(normalized, "title")
-      val name = title ?: resolvedId
+      // Only Firestore documents can fall back to their document ID; asset/plugin parsing
+      // continues to reject nameless templates as before.
+      val name = title ?: fallbackId?.takeIf { it.isNotBlank() }
       if (!name.isNullOrBlank()) normalized.put("name", name)
     }
 
