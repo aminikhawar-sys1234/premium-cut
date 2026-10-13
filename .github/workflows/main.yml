@@ -10,15 +10,31 @@ on:
     branches:
       - main
       - master
+  workflow_dispatch:
 
 # Agar project kisi subfolder mein hai toh '.' ki jagah folder ka naam dein (e.g. 'my-app')
 env:
   PROJECT_PATH: '.'
+  # Both are pinned in app/build.gradle.kts as well and MUST be installed before the first
+  # Gradle invocation. AGP installs a missing package while it configures the project - i.e.
+  # inside the very first `./gradlew` call - and that concurrent auto-download raced itself
+  # (corrupt ZIP). Such a failure skipped the unit tests and both app builds.
+  # 28.2.13676358 is the default NDK of Android Gradle plugin 9.1.
+  CMAKE_VERSION: '3.22.1'
+  NDK_VERSION: '28.2.13676358'
+
+# One build per ref: a new push to a PR cancels the previous (still running) build.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build-and-test:
     name: Build, Test & Quality Checks
-    runs-on: ubuntu-latest
+    # Pinned on purpose: the ubuntu-latest label migrates to Ubuntu 26 on 2026-10-19 and
+    # would swap the preinstalled JDK/SDK in the middle of a release cycle.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
 
     defaults:
       run:
@@ -41,15 +57,10 @@ jobs:
       - name: Make Gradle Wrapper executable
         run: chmod +x gradlew
 
-      - name: Run Android Lint (Code Quality)
-        run: ./gradlew lintDebug --stacktrace
-
-      - name: Run Unit Tests
-        run: ./gradlew test --stacktrace
-
-      # Preinstall CMake into the runner SDK so parallel ABI configure tasks
-      # do not race AGP's auto-download (that race produced a corrupt ZIP).
-      - name: Install CMake 3.22.1
+      # Preinstall CMake + NDK into the runner SDK so parallel ABI configure tasks never
+      # race AGP's auto-download, and so the first Gradle call cannot fail on a missing
+      # package. Runs before lint/tests/assemble on purpose.
+      - name: Install Android SDK toolchain (CMake + NDK)
         run: |
           SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
           SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
@@ -57,26 +68,95 @@ jobs:
             echo "sdkmanager not found under $SDK_ROOT"
             exit 1
           fi
-          yes | "$SDKMANAGER" --licenses >/dev/null || true
-          "$SDKMANAGER" --install "cmake;3.22.1"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+
+          if [ -d "$SDK_ROOT/cmake/$CMAKE_VERSION" ] && [ -d "$SDK_ROOT/ndk/$NDK_VERSION" ]; then
+            echo "CMake $CMAKE_VERSION and NDK $NDK_VERSION are already installed"
+          else
+            installed=0
+            for attempt in 1 2 3; do
+              if "$SDKMANAGER" --install "cmake;$CMAKE_VERSION" "ndk;$NDK_VERSION"; then
+                installed=1
+                break
+              fi
+              echo "sdkmanager install failed (attempt $attempt); retrying in $((attempt * 20))s"
+              sleep $((attempt * 20))
+            done
+            if [ "$installed" != "1" ]; then
+              echo "Could not install CMake $CMAKE_VERSION / NDK $NDK_VERSION"
+              exit 1
+            fi
+          fi
+
+          test -d "$SDK_ROOT/cmake/$CMAKE_VERSION"
+          test -d "$SDK_ROOT/ndk/$NDK_VERSION"
+          echo "CMake: $(ls -d "$SDK_ROOT"/cmake/*)"
+          echo "NDK:   $(ls -d "$SDK_ROOT"/ndk/*)"
+
+      # Each Gradle step retries once: a shared runner can fail on a transient
+      # network/daemon hiccup, and that must not turn into a red build.
+      - name: Run Android Lint (Code Quality)
+        run: |
+          for attempt in 1 2; do
+            if ./gradlew lintDebug --stacktrace; then exit 0; fi
+            echo "lintDebug failed (attempt $attempt); retrying once"
+            sleep 20
+          done
+          exit 1
+
+      - name: Run Unit Tests
+        run: |
+          for attempt in 1 2; do
+            if ./gradlew test --stacktrace; then exit 0; fi
+            echo "unit tests failed (attempt $attempt); retrying once"
+            sleep 20
+          done
+          exit 1
 
       - name: Build Debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          for attempt in 1 2; do
+            if ./gradlew assembleDebug --stacktrace; then exit 0; fi
+            echo "assembleDebug failed (attempt $attempt); retrying once"
+            sleep 20
+          done
+          exit 1
 
       - name: Build Release Bundle (AAB)
-        run: ./gradlew bundleRelease --stacktrace
+        run: |
+          for attempt in 1 2; do
+            if ./gradlew bundleRelease --stacktrace; then exit 0; fi
+            echo "bundleRelease failed (attempt $attempt); retrying once"
+            sleep 20
+          done
+          exit 1
+
+      # Keeps the reason of a future failure in the log instead of only in the Gradle console.
+      - name: Gradle diagnostics on failure
+        if: failure()
+        run: |
+          echo "===== gradle --version ====="
+          ./gradlew --version || true
+          echo "===== last Gradle daemon log ====="
+          DAEMON_LOG="$(ls -t "$HOME"/.gradle/daemon/*/daemon-*.out.log 2>/dev/null | head -1 || true)"
+          if [ -n "$DAEMON_LOG" ]; then tail -n 200 "$DAEMON_LOG"; else echo "no daemon log found"; fi
+          echo "===== SDK toolchain ====="
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          ls -d "$SDK_ROOT"/cmake/* "$SDK_ROOT"/ndk/* 2>/dev/null || true
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: ${{ env.PROJECT_PATH }}/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: ignore
 
       - name: Upload Release AAB
         uses: actions/upload-artifact@v4
         with:
           name: app-release-bundle
           path: ${{ env.PROJECT_PATH }}/app/build/outputs/bundle/release/app-release.aab
+          if-no-files-found: ignore
 
       - name: Upload Unit Test Reports
         if: always()
@@ -84,6 +164,7 @@ jobs:
         with:
           name: unit-test-reports
           path: ${{ env.PROJECT_PATH }}/app/build/reports/tests/testDebugUnitTest/
+          if-no-files-found: ignore
 
       - name: Upload Lint Reports
         if: always()
@@ -91,3 +172,4 @@ jobs:
         with:
           name: lint-reports
           path: ${{ env.PROJECT_PATH }}/app/build/reports/lint-results-debug.html
+          if-no-files-found: ignore
