@@ -173,6 +173,12 @@ class TextTemplateCatalogTest {
     assertEquals(36f, template?.templateClip?.fontSizeSp ?: 0f, 0.01f)
     assertFalse(template?.templateClip?.is3D == true)
 
+    val nameFallsBackToFirestoreId = TextTemplateCatalog.parseFirestoreDocument(
+      "remote-name-fallback",
+      mapOf("text" to "Named by document ID")
+    )
+    assertEquals("remote-name-fallback", nameFallsBackToFirestoreId?.name)
+
     assertNull(
       TextTemplateCatalog.parseFirestoreDocument(
         "empty-remote-template",
