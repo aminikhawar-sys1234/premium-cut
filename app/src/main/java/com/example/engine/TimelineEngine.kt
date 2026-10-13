@@ -14,7 +14,12 @@ import com.example.engine.timeline.withClipStart
 import com.example.engine.timeline.withClipsShifted
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.FlowCollector
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.sample
 import java.util.UUID
 
 sealed class SelectedTrackElement {
@@ -43,6 +48,14 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
 
   companion object {
     private const val TAG = "TimelineEngine"
+
+    /** Microseconds -> milliseconds (truncating). Inline, so hot-path reads allocate nothing. */
+    @JvmStatic
+    inline fun usToMs(us: Long): Long = us / 1_000L
+
+    /** Milliseconds -> microseconds. */
+    @JvmStatic
+    inline fun msToUs(ms: Long): Long = ms * 1_000L
   }
 
   // UnifiedAdvancedTimeline integration
@@ -81,24 +94,37 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     com.example.engine.motion.ClipMotionRuntime.timelineProvider = { _timeline.value }
   }
 
-  private val _currentPositionUs = MutableStateFlow(0L)
-  val currentPositionUs: StateFlow<Long> = _currentPositionUs.asStateFlow()
+  // --- Playhead: single source of truth ---------------------------------------------------
+  //
+  // `_playheadUs` is the ONLY mutable playhead state. Every write goes through
+  // [commitPlayheadUs], which callers invoke while holding [stateLock]. Milliseconds and frame
+  // indices are DERIVED from it on read. The old code wrote the ms and us flows as two separate
+  // emissions, so collectors could observe them half-updated and each tick woke both.
+  private val _playheadUs = MutableStateFlow(0L)
 
-  private val _currentPositionMs = MutableStateFlow(0L)
-  val currentPositionMs: StateFlow<Long> = _currentPositionMs.asStateFlow()
+  /** Playhead in microseconds. Emits on every change; use for precise timing math. */
+  val currentPositionUs: StateFlow<Long> = _playheadUs.asStateFlow()
 
+  /**
+   * Playhead in milliseconds, derived from [currentPositionUs]. It emits only when the MILLISECOND
+   * value changes, so sub-millisecond hardware ticks do not wake its collectors.
+   */
+  val currentPositionMs: StateFlow<Long> = MappedStateFlow(_playheadUs) { usToMs(it) }
+
+  /** Internal read alias, so existing engine code keeps reading the derived millisecond value. */
+  private val _currentPositionMs: StateFlow<Long>
+    get() = currentPositionMs
+
+  /** Authoritative playhead in microseconds (lock-free read). */
   val playheadUs: Long
-    get() = _currentPositionUs.value
+    get() = _playheadUs.value
 
-  private fun setInternalPositionMs(posMs: Long) {
-    _currentPositionMs.value = posMs
-    _currentPositionUs.value = posMs * 1000L
+  /** The single write path for the playhead. Callers must hold [stateLock]. */
+  private fun commitPlayheadUs(posUs: Long) {
+    _playheadUs.value = posUs
   }
 
-  private fun setInternalPositionUs(posUs: Long) {
-    _currentPositionUs.value = posUs
-    _currentPositionMs.value = posUs / 1000L
-  }
+  private fun setInternalPositionMs(posMs: Long) = commitPlayheadUs(msToUs(posMs))
 
   private val _isPlaying = MutableStateFlow(false)
   val isPlaying: StateFlow<Boolean> = _isPlaying.asStateFlow()
@@ -222,7 +248,8 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   fun frameToTimeUs(frameIndex: Long, fps: Int = _timelineFps.value): Long =
     (frameIndex * 1_000_000L + (fps / 2)) / fps
 
-  fun currentFrame(): Long = timeToFrame(_currentPositionMs.value, _timelineFps.value)
+  /** Frame index of the playhead, derived from the microsecond source of truth. */
+  fun currentFrame(fps: Int = _timelineFps.value): Long = timeUsToFrame(_playheadUs.value, fps)
 
   fun totalFrames(fps: Int = _timelineFps.value): Long = timeToFrame(_timeline.value.totalDurationMs, fps)
 
@@ -243,6 +270,28 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   // --- CTI Playhead, Scrubbing & Hardware Sync Operations ---
 
   fun setPosition(positionMs: Long, snap: Boolean = _isSnappingEnabled.value) = withStateLock {
+    commitPlayheadUs(msToUs(resolvePositionMs(positionMs, snap)))
+  }
+
+  fun setPositionUs(positionUs: Long, snap: Boolean = _isSnappingEnabled.value) = withStateLock {
+    val requestedMs = usToMs(positionUs)
+    val resolvedMs = resolvePositionMs(requestedMs, snap)
+    // Keep the caller's sub-millisecond precision unless snapping moved the target. The old code
+    // wrote Us only when the ms value happened to match, so a snapped target left Us stale.
+    val resolvedUs = if (resolvedMs == requestedMs) {
+      positionUs.coerceIn(0L, maxOf(_timeline.value.totalDurationMs + 10000L, 10000L) * 1000L)
+    } else {
+      msToUs(resolvedMs)
+    }
+    commitPlayheadUs(resolvedUs)
+  }
+
+  /**
+   * Resolves a requested playhead time (ms) against frame snapping, object snapping and bounds.
+   * Shared by [setPosition] and [setPositionUs] so both follow identical rules.
+   * Callers must hold [stateLock].
+   */
+  private fun resolvePositionMs(positionMs: Long, snap: Boolean): Long {
     val total = _timeline.value.totalDurationMs
     val targetPos = if (_isFrameSnapping.value && snap) {
       alignToFrame(positionMs, _timelineFps.value)
@@ -251,18 +300,16 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     }
     val snapped = if (snap) snapPosition(targetPos) else targetPos
     val maxAllowed = maxOf(total + 10000L, 10000L)
-    val bounded = snapped.coerceIn(0L, maxAllowed)
-    setInternalPositionMs(bounded)
+    return snapped.coerceIn(0L, maxAllowed)
   }
 
-  fun setPositionUs(positionUs: Long, snap: Boolean = _isSnappingEnabled.value) = withStateLock {
-    val requestedMs = positionUs / 1000L
-    setPosition(requestedMs, snap)
-    if (_currentPositionMs.value == requestedMs) {
-      val maxAllowedUs = maxOf(_timeline.value.totalDurationMs + 10000L, 10000L) * 1000L
-      _currentPositionUs.value = positionUs.coerceIn(0L, maxAllowedUs)
-    }
-  }
+  // --- Scrubbing -----------------------------------------------------------------------------
+  //
+  // Scrub positions are TRANSIENT. They write only the playhead (and the snap indicator). They
+  // never touch `_timeline` or the undo history, so a drag cannot create undoable project state.
+  // The engine publishes exact positions. Consumers that render at UI rate should collect
+  // [sampledPositionMs], which batches a fast drag into at most one emission per sample period.
+  // This keeps `.value` exact for edit operations that run during a gesture.
 
   fun beginScrubbing() = withStateLock {
     _isScrubbing.value = true
@@ -288,49 +335,73 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
 
   fun stopScrubbing(finalPositionMs: Long? = null) = endScrubbing(finalPositionMs)
 
+  // --- Hardware playback sync ----------------------------------------------------------------
+
+  /** Playback ticks dropped because the edit/scrub lock was busy (diagnostics). */
+  private val droppedPlaybackTicks = java.util.concurrent.atomic.AtomicLong(0L)
+
+  val droppedPlaybackTickCount: Long
+    get() = droppedPlaybackTicks.get()
+
+  /** Re-entrancy guard for playback writes. Guarded by [stateLock]. */
+  private var playbackWriteInFlight = false
+
   /**
-   * Thread-safe, non-reentrant hardware clock synchronization.
-   * Updates playhead directly from ExoPlayer/Hardware clock without triggering recursive seek calls.
+   * Hardware clock -> playhead, in milliseconds. Delegates to [updatePlayheadFromPlaybackUs].
    */
-  fun updatePlayheadFromPlayback(positionMs: Long) = withStateLock {
-    // Only accept hardware playback position updates if playback is actively playing.
-    // When paused or seeking, user-selected CTI position is strictly authoritative.
-    if (!_isPlaying.value) return@withStateLock
-    val total = _timeline.value.totalDurationMs
-    val bounded = positionMs.coerceIn(0L, total.coerceAtLeast(0L))
-    _isPlaybackSyncing.value = true
+  fun updatePlayheadFromPlayback(positionMs: Long) = updatePlayheadFromPlaybackUs(msToUs(positionMs))
+
+  /**
+   * Hardware clock -> playhead (ExoPlayer / playback thread, called on every position tick).
+   *
+   * - Never blocks. If the edit or scrub lock is held, the tick is dropped and counted. The next
+   *   tick corrects the position, so playback never waits behind an edit.
+   * - Ignored unless playing. A paused or scrubbed user position stays authoritative.
+   * - Non-reentrant. A write that re-enters on the same thread (for example from a collector
+   *   running inline) is ignored, so it cannot recurse.
+   * - Never calls back into the player, so it cannot dispatch a seek.
+   */
+  fun updatePlayheadFromPlaybackUs(positionUs: Long) {
+    if (!stateLock.tryLock()) {
+      droppedPlaybackTicks.incrementAndGet()
+      return
+    }
     try {
-      setInternalPositionMs(bounded)
+      if (!_isPlaying.value || playbackWriteInFlight) return
+      playbackWriteInFlight = true
+      try {
+        val totalUs = msToUs(_timeline.value.totalDurationMs).coerceAtLeast(0L)
+        commitPlayheadUs(positionUs.coerceIn(0L, totalUs))
+      } finally {
+        playbackWriteInFlight = false
+      }
     } finally {
-      _isPlaybackSyncing.value = false
+      stateLock.unlock()
     }
   }
 
   /**
-   * Synchronizes authoritative position when pausing or settling playback.
+   * Re-synchronises the authoritative position when pausing or settling playback. This is a rare
+   * path, so it is the only playback-side write that toggles [isPlaybackSyncing].
    */
   fun syncAuthoritativePosition(positionMs: Long) = withStateLock {
     val total = _timeline.value.totalDurationMs
     val bounded = positionMs.coerceIn(0L, total.coerceAtLeast(0L))
     _isPlaybackSyncing.value = true
     try {
-      setInternalPositionMs(bounded)
+      commitPlayheadUs(msToUs(bounded))
     } finally {
       _isPlaybackSyncing.value = false
     }
   }
 
-  fun updatePlayheadFromPlaybackUs(positionUs: Long) = withStateLock {
-    if (!_isPlaying.value) return@withStateLock
-    val totalUs = _timeline.value.totalDurationMs * 1000L
-    val boundedUs = positionUs.coerceIn(0L, totalUs.coerceAtLeast(0L))
-    _isPlaybackSyncing.value = true
-    try {
-      setInternalPositionUs(boundedUs)
-    } finally {
-      _isPlaybackSyncing.value = false
-    }
-  }
+  /**
+   * UI-rate playhead for sliders, timecode and CTI. Emits at most once per [periodMs], and only
+   * when the millisecond value changes. Collect it in a leaf composable, not at the screen root,
+   * so a tick recomposes only the leaf.
+   */
+  fun sampledPositionMs(periodMs: Long = 50L): Flow<Long> =
+    currentPositionMs.sample(periodMs).distinctUntilChanged()
 
   fun togglePlayPause() = withStateLock {
     if (!_isPlaying.value) {
@@ -7396,3 +7467,36 @@ data class AudioSyncInfo(
   val pitchShiftSemitones: Float = 0f
 )
 
+/**
+ * Read-only [StateFlow] whose value is `transform(source.value)`.
+ *
+ * Derived playhead values are computed from the single authoritative flow, not stored separately.
+ * Collectors receive a value only when the transformed value changes.
+ */
+private class MappedStateFlow<T, R>(
+  private val source: StateFlow<T>,
+  private val transform: (T) -> R
+) : StateFlow<R> {
+
+  override val value: R
+    get() = transform(source.value)
+
+  override val replayCache: List<R>
+    get() = listOf(value)
+
+  override suspend fun collect(collector: FlowCollector<R>): Nothing {
+    val upstream: Flow<T> = source
+    var hasLast = false
+    var last: R? = null
+    upstream.collect { raw ->
+      val next = transform(raw)
+      if (!hasLast || next != last) {
+        hasLast = true
+        last = next
+        collector.emit(next)
+      }
+    }
+    // A StateFlow never completes. Collection ends only when the collector is cancelled.
+    awaitCancellation()
+  }
+}
