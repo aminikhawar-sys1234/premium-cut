@@ -12,6 +12,11 @@ android {
   namespace = "com.example"
   compileSdk { version = release(36) { minorApiLevel = 1 } }
 
+  // Pinned explicitly (AGP 9.1's default NDK): CI installs exactly this version up front, so AGP
+  // never has to auto-download the NDK while it configures the project, and every machine builds
+  // the native renderer with the same toolchain.
+  ndkVersion = "28.2.13676358"
+
   defaultConfig {
     applicationId = "com.aistudio.videostudio.hkmqzp"
     minSdk = 24
