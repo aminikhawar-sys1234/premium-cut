@@ -36,8 +36,8 @@ async function main() {
     return;
   }
   let admin;
-  try { admin = require(path.join(ROOT, "functions", "node_modules", "firebase-admin")); }
-  catch { admin = require("firebase-admin"); }
+  try { admin = require("firebase-admin"); } // tools/assets/node_modules (npm install there)
+  catch { admin = require(path.join(ROOT, "functions", "node_modules", "firebase-admin")); }
   const keyPath = process.env.GOOGLE_APPLICATION_CREDENTIALS;
   if (!keyPath || !fs.existsSync(keyPath)) {
     throw new Error("Set GOOGLE_APPLICATION_CREDENTIALS to the service-account key JSON (not committed to git).");

@@ -46,13 +46,27 @@ Selection inserts a real editable clip at the playhead through the existing
 `storagePath` in `renderData` — timeline, undo/redo, save, playback and export
 paths are unchanged.
 
-## Upload to Firebase (admin, one command)
+## Upload to Firebase — recommended: GitHub Actions (one click)
 
-The service-account key must never be committed (see `.gitignore`):
+The upload runs **outside** this dev sandbox (which has no route to Google
+APIs), via `.github/workflows/upload-elements-assets.yml`:
+
+1. Repo **Settings → Secrets and variables → Actions → New repository secret**
+   - Name: `FIREBASE_SERVICE_ACCOUNT`
+   - Value: poori service-account JSON (Firebase Console → Project settings →
+     Service accounts → Generate new private key). Key na git mein jati hai,
+     na chat mein — sirf GitHub Secret mein rehti hai.
+2. **Actions** tab → **Upload Elements Assets to Firebase** → **Run workflow**.
+3. Job pehle seed validate karta hai, phir 220 files Storage par aur
+   11 categories + 220 assets Firestore mein upload karke **count verify**
+   karta hai (`VERIFIED: 11 categories + 220 published assets are live.`),
+   aur rules bhi deploy kar deta hai. Re-run idempotent hai.
+
+### Alternative: local machine / Cloud Shell
 
 ```bash
-cd functions && npm install        # provides firebase-admin for the script
-GOOGLE_APPLICATION_CREDENTIALS=tools/assets/serviceAccountKey.json \
+cd tools/assets && npm install
+GOOGLE_APPLICATION_CREDENTIALS=/path/to/serviceAccountKey.json \
   node tools/assets/upload_firebase.js            # add --dry-run to verify only
 firebase deploy --only firestore:rules,storage:rules
 ```
