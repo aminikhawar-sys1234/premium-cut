@@ -26,6 +26,7 @@ import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -190,6 +191,87 @@ fun MediaImportPanel(
       }
     }
   }
+
+  var pendingCameraPath by rememberSaveable { mutableStateOf<String?>(null) }
+  val captureVideoLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.CaptureVideo()
+  ) { recorded: Boolean ->
+    val file = pendingCameraPath?.let { java.io.File(it) }
+    pendingCameraPath = null
+    if (recorded && file != null && file.length() > 0L) {
+      coroutineScope.launch {
+        try {
+          val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
+            context = context,
+            sourceUriString = Uri.fromFile(file).toString(),
+            suggestedName = file.name
+          )
+          val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
+            context,
+            persistentPath,
+            defaultImageDurationMs = (imageDurationSec * 1000).toLong()
+          )
+          if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
+            viewModel.checkAndAutoConfigureCanvasFromMedia(
+              width = metadata.width,
+              height = metadata.height,
+              rotationDegrees = metadata.rotationDegrees,
+              frameRate = metadata.frameRate
+            )
+            viewModel.timelineEngine.addVideoClip(
+              uri = persistentPath,
+              name = "Recording",
+              isVideo = true,
+              durationMs = metadata.durationMs,
+              atPlayhead = insertAtPlayhead,
+              width = metadata.width,
+              height = metadata.height,
+              rotationDegrees = metadata.rotationDegrees,
+              frameRate = metadata.frameRate,
+              mimeType = metadata.mimeType,
+              hasAudio = metadata.hasAudio
+            )
+          } else {
+            viewModel.timelineEngine.addOverlayClip(
+              uri = persistentPath,
+              name = "Recording",
+              isVideo = true,
+              durationMs = metadata.durationMs,
+              width = metadata.width,
+              height = metadata.height,
+              rotationDegrees = metadata.rotationDegrees,
+              frameRate = metadata.frameRate,
+              mimeType = metadata.mimeType,
+              hasAudio = metadata.hasAudio
+            )
+          }
+          file.delete()
+          onDismiss()
+        } catch (e: Throwable) {
+          android.util.Log.e("MediaImportPanel", "Error importing camera recording", e)
+        }
+      }
+    } else {
+      file?.delete()
+    }
+  }
+
+  fun startCameraCapture() {
+    try {
+      val dir = java.io.File(context.cacheDir, "camera").apply { mkdirs() }
+      val file = java.io.File(dir, "rec_${System.currentTimeMillis()}.mp4")
+      pendingCameraPath = file.absolutePath
+      val uri = androidx.core.content.FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+      captureVideoLauncher.launch(uri)
+    } catch (e: Throwable) {
+      pendingCameraPath = null
+      android.util.Log.e("MediaImportPanel", "Cannot start camera", e)
+    }
+  }
+
+  val cameraPermissionLauncher = rememberLauncherForActivityResult(
+    contract = ActivityResultContracts.RequestPermission()
+  ) { granted: Boolean -> if (granted) startCameraCapture() }
 
   val pickVideoLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.PickMultipleVisualMedia()
@@ -511,6 +593,29 @@ fun MediaImportPanel(
         Spacer(modifier = Modifier.width(4.dp))
         Text("Photos Only", fontWeight = FontWeight.SemiBold, fontSize = 12.sp)
       }
+    }
+
+    Button(
+      onClick = {
+        val granted = androidx.core.content.ContextCompat.checkSelfPermission(
+          context, android.Manifest.permission.CAMERA
+        ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        if (granted) startCameraCapture() else cameraPermissionLauncher.launch(android.Manifest.permission.CAMERA)
+      },
+      colors = ButtonDefaults.buttonColors(
+        containerColor = Color(0xFF1E293B),
+        contentColor = TextPrimary
+      ),
+      shape = RoundedCornerShape(12.dp),
+      modifier = Modifier
+        .fillMaxWidth()
+        .height(44.dp)
+        .border(1.dp, Color(0xFFFF5252).copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+        .testTag("import_record_camera_button")
+    ) {
+      Icon(Icons.Default.Videocam, contentDescription = null, tint = Color(0xFFFF5252), modifier = Modifier.size(18.dp))
+      Spacer(modifier = Modifier.width(6.dp))
+      Text("Record with Camera", fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
     }
 
     // Photo Duration & Placement Options

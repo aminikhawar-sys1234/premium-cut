@@ -112,7 +112,8 @@ enum class EditorToolbarTab {
   ASSET_STORE,
   MOTION_TRACKING,
   ADVANCED_ANIMATION,
-  AR_EFFECTS
+  AR_EFFECTS,
+  SMART
 }
 
 class StudioViewModel(application: Application) : AndroidViewModel(application) {

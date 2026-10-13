@@ -1150,6 +1150,23 @@ private fun TimelineRulerHeader(
         )
         Spacer(modifier = Modifier.width(rightPaddingDp))
       }
+      val markers = timeline?.markers.orEmpty()
+      if (markers.isNotEmpty()) {
+        androidx.compose.foundation.Canvas(
+          modifier = Modifier.width(totalRulerWidthDp).fillMaxHeight().testTag("timeline_marker_ticks")
+        ) {
+          val tickHeight = 12.dp.toPx()
+          markers.forEach { marker ->
+            val x = leftPaddingDp.toPx() + (marker.timeMs / msPerPixel).dp.toPx()
+            drawLine(
+              color = Color(marker.color),
+              start = androidx.compose.ui.geometry.Offset(x, size.height - tickHeight),
+              end = androidx.compose.ui.geometry.Offset(x, size.height),
+              strokeWidth = 2.dp.toPx()
+            )
+          }
+        }
+      }
     }
 
     // Floating Timecode display
