@@ -222,8 +222,24 @@ object TimelineSplitEngine {
     val tailDur = clip.durationMs - headDur
     val (headKf, tailKf) = splitKeyframes(clip.keyframes, headDur)
     val (headWords, tailWords) = splitWords(clip.words, headDur)
-    return clip.copy(durationMs = headDur, keyframes = headKf, words = headWords) to
-      clip.copy(id = newId(existingIds + clip.id), timelineStartMs = atMs, durationMs = tailDur, keyframes = tailKf, words = tailWords)
+    val headIdx = clip.words.indices.filter { clip.words[it].startMs < headDur }
+    val tailIdx = clip.words.indices.filter { clip.words[it].startMs + clip.words[it].durationMs > headDur }
+    return clip.copy(durationMs = headDur, keyframes = headKf, words = headWords, text = textForWords(clip, headIdx)) to
+      clip.copy(
+        id = newId(existingIds + clip.id), timelineStartMs = atMs, durationMs = tailDur,
+        keyframes = tailKf, words = tailWords, text = textForWords(clip, tailIdx)
+      )
+  }
+
+  /**
+   * The caption text a half of a split should show. With word timings, each half shows only its own
+   * words; without them (or when the text no longer matches the timings) the text is left alone.
+   */
+  private fun textForWords(clip: TextClip, keptIndices: List<Int>): String {
+    if (clip.words.isEmpty() || keptIndices.size == clip.words.size) return clip.text
+    val tokens = clip.text.trim().split(Regex("\\s+")).filter { it.isNotEmpty() }
+    if (tokens.size != clip.words.size) return clip.text
+    return keptIndices.joinToString(" ") { tokens[it] }
   }
 
   private fun splitStickerUnchecked(

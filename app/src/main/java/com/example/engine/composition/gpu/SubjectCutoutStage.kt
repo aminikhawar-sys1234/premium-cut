@@ -7,6 +7,7 @@ import com.ahstudio.face.gl.GlUtil
 import com.example.engine.ai.cutout.BgRemoveParams
 import com.example.engine.ai.cutout.CutoutStatus
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
+import com.example.engine.ai.cutout.MaskTemporalFilter
 import com.example.engine.ai.cutout.SubjectMaskPixels
 import com.example.engine.ai.cutout.SubjectMaskResult
 import com.example.engine.ai.cutout.SubjectMaskWorker
@@ -41,6 +42,7 @@ class SubjectCutoutStage {
     var maskTex = 0
     var hasMask = false
     var maskBucket = Long.MIN_VALUE
+    var lastAlpha: ByteArray? = null
     var epoch = -1
     var lastRequestNs = 0L
     val inFlight = AtomicBoolean(false)
@@ -132,6 +134,7 @@ class SubjectCutoutStage {
         slot.epoch = epoch
         slot.hasMask = false
         slot.maskBucket = Long.MIN_VALUE
+        slot.lastAlpha = null
         slot.pending.set(null)
       }
 
@@ -277,7 +280,13 @@ class SubjectCutoutStage {
   // GL
   // ---------------------------------------------------------------------------------------------
 
-  private fun uploadMask(slot: Slot, pixels: SubjectMaskPixels, bucket: Long) {
+  private fun uploadMask(slot: Slot, raw: SubjectMaskPixels, bucket: Long) {
+    val previous = slot.lastAlpha
+    val smoothed = if (slot.hasMask && MaskTemporalFilter.canBlend(previous, raw.alpha.size, bucket - slot.maskBucket)) {
+      MaskTemporalFilter.blend(previous, raw.alpha)
+    } else raw.alpha
+    slot.lastAlpha = smoothed
+    val pixels = if (smoothed === raw.alpha) raw else SubjectMaskPixels(raw.width, raw.height, smoothed)
     if (slot.maskTex == 0) {
       val t = IntArray(1)
       GLES20.glGenTextures(1, t, 0)
@@ -380,6 +389,7 @@ class SubjectCutoutStage {
     }
     slot.maskTex = 0
     slot.hasMask = false
+    slot.lastAlpha = null
     slot.pending.set(null)
   }
 

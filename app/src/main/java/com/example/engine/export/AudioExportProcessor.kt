@@ -10,6 +10,7 @@ import android.net.Uri
 import android.util.Log
 import com.example.domain.model.Timeline
 import com.example.domain.model.TrackType
+import com.example.engine.audio.PitchSafeStretch
 import com.example.engine.controller.PreviewMixPolicy
 import com.example.engine.media.MediaRelinkManager
 import kotlinx.coroutines.Dispatchers
@@ -490,6 +491,15 @@ class AudioExportProcessor(
             decoded = decoded.copy(samples = processed)
         }
 
+        // Speed changes duration but not pitch, like the Media3 preview (pitch fixed at 1.0).
+        // The mixer then reads this buffer 1:1 on the timeline.
+        val trackSpeed = track.speed.coerceIn(0.25f, 4.0f)
+        if (!PitchSafeStretch.isUnity(trackSpeed) && decoded.samples.isNotEmpty()) {
+            decoded = decoded.copy(
+                samples = PitchSafeStretch.applySpeed(decoded.samples, decoded.channels, decoded.sampleRate, trackSpeed)
+            )
+        }
+
         pcmCache[cacheKey] = decoded
         return decoded
     }
@@ -504,6 +514,10 @@ class AudioExportProcessor(
      * `MutableList<Byte>` (one boxed element per byte) — the single biggest CPU/GC cost of the
      * whole export for projects with audio.
      */
+    /** Decodes [startMs, endMs) of a media file's audio for analysis (beats, speech); null when it has no decodable audio. */
+    fun decodeForAnalysis(uriString: String, startMs: Long, endMs: Long): DecodedPcm? =
+        decodePcmFromMedia(uriString, startMs, endMs)
+
     private fun decodePcmFromMedia(uriString: String, windowStartMs: Long = 0L, windowEndMs: Long = Long.MAX_VALUE): DecodedPcm? {
         val ctx = context ?: return null
         val extractor = MediaExtractor()
@@ -637,8 +651,8 @@ class AudioExportProcessor(
         val srcRate = decoded.sampleRate
         val srcChannels = decoded.channels
 
-        val speed = track.speed.coerceIn(0.25f, 4.0f)
-        val rateRatio = (srcRate.toDouble() / targetSampleRate.toDouble()) * speed
+        // Speed is already baked into [decoded] by decodeTrackOrFail (pitch-safe time stretch).
+        val rateRatio = srcRate.toDouble() / targetSampleRate.toDouble()
 
         for (frame in startFrame until endFrame) {
             val relativeFrame = frame - startFrame

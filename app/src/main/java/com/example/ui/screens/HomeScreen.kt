@@ -83,7 +83,7 @@ fun HomeScreen(
     if (settings.openEditorDirectlyOnNewProject) {
       viewModel.createNewProject(
         name = "New Project",
-        aspectRatio = AspectRatio.RATIO_16_9,
+        aspectRatio = AspectRatio.RATIO_9_16,
         resolution = Resolution.RES_1080P,
         fps = FrameRate.FPS_30,
         initialMediaClips = emptyList()

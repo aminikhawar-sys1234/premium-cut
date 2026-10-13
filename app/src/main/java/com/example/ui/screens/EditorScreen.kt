@@ -1285,6 +1285,13 @@ fun EditorScreen(
                   onClose = { viewModel.setActiveToolbarTab(null) }
                 )
               }
+              activeTab == EditorToolbarTab.SMART -> {
+                com.example.ui.components.SmartToolsPanel(
+                  viewModel = viewModel,
+                  modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
+                  onClose = { viewModel.setActiveToolbarTab(null) }
+                )
+              }
               activeTab == EditorToolbarTab.AR_EFFECTS -> {
                 com.example.ui.components.ar.ArEffectSelectorPanel(
                   viewModel = viewModel,
@@ -3031,12 +3038,12 @@ private fun EditorBottomToolbar(
         ),
         FuturisticNavItemData(
           id = "beats",
-          label = "Beats",
+          label = "Smart",
           icon = Icons.Default.GraphicEq,
-          theme = NavItemThemes.Audio,
-          isSelected = false,
+          theme = NavItemThemes.AI,
+          isSelected = activeTab == EditorToolbarTab.SMART,
           testTag = "tool_beats_btn",
-          onClick = { runAction("Beats (add an audio clip)") { viewModel.timelineEngine.jumpToNextAudioPeak() } }
+          onClick = { viewModel.setActiveToolbarTab(EditorToolbarTab.SMART) }
         ),
         FuturisticNavItemData(
           id = "tracking",
