@@ -39,6 +39,12 @@ enum class TimelineActionType(val displayName: String) {
   AUDIO_EFFECTS_EDIT("Audio Effects & EQ"),
   TRACK_SETTINGS_EDIT("Track Settings"),
   AUTO_DUCKING_EDIT("Auto-Ducking"),
+  BEAT_SYNC("Beat Sync"),
+  SCENE_SPLIT("Split Scenes"),
+  AUTO_REFRAME("Auto Reframe"),
+  SPEECH_CLEANUP("Remove Filler / Pauses"),
+  CAPTION_WORD_EDIT("Caption Words"),
+  PASTE_ATTRIBUTES("Paste Attributes"),
   GENERIC_EDIT("Timeline Edit")
 }
 

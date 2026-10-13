@@ -17,6 +17,13 @@ import com.example.engine.timeline.TimelineFrameMath
 import com.example.engine.timeline.TimelineSelection
 import com.example.engine.timeline.TimelineSourceEdits
 import com.example.engine.timeline.TimelineSplitEngine
+import com.example.engine.timeline.TimelineRangeOps
+import com.example.engine.timeline.ClipAttributes
+import com.example.engine.timeline.AttributeGroup
+import com.example.engine.captions.CaptionWordOps
+import com.example.engine.captions.SpeechCleanup
+import com.example.engine.ai.reframe.AutoReframePlanner
+import com.example.engine.ai.reframe.ReframeKey
 import com.example.engine.timeline.TimelineTrackCommands
 import com.example.engine.timeline.TimelineTrackRules
 import com.example.engine.timeline.TimelineOverlapQueries
@@ -5681,6 +5688,153 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     _timeline.value = working
     if (split.tailElement != SelectedTrackElement.None) selectElement(split.tailElement)
     Pair(split.headId, split.tailId)
+  }
+
+  // --- Smart editing: beat sync, scene split, auto reframe, speech cleanup, caption words, paste attributes ---
+
+  private val _copiedAttributes = MutableStateFlow<ClipAttributes?>(null)
+  val copiedAttributes: StateFlow<ClipAttributes?> = _copiedAttributes.asStateFlow()
+
+  /** Replaces all markers of [type] with markers at [timesMs] (one undo step). */
+  fun setMarkers(type: MarkerType, timesMs: List<Long>, label: String = ""): Int = withStateLock {
+    val cur = _timeline.value
+    val color = when (type) {
+      MarkerType.BEAT -> 0xFFE040FB
+      MarkerType.SCENE -> 0xFF40C4FF
+      else -> 0xFFFFD700
+    }
+    val fresh = timesMs.distinct().sorted().map { TimelineMarker(timeMs = it, label = label, type = type, color = color) }
+    recordHistory(TimelineActionType.BEAT_SYNC, "Markers")
+    _timeline.value = cur.copy(markers = cur.markers.filter { it.type != type } + fresh)
+    fresh.size
+  }
+
+  fun clearMarkers(type: MarkerType) = withStateLock {
+    val cur = _timeline.value
+    if (cur.markers.none { it.type == type }) return@withStateLock
+    recordHistory(TimelineActionType.BEAT_SYNC, "Clear markers")
+    _timeline.value = cur.copy(markers = cur.markers.filter { it.type != type })
+  }
+
+  /**
+   * Splits the main track (and the audio that mirrors it) at every time in [timesMs] as one undo step.
+   * Returns the number of cuts actually made.
+   */
+  fun splitMainTrackAtTimes(timesMs: List<Long>, type: TimelineActionType, description: String): Int = withStateLock {
+    val cur = _timeline.value
+    val out = TimelineRangeOps.splitMainTrackAt(cur, timesMs, lockPredicate(cur))
+    if (out == cur) return@withStateLock 0
+    recordHistory(type, description)
+    _timeline.value = out
+    out.videoClips.size - cur.videoClips.size
+  }
+
+  /** Takes [ranges] (timeline ms) out of every unlocked lane and closes the gaps, as one undo step. */
+  fun removeTimeRanges(ranges: List<TimelineRangeOps.TimeRange>, type: TimelineActionType, description: String): Boolean = withStateLock {
+    val cur = _timeline.value
+    val out = TimelineRangeOps.removeRanges(cur, ranges, lockPredicate(cur))
+    if (out == cur) return@withStateLock false
+    recordHistory(type, description)
+    _timeline.value = out
+    if (_currentPositionMs.value > out.totalDurationMs) setPosition(out.totalDurationMs)
+    true
+  }
+
+  /** Cuts every filler word ("um", "uh", ...) found in the word timings of the captions. Returns how many were removed. */
+  fun removeFillerWords(includeLike: Boolean = false): Int = withStateLock {
+    val cur = _timeline.value
+    val fillers = SpeechCleanup.fillerWords(SpeechCleanup.wordsOf(cur.textClips), includeLike)
+    if (fillers.isEmpty()) return@withStateLock 0
+    // The words leave their captions first, so a half-cut word cannot stay behind on either side of the gap.
+    val byClip = fillers.groupBy({ it.clipId }, { it.indexInClip })
+    val cleaned = cur.copy(textClips = cur.textClips.mapNotNull { c ->
+      val indices = byClip[c.id]?.toSet() ?: return@mapNotNull c
+      if (c.isLocked) c else CaptionWordOps.deleteWords(c, indices)
+    })
+    val out = TimelineRangeOps.removeRanges(cleaned, SpeechCleanup.rangesFor(fillers), lockPredicate(cleaned))
+    if (out == cur) return@withStateLock 0
+    recordHistory(TimelineActionType.SPEECH_CLEANUP, "Remove filler words")
+    _timeline.value = out
+    if (_currentPositionMs.value > out.totalDurationMs) setPosition(out.totalDurationMs)
+    fillers.size
+  }
+
+  /** Shortens every silent gap between spoken words longer than [minGapMs]. Returns how many gaps were shortened. */
+  fun removePauses(minGapMs: Long = 700L, keepMs: Long = 250L): Int = withStateLock {
+    val words = SpeechCleanup.wordsOf(_timeline.value.textClips)
+    val gaps = SpeechCleanup.pauses(words, minGapMs, keepMs)
+    if (gaps.isEmpty()) return@withStateLock 0
+    if (removeTimeRanges(gaps, TimelineActionType.SPEECH_CLEANUP, "Remove pauses")) gaps.size else 0
+  }
+
+  /** Edits, deletes or retimes single words of a caption; deleting the last word removes the caption. */
+  fun editCaptionWord(clipId: String, index: Int, newText: String?): Boolean = withStateLock {
+    val cur = _timeline.value
+    val clip = cur.textClips.firstOrNull { it.id == clipId } ?: return@withStateLock false
+    if (isTrackLocked(TrackType.TEXT)) return@withStateLock false
+    val updated: TextClip? = if (newText == null) CaptionWordOps.deleteWords(clip, setOf(index)) else CaptionWordOps.editWord(clip, index, newText)
+    if (updated == clip) return@withStateLock false
+    recordHistory(TimelineActionType.CAPTION_WORD_EDIT, "Edit caption word", setOf(clipId))
+    _timeline.value = cur.copy(
+      textClips = if (updated == null) cur.textClips.filter { it.id != clipId } else cur.textClips.map { if (it.id == clipId) updated else it }
+    )
+    true
+  }
+
+  fun nudgeCaptionWord(clipId: String, index: Int, startMs: Long, durationMs: Long): Boolean = withStateLock {
+    val cur = _timeline.value
+    val clip = cur.textClips.firstOrNull { it.id == clipId } ?: return@withStateLock false
+    val updated = CaptionWordOps.retimeWord(clip, index, startMs, durationMs)
+    if (updated == clip) return@withStateLock false
+    recordHistory(TimelineActionType.CAPTION_WORD_EDIT, "Retime caption word", setOf(clipId))
+    _timeline.value = cur.copy(textClips = cur.textClips.map { if (it.id == clipId) updated else it })
+    true
+  }
+
+  /** Writes a planned follow-the-subject move onto a clip as keyframes; user scale/offset are reset to the fill scale. */
+  fun applyAutoReframe(clipId: String, keys: List<ReframeKey>): Boolean = withStateLock {
+    if (keys.isEmpty()) return@withStateLock false
+    val cur = _timeline.value
+    val onMain = cur.videoClips.any { it.id == clipId }
+    val onOverlay = cur.overlayClips.any { it.id == clipId }
+    if (!onMain && !onOverlay) return@withStateLock false
+    val frames = keys.map {
+      ClipKeyframe(timeMs = it.timeMs, posX = it.posX, posY = it.posY, scaleX = it.scale, scaleY = it.scale)
+    }
+    fun reframe(c: VideoClip) = if (c.id == clipId && !c.isLocked) c.copy(cropScale = 1f, cropOffsetX = 0f, cropOffsetY = 0f, keyframes = frames) else c
+    recordHistory(TimelineActionType.AUTO_REFRAME, "Auto reframe", setOf(clipId))
+    _timeline.value = cur.copy(
+      videoClips = cur.videoClips.map(::reframe),
+      overlayClips = cur.overlayClips.map(::reframe)
+    )
+    true
+  }
+
+  fun copyClipAttributes(clipId: String): Boolean = withStateLock {
+    val clip = _timeline.value.videoClips.firstOrNull { it.id == clipId }
+      ?: _timeline.value.overlayClips.firstOrNull { it.id == clipId }
+      ?: return@withStateLock false
+    _copiedAttributes.value = ClipAttributes.from(clip)
+    true
+  }
+
+  /** Pastes the copied attributes onto [clipIds] (never speed, trim or tracking data); returns how many clips changed. */
+  fun pasteClipAttributes(clipIds: Set<String>, groups: Set<AttributeGroup> = AttributeGroup.values().toSet()): Int = withStateLock {
+    val attrs = _copiedAttributes.value ?: return@withStateLock 0
+    val cur = _timeline.value
+    var changed = 0
+    fun paste(c: VideoClip): VideoClip {
+      if (c.id !in clipIds || c.isLocked) return c
+      val out = attrs.applyTo(c, groups)
+      if (out != c) changed++
+      return out
+    }
+    val video = cur.videoClips.map(::paste)
+    val overlay = cur.overlayClips.map(::paste)
+    if (changed == 0) return@withStateLock 0
+    recordHistory(TimelineActionType.PASTE_ATTRIBUTES, "Paste attributes", clipIds)
+    _timeline.value = cur.copy(videoClips = video, overlayClips = overlay)
+    changed
   }
 
   /**

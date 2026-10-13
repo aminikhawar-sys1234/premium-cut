@@ -514,6 +514,10 @@ class AudioExportProcessor(
      * `MutableList<Byte>` (one boxed element per byte) — the single biggest CPU/GC cost of the
      * whole export for projects with audio.
      */
+    /** Decodes [startMs, endMs) of a media file's audio for analysis (beats, speech); null when it has no decodable audio. */
+    fun decodeForAnalysis(uriString: String, startMs: Long, endMs: Long): DecodedPcm? =
+        decodePcmFromMedia(uriString, startMs, endMs)
+
     private fun decodePcmFromMedia(uriString: String, windowStartMs: Long = 0L, windowEndMs: Long = Long.MAX_VALUE): DecodedPcm? {
         val ctx = context ?: return null
         val extractor = MediaExtractor()
