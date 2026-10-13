@@ -73,4 +73,18 @@ async function main() {
   console.log(`DONE — ${done} assets uploaded & published.`);
 }
 
-main().catch((e) => { console.error("FAILED:", e.message); process.exit(1); });
+let phase = "init";
+main().catch((e) => {
+  // ::error:: makes the real reason visible in the Actions annotations,
+  // without opening the log.
+  const msg = String(e.message || e).replace(/[\r\n]+/g, " ");
+  console.error(`::error title=Upload failed::Phase '${phase}': [${e.code || "no-code"}] ${msg}`);
+  if (/NOT_FOUND|database.*does not exist|Firestore.*not.*enabled/i.test(msg)) {
+    console.error("::error::Firestore database abhi bana nahi hai. Firebase Console -> Firestore Database -> 'Create database' (production mode) kar ke workflow dobara chalayen.");
+  }
+  if (/SERVICE_DISABLED|API has not been used|PERMISSION_DENIED/i.test(msg)) {
+    console.error("::error::Google Cloud API disabled ya permission nahi hai. Firebase Console se Firestore + Storage enable kar ke dobara chalayen.");
+  }
+  console.error("FAILED:", e);
+  process.exit(1);
+});
