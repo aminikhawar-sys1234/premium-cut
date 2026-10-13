@@ -52,24 +52,31 @@ async function main() {
   const bucket = admin.storage().bucket();
   const ts = admin.firestore.FieldValue.serverTimestamp();
 
-  // Phase 1 — Storage bucket must exist. Projects that never opened Firebase
-  // Storage in the console have no default bucket ("The specified bucket does
-  // not exist"). Try to create it; if Google reserves the *.firebasestorage.app
-  // name for console provisioning, fail with the exact one-click fix.
+  // Phase 1 — Delivery mode. Preferred: Firebase Storage bucket. BUT since
+  // 2024-10-30 Google requires a billing account (Blaze) before a default
+  // bucket can be created ("billing account ... disabled in state absent").
+  // This library is tiny (SVG <= 5 KB, PNG thumb <= 16 KB), so when no bucket
+  // is available we deliver straight from Firestore instead: svgContent +
+  // thumbnailBase64 live in each asset doc (well under the 1 MiB doc limit),
+  // while storagePath/thumbnailPath stay as metadata for a future migration.
   phase = `Storage bucket '${bucket.name}' check/create`;
-  const [bucketExists] = await bucket.exists();
-  if (!bucketExists) {
-    console.log(`Bucket ${bucket.name} does not exist yet - creating it...`);
-    try {
+  let storageMode = false;
+  try {
+    const [bucketExists] = await bucket.exists();
+    if (bucketExists) {
+      storageMode = true;
+    } else {
+      console.log(`Bucket ${bucket.name} does not exist yet - creating it...`);
       await bucket.create({ location: "US", storageClass: "STANDARD" });
-      console.log("Bucket created.");
-    } catch (createErr) {
-      throw new Error(
-        `Storage bucket '${bucket.name}' mojood nahi hai aur auto-create nahi ho saka (${createErr.message}). ` +
-        `FIX: Firebase Console -> Storage -> 'Get started' (defaults) ek dafa click karen, phir workflow dobara chalayen.`
-      );
+      storageMode = true;
+      console.log("Bucket created - Storage delivery mode.");
     }
+  } catch (storageErr) {
+    console.log(`::warning::Storage unavailable (${storageErr.message}) - switching to Firestore-embedded delivery (no billing needed).`);
+    storageMode = false;
   }
+  if (storageMode) console.log("Delivery mode: Firebase Storage + Firestore metadata");
+  else console.log("Delivery mode: Firestore-embedded (svgContent + thumbnailBase64 in assets/{id})");
 
   phase = "Firestore write (categories)";
   for (const c of seed.categories) {
@@ -77,21 +84,31 @@ async function main() {
   }
   console.log("categories: 11 written");
 
-  phase = "Storage upload + Firestore publish (assets)";
+  phase = "Asset publish (assets)";
   let done = 0;
   for (const a of seed.assets) {
     const { createdAt, updatedAt, ...rest } = a;
-    // 1) Upload files first …
-    await bucket.upload(path.join(ASSETS_DIR, "files", a.categoryId, `${a.id}.svg`),
-      { destination: a.storagePath, metadata: { contentType: "image/svg+xml", cacheControl: "public, max-age=31536000, immutable" } });
-    await bucket.upload(path.join(ASSETS_DIR, "thumbnails", a.categoryId, `${a.id}.png`),
-      { destination: a.thumbnailPath, metadata: { contentType: "image/png", cacheControl: "public, max-age=31536000, immutable" } });
-    // 2) … then publish the Firestore doc (never a broken published record).
-    const doc = { ...rest, version: BUMP ? a.version + 1 : a.version, createdAt: ts, updatedAt: ts };
+    const doc = {
+      ...rest,
+      version: BUMP ? a.version + 1 : a.version,
+      deliveryMode: storageMode ? "storage" : "firestore",
+      createdAt: ts,
+      updatedAt: ts,
+    };
+    if (storageMode) {
+      // Files first, doc second - never a broken published record.
+      await bucket.upload(path.join(ASSETS_DIR, "files", a.categoryId, `${a.id}.svg`),
+        { destination: a.storagePath, metadata: { contentType: "image/svg+xml", cacheControl: "public, max-age=31536000, immutable" } });
+      await bucket.upload(path.join(ASSETS_DIR, "thumbnails", a.categoryId, `${a.id}.png`),
+        { destination: a.thumbnailPath, metadata: { contentType: "image/png", cacheControl: "public, max-age=31536000, immutable" } });
+    } else {
+      doc.svgContent = fs.readFileSync(path.join(ASSETS_DIR, "files", a.categoryId, `${a.id}.svg`), "utf8");
+      doc.thumbnailBase64 = fs.readFileSync(path.join(ASSETS_DIR, "thumbnails", a.categoryId, `${a.id}.png`)).toString("base64");
+    }
     await db.collection("assets").doc(a.id).set(doc, { merge: true });
     if (++done % 40 === 0) console.log(`assets: ${done}/${seed.assets.length}`);
   }
-  console.log(`DONE — ${done} assets uploaded & published.`);
+  console.log(`DONE - ${done} assets uploaded & published (delivery: ${storageMode ? "storage" : "firestore"}).`);
 }
 
 let phase = "init";
