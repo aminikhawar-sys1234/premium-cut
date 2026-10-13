@@ -188,6 +188,114 @@ class TextTemplateCatalogTest {
   }
 
   @Test
+  fun firestoreStyleOnlyDocumentsLoadWithPreviewText() {
+    // Style-only uploads (no text/content field) are presets, not invalid entries:
+    // they must still appear in the panel, previewing with the default sample text.
+    val template = TextTemplateCatalog.parseFirestoreDocument(
+      documentId = "remote-style-only",
+      data = mapOf(
+        "name" to "Style Only Neon",
+        "category" to "2D",
+        "fontFamily" to "sans-serif-black",
+        "fontSizeSp" to 48,
+        "textColor" to "#FFEFFFFF",
+        "hasGlow" to true,
+        "glowColor" to "#FF00E5FF",
+        "animationIn" to "Neon"
+      )
+    )
+    assertNotNull(template)
+    assertEquals("Style Only Neon", template?.name)
+    assertEquals(TextTemplateCatalog.DEFAULT_PREVIEW_TEXT, template?.templateClip?.text)
+    assertEquals("Neon", template?.templateClip?.animationIn)
+    assertTrue(template?.templateClip?.hasGlow == true)
+    assertTrue("Firestore templates are marked remote", template?.isRemote == true)
+  }
+
+  @Test
+  fun firestoreDocumentsSupportTemplateClipObjects() {
+    val template = TextTemplateCatalog.parseFirestoreDocument(
+      documentId = "remote-template-clip",
+      data = mapOf(
+        "name" to "Template Clip Style",
+        "templateClip" to mapOf(
+          "text" to "From TemplateClip",
+          "fontSizeSp" to 40,
+          "is3D" to true,
+          "depth3D" to 14,
+          "material3D" to "chrome"
+        )
+      )
+    )
+    assertNotNull(template)
+    assertEquals("From TemplateClip", template?.templateClip?.text)
+    assertEquals(40f, template?.templateClip?.fontSizeSp ?: 0f, 0.01f)
+    assertTrue(template?.templateClip?.is3D == true)
+    assertEquals(14f, template?.templateClip?.depth3D ?: 0f, 0.01f)
+  }
+
+  @Test
+  fun firestoreCatalogDocumentExpandsTemplateArray() {
+    val templates = TextTemplateCatalog.parseFirestoreDocuments(
+      documentId = "uploaded-catalog",
+      data = mapOf(
+        "templates" to listOf(
+          mapOf("id" to "bulk.one", "name" to "Bulk One", "text" to "One"),
+          mapOf("name" to "Bulk Two", "content" to "Two")
+        )
+      )
+    )
+    assertEquals(2, templates.size)
+    assertEquals("bulk.one", templates[0].id)
+    assertEquals("One", templates[0].templateClip.text)
+    assertEquals("uploaded-catalog-2", templates[1].id)
+    assertEquals("Two", templates[1].templateClip.text)
+    assertTrue(templates.all { it.isRemote })
+  }
+
+  @Test
+  fun firestoreJsonStringPayloadsParse() {
+    val template = TextTemplateCatalog.parseFirestoreDocument(
+      documentId = "remote-json-payload",
+      data = mapOf(
+        "templateJson" to """{"name":"Payload Style","text":"Hello","textColor":"#FFFF0000"}"""
+      )
+    )
+    assertNotNull(template)
+    assertEquals("remote-json-payload", template?.id)
+    assertEquals("Payload Style", template?.name)
+    assertEquals("Hello", template?.templateClip?.text)
+    assertEquals(0xFFFF0000L, template?.templateClip?.textColor ?: 0L)
+  }
+
+  @Test
+  fun firestoreHiddenDocumentsAreSkipped() {
+    assertNull(
+      TextTemplateCatalog.parseFirestoreDocument(
+        "remote-disabled",
+        mapOf("name" to "Disabled", "text" to "Aa", "enabled" to false)
+      )
+    )
+    assertNull(
+      TextTemplateCatalog.parseFirestoreDocument(
+        "remote-draft",
+        mapOf("name" to "Draft", "text" to "Aa", "status" to "draft")
+      )
+    )
+    assertTrue(
+      TextTemplateCatalog.parseFirestoreDocuments(
+        "remote-catalog-with-draft",
+        mapOf(
+          "templates" to listOf(
+            mapOf("name" to "Live", "text" to "Aa"),
+            mapOf("name" to "Hidden", "text" to "Aa", "published" to false)
+          )
+        )
+      ).map { it.name } == listOf("Live")
+    )
+  }
+
+  @Test
   fun applyStyleKeepsUserTextAndCopies3dFields() {
     val template = TextAssetRegistry.getTemplates().first { it.id == "3d.chrome" }
     val edited = TextClip(id = "live", text = "My Title", fontSizeSp = 18f)

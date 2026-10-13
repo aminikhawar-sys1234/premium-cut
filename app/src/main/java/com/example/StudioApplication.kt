@@ -64,7 +64,9 @@ class StudioApplication : Application() {
         Log.w("StudioApplication", "FirebaseTemplateManager init skipped/failed", t)
       }
       try {
-        com.example.engine.text.registry.TextTemplateCatalog.ensureLocalLoaded(applicationContext)
+        // Start the Firebase text-template download at app launch (Firestore live sync +
+        // Storage catalog), so templates are already merged when the user taps Add Text.
+        com.example.engine.text.registry.TextTemplateCatalog.ensureLoaded(applicationContext)
       } catch (t: Throwable) {
         Log.w("StudioApplication", "TextTemplateCatalog load skipped/failed", t)
       }

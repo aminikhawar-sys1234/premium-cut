@@ -15,5 +15,23 @@ service firebase.storage {
         && request.resource.size < 200 * 1024 * 1024
         && (fileName == "preview.mp4" || fileName == "thumbnail.jpg");
     }
+
+    // Downloadable JSON text-template catalogs, e.g. text/templates/catalog.json
+    // (a JSON array in the same format as assets/text/templates/catalog.json).
+    // Published by trusted tooling; the editor only reads them.
+    match /text/templates/{file=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /text_templates/{file=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /text-templates/{file=**} {
+      allow read: if true;
+      allow write: if false;
+    }
   }
 }
