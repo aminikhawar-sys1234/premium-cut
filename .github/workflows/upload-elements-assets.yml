@@ -55,10 +55,13 @@ jobs:
 
       - name: Write service-account key (from secret, never committed)
         env:
-          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          # Accept the usual alternate names too, in case the secret was
+          # created under one of them (Repository secrets, Actions tab only).
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT || secrets.FIREBASE_SERVICE_ACCOUNT_JSON || secrets.SERVICE_ACCOUNT_KEY || secrets.GOOGLE_APPLICATION_CREDENTIALS || secrets.FIREBASE_ADMINSDK || secrets.FIREBASE_KEY }}
         run: |
           if [ -z "$FIREBASE_SERVICE_ACCOUNT" ]; then
-            echo "::error::Secret FIREBASE_SERVICE_ACCOUNT is not set. See the header of this workflow file for setup steps."
+            echo "::error title=Secret not found::No FIREBASE_SERVICE_ACCOUNT secret is visible to this workflow."
+            echo "Fix: repo Settings -> Secrets and variables -> Actions -> 'Secrets' tab (NOT Variables, NOT Codespaces/Dependabot) -> New repository secret -> Name exactly: FIREBASE_SERVICE_ACCOUNT -> Value: full service-account JSON."
             exit 1
           fi
           printf '%s' "$FIREBASE_SERVICE_ACCOUNT" > "$RUNNER_TEMP/serviceAccountKey.json"
