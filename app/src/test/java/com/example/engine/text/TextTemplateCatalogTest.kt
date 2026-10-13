@@ -122,6 +122,66 @@ class TextTemplateCatalogTest {
   }
 
   @Test
+  fun firestoreDocumentsSupportContentAndNestedStyleMaps() {
+    val template = TextTemplateCatalog.parseFirestoreDocument(
+      documentId = "remote-quote-1",
+      data = mapOf(
+        "title" to "Remote Quote",
+        "content" to "Make it memorable",
+        "category" to "Quotes",
+        "style" to mapOf(
+          "fontFamily" to "serif",
+          "fontSize" to 38,
+          "color" to "#FF112233",
+          "hasShadow" to true,
+          "shadowBlur" to 7,
+          "animation" to "Fade"
+        ),
+        "previewThumbnailUrl" to "https://example.test/preview.jpg"
+      )
+    )
+
+    assertNotNull(template)
+    assertEquals("remote-quote-1", template?.id)
+    assertEquals("Remote Quote", template?.name)
+    assertEquals("Quotes", template?.category)
+    assertEquals("Make it memorable", template?.templateClip?.text)
+    assertEquals("serif", template?.templateClip?.fontFamily)
+    assertEquals(38f, template?.templateClip?.fontSizeSp ?: 0f, 0.01f)
+    assertEquals(0xFF112233L, template?.templateClip?.textColor ?: 0L)
+    assertTrue(template?.templateClip?.hasShadow == true)
+    assertEquals(7f, template?.templateClip?.shadowBlur ?: 0f, 0.01f)
+    assertEquals("Fade", template?.templateClip?.animationIn)
+    assertEquals("https://example.test/preview.jpg", template?.previewThumbnailUrl)
+  }
+
+  @Test
+  fun firestoreDocumentsSupportNestedClipAndRejectEntriesWithoutText() {
+    val template = TextTemplateCatalog.parseFirestoreDocument(
+      documentId = "remote-clip-1",
+      data = mapOf(
+        "name" to "Nested Clip",
+        "clip" to mapOf(
+          "content" to "Nested content",
+          "fontSizeSp" to 36,
+          "is3D" to false
+        )
+      )
+    )
+    assertNotNull(template)
+    assertEquals("Nested content", template?.templateClip?.text)
+    assertEquals(36f, template?.templateClip?.fontSizeSp ?: 0f, 0.01f)
+    assertFalse(template?.templateClip?.is3D == true)
+
+    assertNull(
+      TextTemplateCatalog.parseFirestoreDocument(
+        "empty-remote-template",
+        mapOf("name" to "No content")
+      )
+    )
+  }
+
+  @Test
   fun applyStyleKeepsUserTextAndCopies3dFields() {
     val template = TextAssetRegistry.getTemplates().first { it.id == "3d.chrome" }
     val edited = TextClip(id = "live", text = "My Title", fontSizeSp = 18f)

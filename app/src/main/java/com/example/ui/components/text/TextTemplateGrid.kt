@@ -109,7 +109,8 @@ internal fun rememberInstalledTextTemplates(): List<RegisteredTextTemplate> {
   LaunchedEffect(Unit) {
     TextTemplateCatalog.ensureLoaded(context)
   }
-  return TextAssetRegistry.getTemplates()
+  // Return a snapshot so Compose observes registry mutations and passes a fresh list to the grid.
+  return TextAssetRegistry.getTemplates().toList()
 }
 
 @Composable

@@ -94,6 +94,22 @@ object TextAssetRegistry {
     }
   }
 
+  /** Keeps live Firestore templates at the top of the browser grid. */
+  fun upsertTemplateAtFront(template: RegisteredTextTemplate) {
+    val index = _templates.indexOfFirst { it.id == template.id }
+    if (index < 0) {
+      _templates.add(0, template)
+      return
+    }
+    if (_templates[index] != template) _templates[index] = template
+    if (index > 0) _templates.add(0, _templates.removeAt(index))
+  }
+
+  /** Removes a template by id. Used when a Firestore template is deleted. */
+  fun removeTemplate(id: String) {
+    _templates.removeAll { it.id == id }
+  }
+
   fun registerFont(font: RegisteredFont) {
     if (_fonts.none { it.id == font.id }) {
       _fonts.add(font)
