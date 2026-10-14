@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
@@ -1233,7 +1234,7 @@ fun EditorScreen(
                   viewModel = viewModel,
                   modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.FILTERS,
-                  onClose = { viewModel.setActiveToolbarTab(null) }
+                  onClose = { viewModel.flushLiveLook(); viewModel.setActiveToolbarTab(null) }
                 )
               }
               activeTab == EditorToolbarTab.ADJUST -> {
@@ -1241,7 +1242,7 @@ fun EditorScreen(
                   viewModel = viewModel,
                   modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.ADJUST,
-                  onClose = { viewModel.setActiveToolbarTab(null) }
+                  onClose = { viewModel.flushLiveLook(); viewModel.setActiveToolbarTab(null) }
                 )
               }
               activeTab == EditorToolbarTab.TRANSITIONS -> {
@@ -1343,7 +1344,7 @@ fun EditorScreen(
                   viewModel = viewModel,
                   modifier = Modifier.fillMaxWidth().height(maxToolPanelHeight),
                   initialTab = com.example.ui.components.filter.FilterToolsTab.VIDEO_QUALITY,
-                  onClose = { viewModel.setActiveToolbarTab(null) }
+                  onClose = { viewModel.flushLiveLook(); viewModel.setActiveToolbarTab(null) }
                 )
               }
               activeTab == EditorToolbarTab.BACKGROUND -> BackgroundToolPanel(viewModel)
@@ -1816,6 +1817,61 @@ private fun EditorTopBar(
   }
 }
 
+/**
+ * Compact confirmation overlay drawn over the preview while a Filters / Adjust /
+ * Video Quality value is being published.
+ *
+ * It exists because a slider value alone never proved the look reached the picture: this
+ * pill is rendered straight from the published [LivePreviewLook], so the user always sees
+ * which look and which strengths are live, and on which clip.
+ */
+@Composable
+private fun LiveLookHud(
+  entries: List<com.example.ui.components.filter.AppliedLookEntry>,
+  caption: String = "Live look",
+  modifier: Modifier = Modifier
+) {
+  val shown = entries.take(4)
+  Surface(
+    shape = RoundedCornerShape(10.dp),
+    color = Color(0xD906151B),
+    border = BorderStroke(1.dp, Color(0xFF00D1B2).copy(alpha = 0.65f)),
+    contentColor = Color.White,
+    modifier = modifier
+  ) {
+    Row(
+      modifier = Modifier.padding(horizontal = 8.dp, vertical = 5.dp),
+      verticalAlignment = Alignment.CenterVertically,
+      horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+      Icon(
+        Icons.Default.AutoFixHigh,
+        contentDescription = null,
+        tint = Color(0xFF00D1B2),
+        modifier = Modifier.size(13.dp)
+      )
+      Column {
+        Text(
+          text = caption,
+          color = Color(0xFF00D1B2),
+          fontSize = 8.5.sp,
+          fontWeight = FontWeight.Bold,
+          letterSpacing = 0.6.sp
+        )
+        Text(
+          text = shown.joinToString("  ·  ") { "${it.label} ${it.value}" } +
+            if (entries.size > shown.size) "  ·  +${entries.size - shown.size}" else "",
+          color = Color.White,
+          fontSize = 10.sp,
+          fontWeight = FontWeight.SemiBold,
+          maxLines = 2,
+          overflow = TextOverflow.Ellipsis
+        )
+      }
+    }
+  }
+}
+
 @Composable
 fun VideoPreviewSurface(
   timeline: Timeline,
@@ -1967,6 +2023,43 @@ fun VideoPreviewSurface(
       }
     }
     resultMatrix
+  }
+
+  // Live look HUD: the Filters / Adjust / Video Quality sheet publishes a look; this confirms
+  // it on the picture itself, so "where is the colour/filter set" is answered without hunting
+  // through the sliders. Auto-hides shortly after the last change.
+  val hudEntries = remember(liveLook) {
+    liveLook?.let { look ->
+      com.example.ui.components.filter.appliedLookEntries(
+        adjustments = look.adjustments,
+        filter = look.filter,
+        lutName = null,
+        onAdjustmentsChange = {},
+        onFilterChange = {},
+        onClearLut = {}
+      )
+    } ?: emptyList()
+  }
+  // When the published look belongs to a clip that is not on screen the picture legitimately
+  // does not change. Name that clip instead of leaving an apparently frozen preview.
+  val hudTargetName: String? = remember(liveLook, timeline) {
+    val id = liveLook?.clipId ?: return@remember null
+    (timeline.videoClips.firstOrNull { it.id == id } ?: timeline.overlayClips.firstOrNull { it.id == id })?.name
+  }
+  val hudCaption = when {
+    liveLook == null || liveApplies -> "Live look"
+    !hudTargetName.isNullOrBlank() -> "On ${hudTargetName.take(16)}"
+    else -> "Live look"
+  }
+  var hudVisible by remember { mutableStateOf(false) }
+  LaunchedEffect(liveLook) {
+    if (liveLook == null || hudEntries.isEmpty()) {
+      hudVisible = false
+      return@LaunchedEffect
+    }
+    hudVisible = true
+    delay(1800L)
+    hudVisible = false
   }
 
   val isIdentityFilter = remember(androidCombinedMatrix) {
@@ -2294,6 +2387,24 @@ fun VideoPreviewSurface(
             }
           }
         }
+      }
+
+      // Live look HUD: confirms on the picture itself what the Filters / Adjust /
+      // Video Quality sheet just published. It fades out on its own so it never sits in
+      // the way, and re-appears on every change while the sheet is open.
+      AnimatedVisibility(
+        visible = hudVisible && hudEntries.isNotEmpty(),
+        enter = fadeIn(),
+        exit = fadeOut(),
+        modifier = Modifier
+          .align(Alignment.BottomStart)
+          .padding(start = 8.dp, bottom = 8.dp)
+      ) {
+        LiveLookHud(
+          entries = hudEntries,
+          caption = hudCaption,
+          modifier = Modifier.testTag("live_look_hud")
+        )
       }
 
       // Floating Zoom Scale Reset Badge (Top-Left overlay when zoomed in)

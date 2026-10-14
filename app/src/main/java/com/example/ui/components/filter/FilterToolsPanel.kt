@@ -143,6 +143,23 @@ fun FilterToolsPanel(
     selectedClip?.takeIf { sc -> timeline.videoClips.any { it.id == sc.id } }
   }
 
+  // The LUT stored on the target clip (the same colour grade the Color panel edits), hoisted
+  // so the live status bar can show it and clear it from any tab.
+  val lutGrade = remember(lutClip?.colorGradeJson) { ColorEngineHost.decodeOrDefault(lutClip?.colorGradeJson) }
+  val liveLutId = lutGrade.lut?.lutId?.takeIf { it.isNotBlank() }
+  val liveLutName = liveLutId?.let { id -> ColorEngineHost.BUNDLED_LUTS.firstOrNull { it.first == id }?.second }
+
+  /** Writes (or clears) the bundled LUT look on the target clip and refreshes the preview. */
+  val commitActiveLut: (String?, Float) -> Unit = { lutId, intensity ->
+    lutClip?.id?.let { id ->
+      val next = lutGrade.copy(lut = lutId?.let { LutState(lutId = it, intensity = intensity) })
+      ColorEngineHost.applyToEngine(id, next)
+      viewModel.timelineEngine.setClipColorGrade(id, if (next.isIdentity()) null else ColorEngineHost.encode(next))
+      viewModel.revealClipForLookPreview(viewModel.timelineEngine.timeline.value.videoClips.find { it.id == id })
+      viewModel.refreshCurrentFrame(preferClipId = id)
+    }
+  }
+
   val previewUri = remember(selectedClip, timeline) {
     selectedClip?.uri?.ifBlank { null }
       ?: timeline.videoClips.firstOrNull { it.uri.isNotBlank() }?.uri
@@ -160,6 +177,8 @@ fun FilterToolsPanel(
   var currentAdjustments by remember(activeAdjustments, selectedClip?.id) { mutableStateOf(activeAdjustments) }
   val applyAdjustments: (VideoAdjustments) -> Unit = { adj ->
     currentAdjustments = adj
+    // Publish `adj`, never the remembered state: the shader must receive this exact tick's
+    // value so the last drag position is the one on screen.
     viewModel.publishLiveLook(selectedClip?.id, adj, currentFilter)
   }
 
@@ -404,7 +423,8 @@ fun FilterToolsPanel(
               lutClipId = lutClip?.id,
               lutClipGradeJson = lutClip?.colorGradeJson,
               baseBitmap = baseThumbnailBitmap,
-              onFilterChange = applyLook
+              onFilterChange = applyLook,
+              onCommitLut = commitActiveLut
             )
           }
           FilterToolsTab.ADJUST -> {
@@ -422,6 +442,159 @@ fun FilterToolsPanel(
                 applyAdjustments(newAdj)
               }
             )
+          }
+        }
+      }
+
+      // 4. LIVE STATUS BAR — exactly what is applied right now, and where.
+      //    A slider value alone was never proof that a look reached the picture; this strip
+      //    is the panel's own record of the live look, and every chip can be cleared in place.
+      LiveLookStatusBar(
+        scope = if (selectedClip != null) "Clip: ${selectedClip.name.take(14)}" else "Project",
+        entries = appliedLookEntries(
+          adjustments = currentAdjustments,
+          filter = currentFilter,
+          lutName = liveLutName,
+          onAdjustmentsChange = applyAdjustments,
+          onFilterChange = applyLook,
+          onClearLut = { commitActiveLut(null, 1f) }
+        ),
+        modifier = Modifier.testTag("live_look_status_bar")
+      )
+    }
+  }
+}
+
+/** One chip in the live status bar: a single parameter that is currently off its default. */
+internal data class AppliedLookEntry(
+  val key: String,
+  val label: String,
+  val value: String,
+  val onClear: () -> Unit
+)
+
+/**
+ * Every filter / adjustment / quality value that is currently non-default, newest control
+ * first. Each entry clears just that one parameter, so "where did I set something" is always
+ * answerable without resetting the whole look.
+ */
+internal fun appliedLookEntries(
+  adjustments: VideoAdjustments,
+  filter: FilterSettings,
+  lutName: String?,
+  onAdjustmentsChange: (VideoAdjustments) -> Unit,
+  onFilterChange: (FilterSettings) -> Unit,
+  onClearLut: () -> Unit
+): List<AppliedLookEntry> {
+  val out = ArrayList<AppliedLookEntry>()
+
+  fun pct(value: Float): String = "${(value.coerceIn(0f, 1f) * 100f).roundToInt()}%"
+  fun signed(value: Float): String = if (value >= 0f) "+${(value * 100f).roundToInt()}" else "${(value * 100f).roundToInt()}"
+
+  if (filter.type != FilterType.NONE && filter.intensity > 0.01f) {
+    out += AppliedLookEntry(
+      key = "filter",
+      label = filter.type.displayName,
+      value = pct(filter.intensity)
+    ) {
+      onFilterChange(FilterSettings(type = FilterType.NONE, intensity = 1.0f))
+    }
+  }
+  if (!lutName.isNullOrBlank()) {
+    out += AppliedLookEntry("lut", lutName, "LUT", onClearLut)
+  }
+  val adj = adjustments
+  if (abs(adj.brightness) > 0.01f) out += AppliedLookEntry("brightness", "Brightness", signed(adj.brightness)) { onAdjustmentsChange(adj.copy(brightness = 0f)) }
+  if (abs(adj.contrast - 1f) > 0.01f) out += AppliedLookEntry("contrast", "Contrast", String.format(java.util.Locale.US, "%.2f", adj.contrast)) { onAdjustmentsChange(adj.copy(contrast = 1f)) }
+  if (abs(adj.saturation - 1f) > 0.01f) out += AppliedLookEntry("saturation", "Saturation", String.format(java.util.Locale.US, "%.2f", adj.saturation)) { onAdjustmentsChange(adj.copy(saturation = 1f)) }
+  if (abs(adj.exposure) > 0.01f) out += AppliedLookEntry("exposure", "Exposure", signed(adj.exposure)) { onAdjustmentsChange(adj.copy(exposure = 0f)) }
+  if (abs(adj.temperature) > 0.01f) out += AppliedLookEntry("temperature", "Temp", signed(adj.temperature)) { onAdjustmentsChange(adj.copy(temperature = 0f)) }
+  if (abs(adj.tint) > 0.01f) out += AppliedLookEntry("tint", "Tint", signed(adj.tint)) { onAdjustmentsChange(adj.copy(tint = 0f)) }
+  if (abs(adj.highlights) > 0.01f) out += AppliedLookEntry("highlights", "Highlights", signed(adj.highlights)) { onAdjustmentsChange(adj.copy(highlights = 0f)) }
+  if (abs(adj.shadows) > 0.01f) out += AppliedLookEntry("shadows", "Shadows", signed(adj.shadows)) { onAdjustmentsChange(adj.copy(shadows = 0f)) }
+  if (abs(adj.whites) > 0.01f) out += AppliedLookEntry("whites", "Whites", signed(adj.whites)) { onAdjustmentsChange(adj.copy(whites = 0f)) }
+  if (abs(adj.blacks) > 0.01f) out += AppliedLookEntry("blacks", "Blacks", signed(adj.blacks)) { onAdjustmentsChange(adj.copy(blacks = 0f)) }
+  if (adj.sharpness > 0.01f) out += AppliedLookEntry("sharpness", "Sharpen", pct(adj.sharpness)) { onAdjustmentsChange(adj.copy(sharpness = 0f)) }
+  if (adj.clarity > 0.01f) out += AppliedLookEntry("clarity", "Clarity", pct(adj.clarity)) { onAdjustmentsChange(adj.copy(clarity = 0f)) }
+  if (adj.vignette > 0.01f) out += AppliedLookEntry("vignette", "Vignette", pct(adj.vignette)) { onAdjustmentsChange(adj.copy(vignette = 0f)) }
+  if (adj.fade > 0.01f) out += AppliedLookEntry("fade", "Fade", pct(adj.fade)) { onAdjustmentsChange(adj.copy(fade = 0f)) }
+  if (adj.grain > 0.01f) out += AppliedLookEntry("grain", "Grain", pct(adj.grain)) { onAdjustmentsChange(adj.copy(grain = 0f)) }
+  if (adj.autoEnhance > 0.01f) out += AppliedLookEntry("autoEnhance", "Auto Enhance", pct(adj.autoEnhance)) { onAdjustmentsChange(adj.copy(autoEnhance = 0f)) }
+  if (adj.colorFix > 0.01f) out += AppliedLookEntry("colorFix", "Color Fix", pct(adj.colorFix)) { onAdjustmentsChange(adj.copy(colorFix = 0f)) }
+  if (adj.colorCorrect > 0.01f) out += AppliedLookEntry("colorCorrect", "Color Correct", pct(adj.colorCorrect)) { onAdjustmentsChange(adj.copy(colorCorrect = 0f)) }
+  if (adj.hdrBoost > 0.01f) out += AppliedLookEntry("hdrBoost", "HDR Look", pct(adj.hdrBoost)) { onAdjustmentsChange(adj.copy(hdrBoost = 0f)) }
+  if (adj.superClarity > 0.01f) out += AppliedLookEntry("superClarity", "Super Clarity", pct(adj.superClarity)) { onAdjustmentsChange(adj.copy(superClarity = 0f)) }
+  if (adj.denoise > 0.01f) out += AppliedLookEntry("denoise", "Denoise", pct(adj.denoise)) { onAdjustmentsChange(adj.copy(denoise = 0f)) }
+  if (adj.antiFlicker > 0.01f) out += AppliedLookEntry("antiFlicker", "Flicker", pct(adj.antiFlicker)) { onAdjustmentsChange(adj.copy(antiFlicker = 0f)) }
+  return out
+}
+
+/**
+ * The strip under the tabs: the scope (clip vs project) plus one removable chip per live
+ * value. It makes "which slider did I move" visible at a glance on every tab.
+ */
+@Composable
+private fun LiveLookStatusBar(
+  scope: String,
+  entries: List<AppliedLookEntry>,
+  modifier: Modifier = Modifier
+) {
+  Row(
+    modifier = modifier
+      .fillMaxWidth()
+      .background(Color(0xFF06151B))
+      .padding(horizontal = 8.dp, vertical = 4.dp),
+    verticalAlignment = Alignment.CenterVertically
+  ) {
+    Text(
+      text = scope,
+      color = BlueGreenAccent,
+      fontSize = 9.5.sp,
+      fontWeight = FontWeight.Bold,
+      maxLines = 1,
+      modifier = Modifier.testTag("live_look_scope")
+    )
+    Spacer(modifier = Modifier.width(6.dp))
+    if (entries.isEmpty()) {
+      Text(
+        text = "No filter or colour change applied",
+        color = TextSecondary,
+        fontSize = 9.5.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f)
+      )
+    } else {
+      Row(
+        modifier = Modifier
+          .weight(1f)
+          .horizontalScroll(rememberScrollState()),
+        horizontalArrangement = Arrangement.spacedBy(4.dp)
+      ) {
+        entries.forEach { entry ->
+          Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = BlueGreenAccent.copy(alpha = 0.16f),
+            border = BorderStroke(1.dp, BlueGreenAccent.copy(alpha = 0.55f)),
+            contentColor = Color.White,
+            onClick = entry.onClear,
+            modifier = Modifier.testTag("live_look_chip_${entry.key}")
+          ) {
+            Row(
+              modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+              verticalAlignment = Alignment.CenterVertically
+            ) {
+              Text(text = entry.label, color = Color.White, fontSize = 9.5.sp, fontWeight = FontWeight.SemiBold)
+              Spacer(modifier = Modifier.width(3.dp))
+              Text(text = entry.value, color = BlueGreenAccent, fontSize = 9.5.sp, fontWeight = FontWeight.Bold)
+              Spacer(modifier = Modifier.width(3.dp))
+              Icon(
+                Icons.Default.Close,
+                contentDescription = "Clear ${entry.label}",
+                tint = TextSecondary,
+                modifier = Modifier.size(10.dp)
+              )
+            }
           }
         }
       }
@@ -457,7 +630,8 @@ private fun FiltersTabContent(
   lutClipId: String?,
   lutClipGradeJson: String?,
   baseBitmap: Bitmap?,
-  onFilterChange: (FilterSettings) -> Unit
+  onFilterChange: (FilterSettings) -> Unit,
+  onCommitLut: (String?, Float) -> Unit = { _, _ -> }
 ) {
   val context = LocalContext.current
   var selectedCategory by remember { mutableStateOf(CAT_ALL) }
@@ -482,12 +656,8 @@ private fun FiltersTabContent(
   val lutEnabled = lutClipId != null
 
   fun commitLut(lutId: String?, intensity: Float) {
-    val id = lutClipId ?: return
-    val next = grade.copy(lut = lutId?.let { LutState(lutId = it, intensity = intensity) })
-    ColorEngineHost.applyToEngine(id, next)
-    viewModel.timelineEngine.setClipColorGrade(id, if (next.isIdentity()) null else ColorEngineHost.encode(next))
-    viewModel.revealClipForLookPreview(viewModel.timelineEngine.timeline.value.videoClips.find { it.id == id })
-    viewModel.refreshCurrentFrame(preferClipId = id)
+    if (lutClipId == null) return
+    onCommitLut(lutId, intensity)
   }
 
   // LUT files load asynchronously; re-render once the LUT is actually available.
@@ -579,6 +749,61 @@ private fun FiltersTabContent(
           .fillMaxWidth()
           .testTag("filter_capability_note")
       )
+    }
+
+    // Selected look + intensity. Without this the preset strength was settable from nowhere
+    // in the UI: a tapped look always landed at 100% with no way to dial it back.
+    if (currentFilter.type != FilterType.NONE) {
+      Surface(
+        shape = RoundedCornerShape(10.dp),
+        color = Color(0xFF0A1F26),
+        border = BorderStroke(1.dp, BlueGreenBorder),
+        modifier = Modifier.fillMaxWidth()
+      ) {
+        Column(modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)) {
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Text(
+              text = currentFilter.type.displayName,
+              color = Color.White,
+              fontWeight = FontWeight.Bold,
+              fontSize = 11.5.sp,
+              modifier = Modifier.testTag("selected_filter_name")
+            )
+            Text(
+              text = "${(currentFilter.intensity.coerceIn(0f, 1f) * 100f).roundToInt()}%",
+              color = BlueGreenAccent,
+              fontWeight = FontWeight.Bold,
+              fontSize = 11.5.sp,
+              modifier = Modifier.testTag("selected_filter_intensity")
+            )
+          }
+          Slider(
+            value = (currentFilter.intensity.coerceIn(0f, 1f) * 100f),
+            onValueChange = { v ->
+              onFilterChange(
+                currentFilter.copy(
+                  type = currentFilter.type,
+                  intensity = (v / 100f).coerceIn(0f, 1f),
+                  enabled = true
+                )
+              )
+            },
+            valueRange = 0f..100f,
+            colors = SliderDefaults.colors(
+              thumbColor = BlueGreenAccent,
+              activeTrackColor = BlueGreenAccent,
+              inactiveTrackColor = BlueGreenBorder
+            ),
+            modifier = Modifier
+              .height(24.dp)
+              .testTag("filter_intensity_slider")
+          )
+        }
+      }
     }
 
     if (items.isEmpty()) {

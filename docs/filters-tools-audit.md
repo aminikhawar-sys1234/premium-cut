@@ -43,6 +43,50 @@ FilterToolsPanel (Filters | Adjust | Video Quality)
 7. **Filters Reset left the LUT on.**  
    Reset now clears the clip's LUT as well as `FilterType`.
 
+8. **A published look was graded onto the wrong clip.**  
+   `VideoPlaybackEngine.publishLiveGrading()` always resolved the look from the playhead
+   clip (`findClipAt(CTI)`), so an Adjust / Video Quality edit on a *selected* clip that was
+   not under the playhead changed nothing on screen, and an edit on an overlay (PiP) clip
+   never reached that overlay's grading node at all. The engine now has one dedicated entry
+   point, `publishLiveLook(look)`, which publishes onto the node of the clip the look
+   belongs to (main-track node or overlay node) instead of the playhead's.
+
+9. **The held (paused) frame was never repainted after a value change.**  
+   `applyActiveLookToPlayers()` pushed new uniforms onto the resident `ColorGradingGlEffect`
+   and returned. While paused, ExoPlayer draws no further frames, so the whole call was a
+   no-op: `refreshCurrentFrame()` (LUT taps) and every slider tick updated uniforms that
+   nothing rendered again. The unchanged-graph path now calls `requestPausedFrameRefresh()`.
+
+10. **The repaint throttle dropped the slider's final value.**  
+    `presentCurrentFrame()` rate-limited to one repaint per 40 ms and simply discarded every
+    request inside that window. A slider drag emits faster than 40 ms, so the last tick of a
+    drag was frequently swallowed. The throttle now *coalesces*: a trailing repaint is
+    scheduled for the end of the window, so the value on screen is always the final one.
+    `presentCurrentFrame()` gained a `force` parameter for that trailing repaint.
+
+11. **Identity-fallback devices hammered `setVideoEffects`.**  
+    When Media3 could only run the identity passthrough, `boundMainGrading` stayed `null` and
+    every slider tick rebuilt the graph again (and failed again). `lookFallbackActive` stops
+    the rebuild loop; the flag clears on a successful apply, on editor entry and on session
+    reset.
+
+12. **No way to see or tune what was applied.**  
+    - The Filters tab had no intensity control at all: a tapped preset always landed at 100%.
+      It now has a *selected look* row with a live 0–100% intensity slider.
+    - The panel grew a **live status bar**: the scope (clip vs project) plus one removable
+      chip per non-default value (`Golden 80% ×`, `Brightness +25 ×`, `Auto Enhance 40% ×`, …).
+      Tapping a chip clears just that one parameter.
+    - The preview gained a **live look HUD** (`VideoPreviewSurface`), rendered from the
+      published `LivePreviewLook` and auto-hiding after ~1.8 s. When the look targets a clip
+      that is not on screen it names that clip (`On Clip 2`) instead of implying a broken
+      preview. `_livePreviewLook` is now cleared by `flushLiveLook()`, so the HUD only lives
+      while the sheet is open.
+
+13. **Closing the sheet could strand the look.**  
+    `EditorScreen` overrode the panel's `onClose` and skipped `flushLiveLook()`; the edit
+    survived only by luck of the panel's `DisposableEffect`. All three call sites now flush,
+    and `navigateTo()` flushes when leaving the editor.
+
 ## Preview = export
 
 | Look | Live preview | Export |
@@ -56,3 +100,5 @@ FilterToolsPanel (Filters | Adjust | Video Quality)
 
 `VideoFiltersTest` and `Media3EffectPipelineTest` cover clip-local filters, LUT
 signatures, Video Quality / fade / whites not being no-ops, and LUT strip baking.
+`LiveLookStatusBarTest` covers the applied-look summary (every non-default value is listed,
+and clearing one chip resets only that parameter).
