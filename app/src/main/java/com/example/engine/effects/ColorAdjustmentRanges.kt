@@ -8,8 +8,9 @@ import kotlin.math.abs
  * Shared ranges and defaults for Adjust sliders. Preview and export read the
  * same [VideoAdjustments] fields; this object only documents valid UI ranges.
  *
- * The rendering-side ranges and constants live in [ColorLookModel]; `ColorLookModelRangesTest`
- * asserts the two stay in sync, so a slider can never offer a value the shader clamps away.
+ * The rendering-side ranges and constants live in [ColorLookModel];
+ * `ColorLookModelTest.uiRangesAndRenderRangesAgree` asserts the two stay in sync, so a slider can
+ * never offer a value the shader clamps away.
  */
 object ColorAdjustmentRanges {
   data class Spec(
