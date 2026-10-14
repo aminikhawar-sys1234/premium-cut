@@ -18,7 +18,7 @@ import com.example.engine.composition.ComposedText
 import com.example.engine.composition.StickerDisplayMetrics
 import com.example.engine.composition.StickerLayerRenderer
 import com.example.engine.composition.VideoEffectRenderer
-import com.example.engine.effects.FilterCatalog
+import com.example.engine.effects.ColorLookModel
 import com.example.engine.text.Text3DGlRenderer
 import com.example.engine.text.TextLayerRenderer
 import java.nio.ByteBuffer
@@ -487,7 +487,9 @@ class GpuCompositionRenderer(private val context: Context) {
             effectClipsFor(frame, overlay.clip.id),
             frame.timelinePosMs
           ),
-          timelinePosMs = frame.timelinePosMs
+          timelinePosMs = frame.timelinePosMs,
+          fallbackAdjustments = timelineAdjustments,
+          fallbackFilter = timelineFilter
         )
 
         val ovFxTex = applyTrackedEffects(
@@ -1067,7 +1069,8 @@ class GpuCompositionRenderer(private val context: Context) {
           it.motionTrackJson,
           frame.clipSourcePosMs * 1000L
         )
-      }
+      },
+      grainSeed = (frame.clipSourcePosMs % 10000L).toFloat() / 1000f
     )
 
     val scissorTransition = transitionClipStart >= 0f && transitionClipEnd > transitionClipStart
@@ -1217,7 +1220,15 @@ class GpuCompositionRenderer(private val context: Context) {
     chromaKey: ChromaKeySettings,
     effectColorMatrix: android.graphics.ColorMatrix? = null,
     /** Timeline time of this frame; needed to sample the overlay's previous keyframe state for Motion Blur. */
-    timelinePosMs: Long = overlay.clip.timelineStartMs
+    timelinePosMs: Long = overlay.clip.timelineStartMs,
+    /**
+     * Project-wide look used when the overlay has no clip-local one. The preview resolves an
+     * overlay's look as `clip.adjustments ?: timeline.adjustments` / `clip.filter ?:
+     * timeline.filter`; export used to fall back to a bare neutral / NONE, so an overlay with no
+     * clip-local look was graded in the editor and exported ungraded.
+     */
+    fallbackAdjustments: VideoAdjustments = VideoAdjustments(),
+    fallbackFilter: FilterSettings = FilterSettings()
   ): Int {
     val fbo = fboOverlayMap.getOrPut(overlay.clip.id) { GlFramebuffer() }
     fbo.setup(viewportWidth, viewportHeight)
@@ -1245,20 +1256,14 @@ class GpuCompositionRenderer(private val context: Context) {
       computeOverlayMotionVector(overlay, timelinePosMs, viewportWidth, viewportHeight)
     }
 
-    val overlayBase = overlay.clip.adjustments
-    val overlayAdj = if (overlayBase == null) {
-      VideoAdjustments(
-        brightness = overlay.brightness,
-        contrast = overlay.contrast,
-        saturation = overlay.saturation
-      )
-    } else {
-      overlayBase.copy(
-        brightness = (overlayBase.brightness + overlay.brightness).coerceIn(-1f, 1f),
-        contrast = (overlayBase.contrast * overlay.contrast).coerceAtLeast(0f),
-        saturation = (overlayBase.saturation * overlay.saturation).coerceAtLeast(0f)
-      )
-    }
+    // Preview resolves an overlay's look as `clip.adjustments ?: timeline.adjustments`, so the
+    // export must use the same fallback instead of a bare neutral VideoAdjustments.
+    val overlayBase = overlay.clip.adjustments ?: fallbackAdjustments
+    val overlayAdj = overlayBase.copy(
+      brightness = (overlayBase.brightness + overlay.brightness).coerceIn(-1f, 1f),
+      contrast = (overlayBase.contrast * overlay.contrast).coerceAtLeast(0f),
+      saturation = (overlayBase.saturation * overlay.saturation).coerceAtLeast(0f)
+    )
 
     bindCommonUniforms(
       program = program,
@@ -1266,7 +1271,7 @@ class GpuCompositionRenderer(private val context: Context) {
       isOes = isOes,
       opacity = 1.0f,
       adjustments = overlayAdj,
-      filter = overlay.clip.filter ?: FilterSettings(),
+      filter = overlay.clip.filter ?: fallbackFilter,
       chromaKey = chromaKey,
       viewportWidth = viewportWidth,
       viewportHeight = viewportHeight,
@@ -1277,7 +1282,8 @@ class GpuCompositionRenderer(private val context: Context) {
         overlay.clip.mask,
         overlay.clip.motionTrackJson,
         overlay.sourcePosMs * 1000L
-      )
+      ),
+      grainSeed = (overlay.sourcePosMs % 10000L).toFloat() / 1000f
     )
 
     drawQuad(program)
@@ -1581,7 +1587,10 @@ class GpuCompositionRenderer(private val context: Context) {
     blur: Float = 0f,
     effectParam: Float = 0f,
     effectColorMatrix: android.graphics.ColorMatrix? = null,
-    mask: MaskSettings? = null
+    mask: MaskSettings? = null,
+    /** Grain seed (seconds-ish). Preview seeds from the frame's presentation time, export from
+     *  the clip's source time; both feed the same shader expression. */
+    grainSeed: Float = 0f
   ) {
     val uMVPMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
     val uTexMatrixHandle = GLES20.glGetUniformLocation(program, "uTexMatrix")
@@ -1629,27 +1638,57 @@ class GpuCompositionRenderer(private val context: Context) {
     val uClarityHandle = GLES20.glGetUniformLocation(program, "uClarity")
     val uTexelSizeHandle = GLES20.glGetUniformLocation(program, "uTexelSize")
 
-    val extras = FilterCatalog.spatialExtras(filter)
-    if (uBrightnessHandle >= 0) GLES20.glUniform1f(uBrightnessHandle, adjustments.brightness)
-    if (uContrastHandle >= 0) GLES20.glUniform1f(uContrastHandle, adjustments.contrast)
-    if (uSaturationHandle >= 0) GLES20.glUniform1f(uSaturationHandle, adjustments.saturation)
-    if (uExposureHandle >= 0) GLES20.glUniform1f(uExposureHandle, adjustments.exposure)
-    if (uTemperatureHandle >= 0) GLES20.glUniform1f(uTemperatureHandle, adjustments.temperature)
-    if (uTintHandle >= 0) GLES20.glUniform1f(uTintHandle, adjustments.tint)
-    if (uHighlightsHandle >= 0) GLES20.glUniform1f(uHighlightsHandle, adjustments.highlights)
-    if (uShadowsHandle >= 0) GLES20.glUniform1f(uShadowsHandle, adjustments.shadows)
-    if (uWhitesHandle >= 0) GLES20.glUniform1f(uWhitesHandle, adjustments.whites)
-    if (uBlacksHandle >= 0) GLES20.glUniform1f(uBlacksHandle, adjustments.blacks)
-    if (uFadeHandle >= 0) GLES20.glUniform1f(uFadeHandle, adjustments.fade)
-    if (uAutoEnhanceHandle >= 0) GLES20.glUniform1f(uAutoEnhanceHandle, (adjustments.autoEnhance + extras.enhance).coerceIn(0f, 1f))
-    if (uHdrBoostHandle >= 0) GLES20.glUniform1f(uHdrBoostHandle, (adjustments.hdrBoost + adjustments.colorCorrect + extras.hdrLook).coerceIn(0f, 1f))
-    if (uColorFixHandle >= 0) GLES20.glUniform1f(uColorFixHandle, adjustments.colorFix)
-    if (uDenoiseHandle >= 0) GLES20.glUniform1f(uDenoiseHandle, (adjustments.denoise + adjustments.antiFlicker * 0.5f).coerceIn(0f, 1f))
-    if (uGlowHandle >= 0) GLES20.glUniform1f(uGlowHandle, extras.glow.coerceIn(0f, 1f))
-    if (uVignetteHandle >= 0) GLES20.glUniform1f(uVignetteHandle, adjustments.vignette)
-    if (uGrainHandle >= 0) GLES20.glUniform1f(uGrainHandle, adjustments.grain)
-    if (uSharpnessHandle >= 0) GLES20.glUniform1f(uSharpnessHandle, (adjustments.sharpness + extras.sharpness).coerceIn(0f, 1f))
-    if (uClarityHandle >= 0) GLES20.glUniform1f(uClarityHandle, (adjustments.clarity + adjustments.superClarity + extras.clarity).coerceIn(0f, 1f))
+    // ---- Look uniforms -----------------------------------------------------------------
+    // Every value below is resolved by ColorLookModel — the SAME resolver the live preview
+    // calls. Before this, the export path recomputed the look inline and had drifted from the
+    // preview: Highlights/Shadows used Rec.601 luma with 0.0/0.5/1.0 masks (preview: Rec.709
+    // with 0.0/0.6 and 0.4/1.0) and sharpening ran at 4.0x the preview's gain. Resolving both
+    // from one object is what makes the exported frame match the preview.
+    //
+    // The preset is selected with ColorLookModel.presetMatrix, the same rule the preview uses:
+    // this path used to test only `filter.enabled`, so a NONE / zero-intensity look still
+    // uploaded an identity uColorMatrix on export while the preview uploaded none.
+    val filterMatrix = ColorLookModel.presetMatrix(filter)?.let { android.graphics.ColorMatrix(it) }
+    val finalMatrix = when {
+      filterMatrix != null && effectColorMatrix != null -> {
+        val combined = android.graphics.ColorMatrix(filterMatrix)
+        combined.postConcat(effectColorMatrix)
+        combined
+      }
+      filterMatrix != null -> filterMatrix
+      effectColorMatrix != null -> effectColorMatrix
+      else -> null
+    }
+    val glPair = finalMatrix?.let { ColorLookModel.filterGlMatrix(it.array) }
+    val look = ColorLookModel.effective(
+      adjustments = adjustments,
+      filter = filter,
+      filterMatrix = glPair?.first,
+      filterOffset = glPair?.second
+    )
+
+    if (uBrightnessHandle >= 0) GLES20.glUniform1f(uBrightnessHandle, look.brightness)
+    if (uContrastHandle >= 0) GLES20.glUniform1f(uContrastHandle, look.contrast)
+    if (uSaturationHandle >= 0) GLES20.glUniform1f(uSaturationHandle, look.saturation)
+    if (uExposureHandle >= 0) GLES20.glUniform1f(uExposureHandle, look.exposure)
+    if (uTemperatureHandle >= 0) GLES20.glUniform1f(uTemperatureHandle, look.temperature)
+    if (uTintHandle >= 0) GLES20.glUniform1f(uTintHandle, look.tint)
+    if (uHighlightsHandle >= 0) GLES20.glUniform1f(uHighlightsHandle, look.highlights)
+    if (uShadowsHandle >= 0) GLES20.glUniform1f(uShadowsHandle, look.shadows)
+    if (uWhitesHandle >= 0) GLES20.glUniform1f(uWhitesHandle, look.whites)
+    if (uBlacksHandle >= 0) GLES20.glUniform1f(uBlacksHandle, look.blacks)
+    if (uFadeHandle >= 0) GLES20.glUniform1f(uFadeHandle, look.fade)
+    if (uAutoEnhanceHandle >= 0) GLES20.glUniform1f(uAutoEnhanceHandle, look.autoEnhance)
+    if (uHdrBoostHandle >= 0) GLES20.glUniform1f(uHdrBoostHandle, look.hdrBoost)
+    if (uColorFixHandle >= 0) GLES20.glUniform1f(uColorFixHandle, look.colorFix)
+    if (uDenoiseHandle >= 0) GLES20.glUniform1f(uDenoiseHandle, look.denoise)
+    if (uGlowHandle >= 0) GLES20.glUniform1f(uGlowHandle, look.glow)
+    if (uVignetteHandle >= 0) GLES20.glUniform1f(uVignetteHandle, look.vignette)
+    if (uGrainHandle >= 0) GLES20.glUniform1f(uGrainHandle, look.grain)
+    val uGrainSeedHandle = GLES20.glGetUniformLocation(program, "uGrainSeed")
+    if (uGrainSeedHandle >= 0) GLES20.glUniform1f(uGrainSeedHandle, grainSeed)
+    if (uSharpnessHandle >= 0) GLES20.glUniform1f(uSharpnessHandle, look.sharpness)
+    if (uClarityHandle >= 0) GLES20.glUniform1f(uClarityHandle, look.clarity)
     if (uTexelSizeHandle >= 0) GLES20.glUniform2f(uTexelSizeHandle, 1.0f / max(1, viewportWidth), 1.0f / max(1, viewportHeight))
 
     val uChromaEnabledHandle = GLES20.glGetUniformLocation(program, "uChromaEnabled")
@@ -1689,41 +1728,14 @@ class GpuCompositionRenderer(private val context: Context) {
     val uColorOffsetHandle = GLES20.glGetUniformLocation(program, "uColorOffset")
     val uUseColorMatrixHandle = GLES20.glGetUniformLocation(program, "uUseColorMatrix")
 
-    val filterMatrix = if (filter.enabled) {
-      com.example.engine.composition.ColorFilterGenerator.getFilterMatrix(filter.type, filter.intensity)
-    } else {
-      null
-    }
-    val finalMatrix = when {
-      filterMatrix != null && effectColorMatrix != null -> {
-        val combined = android.graphics.ColorMatrix(filterMatrix)
-        combined.postConcat(effectColorMatrix)
-        combined
+    if (uUseColorMatrixHandle >= 0) {
+      if (glPair != null) {
+        if (uColorMatrixHandle >= 0) GLES20.glUniformMatrix4fv(uColorMatrixHandle, 1, false, glPair.first, 0)
+        if (uColorOffsetHandle >= 0) GLES20.glUniform4fv(uColorOffsetHandle, 1, glPair.second, 0)
+        GLES20.glUniform1i(uUseColorMatrixHandle, 1)
+      } else {
+        GLES20.glUniform1i(uUseColorMatrixHandle, 0)
       }
-      filterMatrix != null -> filterMatrix
-      effectColorMatrix != null -> effectColorMatrix
-      else -> null
-    }
-
-    if (finalMatrix != null && uUseColorMatrixHandle >= 0) {
-      val arr = finalMatrix.array
-      val glMat = floatArrayOf(
-        arr[0], arr[5], arr[10], arr[15],
-        arr[1], arr[6], arr[11], arr[16],
-        arr[2], arr[7], arr[12], arr[17],
-        arr[3], arr[8], arr[13], arr[18]
-      )
-      val glOffset = floatArrayOf(
-        arr[4] / 255.0f,
-        arr[9] / 255.0f,
-        arr[14] / 255.0f,
-        arr[19] / 255.0f
-      )
-      if (uColorMatrixHandle >= 0) GLES20.glUniformMatrix4fv(uColorMatrixHandle, 1, false, glMat, 0)
-      if (uColorOffsetHandle >= 0) GLES20.glUniform4fv(uColorOffsetHandle, 1, glOffset, 0)
-      GLES20.glUniform1i(uUseColorMatrixHandle, 1)
-    } else if (uUseColorMatrixHandle >= 0) {
-      GLES20.glUniform1i(uUseColorMatrixHandle, 0)
     }
   }
 

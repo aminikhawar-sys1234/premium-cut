@@ -865,8 +865,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
               assembled = assembled,
               viewportWidth = exportWidth,
               viewportHeight = exportHeight,
-              adjustments = timeline.adjustments,
-              filter = timeline.filter,
+              // The effective look of the clip this frame shows, resolved exactly the way the
+              // preview resolves it (`clip.adjustments ?: timeline.adjustments` /
+              // `clip.filter ?: timeline.filter`). The Filters / Adjust / Video Quality panel
+              // always writes clip-local looks (TimelineEngine.updateFilter clears
+              // Timeline.filter), so passing the bare timeline values here exported a project
+              // with none of the looks the editor was showing.
+              adjustments = frame.activeClip?.adjustments ?: timeline.adjustments,
+              filter = frame.activeClip?.filter ?: timeline.filter,
               chromaKey = timeline.chromaKey,
               presentation = CompositionRenderGraph.FramePresentation.export(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER)
             )
