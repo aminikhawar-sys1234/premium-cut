@@ -57,6 +57,11 @@ jobs:
       - name: Make Gradle Wrapper executable
         run: chmod +x gradlew
 
+      # Kotlin compiler errors (`e: file:///…/Foo.kt:12:34 message`) become PR annotations
+      # instead of a bare "Process completed with exit code 1".
+      - name: Register Kotlin compiler problem matcher
+        run: echo "::add-matcher::$GITHUB_WORKSPACE/.github/kotlin-problem-matcher.json"
+
       # Preinstall CMake + NDK into the runner SDK so parallel ABI configure tasks never
       # race AGP's auto-download, and so the first Gradle call cannot fail on a missing
       # package. Runs before lint/tests/assemble on purpose.
@@ -112,6 +117,12 @@ jobs:
             sleep 20
           done
           exit 1
+
+      # Failing JUnit cases -> PR annotations (test file + line + assertion message) and a
+      # job-summary table, so a red test step can be diagnosed without opening the raw log.
+      - name: Report failed unit tests
+        if: failure()
+        run: python3 "$GITHUB_WORKSPACE/.github/scripts/report_test_failures.py" app/build/test-results
 
       - name: Build Debug APK
         run: |
