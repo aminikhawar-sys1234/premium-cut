@@ -221,6 +221,15 @@ class ColorPipelineGpuInstrumentedTest {
   // 3. Every slider changes real pixels, and matches the CPU reference
   // -------------------------------------------------------------------------------------
 
+  /**
+   * Sliders whose shader stage samples neighbouring pixels or depends on the pixel coordinate.
+   * `ColorLookModel.evaluate` is documented as the **non-spatial** reference (it takes one pixel, no
+   * coordinate), so these are measured on the GPU only; their numbers are still printed.
+   */
+  private val spatialSliders = setOf(
+    "sharpness=0.8", "clarity=0.6", "denoise=0.6", "antiFlicker=0.8", "vignette=0.6", "grain=0.5"
+  )
+
   @Test
   fun everySliderChangesRenderedPixelsOnTheGpu() {
     val export = gl().buildExportProgram()
@@ -233,21 +242,33 @@ class ColorPipelineGpuInstrumentedTest {
       )
       val failures = mutableListOf<String>()
       var cpuDiffTotal = 0.0
-      var pixels = 0
+      var cpuPixels = 0
       for (adj in probes) {
+        val name = describe(adj)
         val params = exportLook(adj, FilterSettings())
         val frame = gl().render(export, params, 1f, preview = false)
         val delta = meanAbsDiff(frame, baseline)
-        // CPU reference for the same look: the two must agree pixel for pixel.
+        val maxDelta = maxAbsDiff(frame, baseline)
+        if (maxDelta <= 1f / 255f) {
+          failures += "$name changed no pixel on the GPU (mean delta $delta, max pixel delta $maxDelta)"
+        }
+        if (name in spatialSliders) {
+          LookVerificationReport.line(
+            "$name gpuDelta=%.4f maxPixelDelta=%.4f (neighbour/coordinate stage: measured on the GPU, " +
+              "not comparable with the single-pixel CPU reference)".format(delta, maxDelta)
+          )
+          continue
+        }
+        // CPU reference for the same look: the non-spatial stages must agree pixel for pixel.
         val cpu = FloatArray(gl().size * gl().size * 3)
         var p = 0
         while (p < cpu.size) {
-          val s = p / 3 * 4
+          val sOff = p / 3 * 4
           val out = ColorLookModel.evaluate(
             params,
-            (gl().sourceRgba[s].toInt() and 0xFF) / 255f,
-            (gl().sourceRgba[s + 1].toInt() and 0xFF) / 255f,
-            (gl().sourceRgba[s + 2].toInt() and 0xFF) / 255f,
+            (gl().sourceRgba[sOff].toInt() and 0xFF) / 255f,
+            (gl().sourceRgba[sOff + 1].toInt() and 0xFF) / 255f,
+            (gl().sourceRgba[sOff + 2].toInt() and 0xFF) / 255f,
             1f
           )
           cpu[p] = out[0]; cpu[p + 1] = out[1]; cpu[p + 2] = out[2]
@@ -255,17 +276,15 @@ class ColorPipelineGpuInstrumentedTest {
         }
         val cpuDiff = meanAbsDiff(frame, cpu)
         cpuDiffTotal += cpuDiff
-        pixels++
-        val name = describe(adj)
+        cpuPixels++
         LookVerificationReport.line(
-          "$name gpuDelta=%.4f gpuVsCpuMeanDiff=%.5f maxPad=%.5f"
-            .format(delta, cpuDiff, maxAbsDiff(frame, cpu))
+          "$name gpuDelta=%.4f maxPixelDelta=%.4f gpuVsCpuMeanDiff=%.5f".format(delta, maxDelta, cpuDiff)
         )
-        if (delta <= 1f / 255f) failures += "$name changed nothing on the GPU (delta $delta)"
         if (cpuDiff > 6f / 255f) failures += "$name GPU/CPU mismatch (mean diff $cpuDiff)"
       }
       LookVerificationReport.line(
-        "sliders checked=${probes.size} meanGpuVsCpuDiff=%.5f".format(cpuDiffTotal / max(1, pixels))
+        "non-spatial sliders checked=$cpuPixels meanGpuVsCpuDiff=%.5f; spatial sliders reported separately"
+          .format(cpuDiffTotal / max(1, cpuPixels))
       )
       assertTrue(failures.joinToString("\n"), failures.isEmpty())
     } finally {
@@ -549,7 +568,12 @@ class ColorPipelineGpuInstrumentedTest {
       LookVerificationReport.line(
         "transition output vs clip A = %.4f, vs clip B = %.4f (a hard cut would be 0)".format(deltaA, deltaB)
       )
-      assertTrue("the FADE produced a black frame ($deltaA/$deltaB)", mean[0] + mean[1] + mean[2] > 0.05f)
+      assertTrue(
+        "the ES3 transition compositor reported success but left a black frame " +
+          "(its own contract is 'a broken transition must never blank a frame'): " +
+          "meanRgb=%.4f/%.4f/%.4f".format(mean[0], mean[1], mean[2]),
+        mean[0] + mean[1] + mean[2] > 0.05f
+      )
       assertTrue(
         "the FADE rendered exactly one of the two clips instead of blending them " +
           "(delta A=$deltaA, delta B=$deltaB)",

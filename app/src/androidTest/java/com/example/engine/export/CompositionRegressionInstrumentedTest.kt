@@ -94,7 +94,7 @@ class CompositionRegressionInstrumentedTest {
     hasAudio: Boolean = true
   ) = VideoClip(
     id = id,
-    uri = file.toURI().toString(),
+    uri = android.net.Uri.fromFile(file).toString(),
     name = file.name,
     timelineStartMs = startMs,
     durationMs = durationMs,
@@ -314,7 +314,7 @@ class CompositionRegressionInstrumentedTest {
       overlayClips = listOf(
         VideoClip(
           id = "overlay",
-          uri = png.toURI().toString(),
+          uri = android.net.Uri.fromFile(png).toString(),
           name = "overlay.png",
           isVideo = false,
           timelineStartMs = 0L,
@@ -384,20 +384,16 @@ class CompositionRegressionInstrumentedTest {
     // The pixel blend is done by ShaderTransitionCompositor, which is GLES3-only and returns false
     // on an ES2 context (the caller then keeps its legacy hard cut - by design). Ask a real GL
     // context on this device which of the two paths can run before judging the exported pixels.
-    val shaderTransitions = runCatching {
-      LookGpuHarness().use { harness ->
-        harness.bindFbo()
-        ShaderTransitionCompositor().isAvailable()
-      }
-    }.getOrElse { false }
+    val shaderTransitions = runCatching { LookGpuHarness.shaderTransitionBlendWorks() }.getOrElse { false }
     LookVerificationReport.line(
-      "shader transitions available on this device = $shaderTransitions " +
-        "(false => the exporter uses the legacy hard cut by design)"
+      "shader transition compositor renders a blend on this device = $shaderTransitions"
     )
     if (!shaderTransitions) {
       LookVerificationReport.line(
-        "FADE blend assertions skipped on this device: the ES3 transition engine is unavailable, " +
-          "so a hard cut at the clip boundary is the documented fallback (measured mid=$midLuma)"
+        "FADE blend assertions skipped on this device: the ES3 transition engine does not render " +
+          "(unavailable on ES2, or it reports success and leaves the frame black - see the GPU " +
+          "harness section), so a hard cut at the clip boundary is the documented fallback " +
+          "(measured mid=$midLuma)"
       )
       return
     }

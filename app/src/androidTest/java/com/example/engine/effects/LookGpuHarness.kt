@@ -3,7 +3,9 @@ package com.example.engine.effects
 import android.opengl.EGLSurface
 import android.opengl.GLES20
 import com.example.engine.composition.gpu.EglCore
+import com.example.domain.model.TransitionType
 import com.example.engine.composition.gpu.GpuShaders
+import com.example.engine.composition.gpu.ShaderTransitionCompositor
 import com.example.engine.effects.media3.ColorGradingGlEffect
 import java.io.Closeable
 import java.nio.ByteBuffer
@@ -78,6 +80,40 @@ internal class LookGpuHarness(val size: Int = DEFAULT_SIZE, source: ByteArray? =
         $varying = aTexCoord;
       }
     """.trimIndent()
+
+    /**
+     * Renders a FADE between two solid colours through the shipped ES3 transition compositor and
+     * returns true only when the result is a visible blend. False also covers "the compositor says
+     * it rendered but the frame came back black", which is what the exporter would fall back from.
+     */
+    fun shaderTransitionBlendWorks(): Boolean {
+      val harness = try {
+        LookGpuHarness()
+      } catch (_: Throwable) {
+        return false
+      }
+      try {
+        harness.bindFbo()
+        val compositor = ShaderTransitionCompositor()
+        if (!compositor.isAvailable()) return false
+        val texA = harness.uploadSolidRgb(0.10f, 0.70f, 0.20f)
+        val texB = harness.uploadSolidRgb(0.80f, 0.10f, 0.60f)
+        val rendered = compositor.render(
+          TransitionType.FADE, 0.5f, texA, texB, harness.size, harness.size, harness.fboId
+        )
+        harness.bindFbo()
+        val frame = harness.readBackRgb()
+        var sum = 0f
+        for (v in frame) sum += v
+        val mean = sum / frame.size
+        runCatching { compositor.release() }
+        return rendered && mean > 0.05f
+      } catch (_: Throwable) {
+        return false
+      } finally {
+        runCatching { harness.close() }
+      }
+    }
 
     fun glVersionString(): String =
       (GLES20.glGetString(GLES20.GL_VERSION) ?: "unknown") + " / " +

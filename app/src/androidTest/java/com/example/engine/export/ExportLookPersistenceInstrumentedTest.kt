@@ -65,7 +65,7 @@ class ExportLookPersistenceInstrumentedTest {
 
   private fun clipFor(source: File, graded: Boolean): VideoClip = VideoClip(
     id = if (graded) "graded" else "neutral",
-    uri = source.toURI().toString(),
+    uri = android.net.Uri.fromFile(source).toString(),
     name = source.name,
     durationMs = durationMs,
     sourceStartMs = 0L,
