@@ -2392,7 +2392,7 @@ fun VideoPreviewSurface(
       // Live look HUD: confirms on the picture itself what the Filters / Adjust /
       // Video Quality sheet just published. It fades out on its own so it never sits in
       // the way, and re-appears on every change while the sheet is open.
-      AnimatedVisibility(
+      androidx.compose.animation.AnimatedVisibility(
         visible = hudVisible && hudEntries.isNotEmpty(),
         enter = fadeIn(),
         exit = fadeOut(),

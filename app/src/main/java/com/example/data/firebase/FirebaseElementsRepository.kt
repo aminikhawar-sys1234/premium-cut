@@ -59,7 +59,7 @@ object FirebaseElementsRepository {
     val appContext = context.applicationContext
     scope.launch {
       _syncState.value = SyncState.Loading
-      runCatching { loadFromFirestore() }
+      runCatching { loadFromFirestore(appContext) }
         .onSuccess { items ->
           _remoteElements.value = items
           _syncState.value = SyncState.Loaded(items.size, fromCache = false)
