@@ -35,6 +35,7 @@ import com.example.engine.effects.media3.PreviewFilterEffects
 import com.example.engine.effects.media3.PreviewLookPolicy
 import com.example.engine.media.MediaPlayableUri
 import com.example.engine.media.MediaRelinkManager
+import com.example.engine.preview.PreviewCompositionPolicy
 import com.example.engine.preview.PreviewCompositor
 import com.example.engine.preview.PreviewCompositorPolicy
 import com.example.engine.preview.PreviewCompositorSettings
@@ -248,8 +249,18 @@ class VideoPlaybackEngine(
   }
 
   private fun refreshCompositorMode() {
-    val wanted = PreviewCompositorSettings.enabled.value && !compositorFailed && !isTrimPreviewMode &&
-      PreviewFramePlan.canComposite(currentTimeline, ::isPlayableInPlayer)
+    // Chroma key and background removal are per-pixel effects: the player path cannot draw them, only the
+    // GPU compositor can - and that is the same compositing the export runs, so both agree. A project that
+    // uses either effect therefore switches the compositor on by itself; the Settings switch stays as an
+    // explicit "always use the GPU preview".
+    val requiresComposition = PreviewCompositionPolicy.requiresCompositor(currentTimeline)
+    val wanted = PreviewCompositionPolicy.shouldActivate(
+      alwaysOn = PreviewCompositorSettings.enabled.value,
+      compositorFailed = compositorFailed,
+      trimPreviewActive = isTrimPreviewMode,
+      sourcesPlayable = PreviewFramePlan.canComposite(currentTimeline, ::isPlayableInPlayer),
+      requiresPixelEffects = requiresComposition
+    )
     if (wanted == _compositorActive.value) {
       if (wanted) compositor?.updateTimeline(currentTimeline)
       return

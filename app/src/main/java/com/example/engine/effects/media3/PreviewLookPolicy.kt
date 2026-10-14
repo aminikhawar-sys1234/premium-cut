@@ -85,15 +85,24 @@ object PreviewLookPolicy {
   /**
    * True when [next] differs from [prev] only in filter / adjustments / LUT / VFX look fields.
    * Structural edits (trim, add clip, speed, volume, …) must still rebuild playback.
+   *
+   * @param chromaHandledByCompositor the GPU preview compositor is running: it reads the chroma key from the
+   *   timeline on every frame, so moving a chroma slider is a look change there and must not rebuild the
+   *   player (which would restart playback for every slider tick). Background removal stays structural: it
+   *   feeds [com.example.engine.ai.cutout.SubjectCutoutRegistry], which is hydrated on structural changes.
    */
-  fun isLookOnlyChange(prev: Timeline, next: Timeline): Boolean {
+  fun isLookOnlyChange(
+    prev: Timeline,
+    next: Timeline,
+    chromaHandledByCompositor: Boolean = false
+  ): Boolean {
     if (prev.audioClips != next.audioClips) return false
     if (prev.textClips != next.textClips) return false
     if (prev.stickerClips != next.stickerClips) return false
     if (prev.effectClips != next.effectClips) return false
     if (prev.shapeClips != next.shapeClips) return false
     if (prev.transitions != next.transitions) return false
-    if (prev.chromaKey != next.chromaKey) return false
+    if (prev.chromaKey != next.chromaKey && !chromaHandledByCompositor) return false
     if (prev.canvasBackgroundColor != next.canvasBackgroundColor) return false
     if (prev.aspectRatio != next.aspectRatio) return false
     if (prev.trackSettings != next.trackSettings) return false
@@ -101,8 +110,8 @@ object PreviewLookPolicy {
     if (prev.markers != next.markers) return false
     if (prev.captionSpeakers != next.captionSpeakers) return false
     if (prev.version != next.version) return false
-    return clipsLookOnly(prev.videoClips, next.videoClips) &&
-      clipsLookOnly(prev.overlayClips, next.overlayClips)
+    return clipsLookOnly(prev.videoClips, next.videoClips, chromaHandledByCompositor) &&
+      clipsLookOnly(prev.overlayClips, next.overlayClips, chromaHandledByCompositor)
   }
 
   fun applyLookToTimeline(timeline: Timeline, look: LivePreviewLook): Timeline {
@@ -122,20 +131,24 @@ object PreviewLookPolicy {
     return timeline.copy(adjustments = look.adjustments, filter = look.filter)
   }
 
-  private fun clipsLookOnly(previous: List<VideoClip>, next: List<VideoClip>): Boolean {
+  private fun clipsLookOnly(
+    previous: List<VideoClip>,
+    next: List<VideoClip>,
+    chromaHandledByCompositor: Boolean = false
+  ): Boolean {
     if (previous.size != next.size) return false
     return previous.zip(next).all { (left, right) ->
-      left.copy(
-        filter = null,
-        adjustments = null,
-        colorGradeJson = null,
-        vfxStackJson = null
-      ) == right.copy(
-        filter = null,
-        adjustments = null,
-        colorGradeJson = null,
-        vfxStackJson = null
-      )
+      val ignoreForThisComparison = { clip: VideoClip ->
+        clip.copy(
+          filter = null,
+          adjustments = null,
+          colorGradeJson = null,
+          vfxStackJson = null,
+          // The compositor keys straight from the clip, so a keying-only edit is a look change for it.
+          chromaKey = if (chromaHandledByCompositor) null else clip.chromaKey
+        )
+      }
+      ignoreForThisComparison(left) == ignoreForThisComparison(right)
     }
   }
 }

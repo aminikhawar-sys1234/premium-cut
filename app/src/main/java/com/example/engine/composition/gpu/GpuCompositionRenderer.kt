@@ -10,6 +10,7 @@ import android.util.Log
 import com.example.domain.model.*
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
+import com.example.engine.composition.ChromaKeyResolver
 import com.example.engine.composition.ComposedFrame
 import com.example.engine.composition.TransitionPreviewMotion
 import com.example.engine.composition.ComposedOverlay
@@ -209,6 +210,17 @@ class GpuCompositionRenderer(private val context: Context) {
   private val fboA = GlFramebuffer()
   private val fboB = GlFramebuffer()
 
+  /**
+   * Chroma-key background (image / video frame) for the layer currently being drawn. The keyed layers are
+   * rendered to their own 2D textures, and the shader mixes this texture into everything the key removed,
+   * so preview and export composite the replacement background exactly like they composite the key.
+   */
+  private var chromaBackgroundTextureId = 0
+  private val chromaBackgroundFit = floatArrayOf(1f, 1f)
+  /** Decoded chroma background images, keyed by URI; entries are dropped when the URI changes. */
+  private val chromaBackgroundBitmaps = mutableMapOf<String, CachedTexture>()
+  private val fboChromaBackground = GlFramebuffer()
+
   // Cached Text & Sticker textures with frame-access tracking
   internal data class CachedTexture(
     val texId: Int,
@@ -286,7 +298,10 @@ class GpuCompositionRenderer(private val context: Context) {
     viewportHeight: Int,
     timelineAdjustments: VideoAdjustments = VideoAdjustments(),
     timelineFilter: FilterSettings = FilterSettings(),
+    /** Project-wide chroma default. A clip's own [VideoClip.chromaKey] wins over it (ChromaKeyResolver). */
     chromaKey: ChromaKeySettings = ChromaKeySettings(),
+    /** Decoded background video frame for a keyed main clip whose background is a video; null otherwise. */
+    chromaBackgroundFrame: ChromaBackgroundFrame? = null,
     flipYForEncoder: Boolean = false,
     flipXForEncoder: Boolean = false,
     transitionBefore: TransitionSourceTexture? = null,
@@ -302,6 +317,11 @@ class GpuCompositionRenderer(private val context: Context) {
 
     currentFrameCounter++
     mainGeometry = null
+
+    // Resolve the keying of every layer in this frame, and upload the background the keyed main clip needs.
+    // A clip's own settings always win, so keying one layer never keys the others.
+    val mainChromaKey = ChromaKeyResolver.settingsFor(frame.activeClip, chromaKey)
+    prepareChromaBackground(mainChromaKey, chromaBackgroundFrame, viewportWidth, viewportHeight)
 
     // Initialize or resize native C++ OpenGL ES 3.0 renderer
     if (viewportWidth != currentViewportWidth || viewportHeight != currentViewportHeight || nativeHandle == 0L) {
@@ -348,7 +368,7 @@ class GpuCompositionRenderer(private val context: Context) {
         viewportHeight = viewportHeight,
         adjustments = timelineAdjustments,
         filter = timelineFilter,
-        chromaKey = chromaKey,
+        chromaKey = mainChromaKey,
         effectColorMatrix = fxColorMatrix
       )
 
@@ -410,18 +430,27 @@ class GpuCompositionRenderer(private val context: Context) {
 
       // Background removal (AI cutout): no-op for clips without it. Runs last so the mask is cut from
       // exactly what is displayed (after grade / FX / face / body).
-      val main2dTexId = subjectCutoutStage.apply(
-        clipId = frame.activeClip?.id,
-        params = SubjectCutoutRegistry.paramsFor(frame.activeClip?.id),
-        srcTex = beautyTexId,
-        width = viewportWidth,
-        height = viewportHeight,
-        analysisAspect = viewportWidth.toFloat() / max(1, viewportHeight),
-        analysisRotation = 0,
-        frameKeyUs = frame.timelinePosMs * 1000L,
-        blocking = deterministicMasks,
-        isBaseLayer = true
-      )
+      //
+      // It is skipped when the chroma key already fills the background (solid colour / image / video):
+      // the mask would cut the replacement background straight out again, i.e. the two tools would
+      // silently cancel each other. With a transparent key both run, which is what the panels show.
+      val cutoutTexId = if (ChromaKeyResolver.replacesBackground(mainChromaKey)) {
+        beautyTexId
+      } else {
+        subjectCutoutStage.apply(
+          clipId = frame.activeClip?.id,
+          params = SubjectCutoutRegistry.paramsFor(frame.activeClip?.id),
+          srcTex = beautyTexId,
+          width = viewportWidth,
+          height = viewportHeight,
+          analysisAspect = viewportWidth.toFloat() / max(1, viewportHeight),
+          analysisRotation = 0,
+          frameKeyUs = frame.timelinePosMs * 1000L,
+          blocking = deterministicMasks,
+          isBaseLayer = true
+        )
+      }
+      val main2dTexId = if (cutoutTexId > 0) cutoutTexId else beautyTexId
 
       // AR face filter (crown, glasses, ears ...). Drawn after the cutout so the mask cannot erase
       // parts that sit outside the subject (a crown above the head), and as its own layer so it
@@ -482,7 +511,7 @@ class GpuCompositionRenderer(private val context: Context) {
           customTexMatrix = overlayTexMatrices[overlay.clip.id],
           viewportWidth = viewportWidth,
           viewportHeight = viewportHeight,
-          chromaKey = chromaKey,
+          chromaKey = ChromaKeyResolver.settingsFor(overlay.clip, chromaKey),
           effectColorMatrix = VideoEffectRenderer.calculateEffectColorMatrix(
             effectClipsFor(frame, overlay.clip.id),
             frame.timelinePosMs
@@ -512,18 +541,25 @@ class GpuCompositionRenderer(private val context: Context) {
         // rotate it upright for the segmenter only.
         val ovRawW = if (overlay.clip.width > 0) overlay.clip.width else viewportWidth
         val ovRawH = if (overlay.clip.height > 0) overlay.clip.height else viewportHeight
-        val ov2dTexId = subjectCutoutStage.apply(
-          clipId = overlay.clip.id,
-          params = SubjectCutoutRegistry.paramsFor(overlay.clip.id),
-          srcTex = ovSettled,
-          width = viewportWidth,
-          height = viewportHeight,
-          analysisAspect = ovRawW.toFloat() / max(1, ovRawH),
-          analysisRotation = if (isOvOes) overlay.clip.naturalRotation else 0,
-          frameKeyUs = overlay.sourcePosMs * 1000L,
-          blocking = deterministicMasks,
-          isBaseLayer = false
-        )
+        val overlayChroma = ChromaKeyResolver.settingsFor(overlay.clip, chromaKey)
+        val ovCutoutTexId = if (ChromaKeyResolver.replacesBackground(overlayChroma)) {
+          // Same rule as the main layer: a key that paints its own background is not masked away again.
+          ovSettled
+        } else {
+          subjectCutoutStage.apply(
+            clipId = overlay.clip.id,
+            params = SubjectCutoutRegistry.paramsFor(overlay.clip.id),
+            srcTex = ovSettled,
+            width = viewportWidth,
+            height = viewportHeight,
+            analysisAspect = ovRawW.toFloat() / max(1, ovRawH),
+            analysisRotation = if (isOvOes) overlay.clip.naturalRotation else 0,
+            frameKeyUs = overlay.sourcePosMs * 1000L,
+            blocking = deterministicMasks,
+            isBaseLayer = false
+          )
+        }
+        val ov2dTexId = if (ovCutoutTexId > 0) ovCutoutTexId else ovSettled
 
         if (ov2dTexId > 0) {
           val ovNaturalRot = if (isOvOes) overlay.clip.naturalRotation else 0
@@ -749,6 +785,158 @@ class GpuCompositionRenderer(private val context: Context) {
     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
     GLES20.glDisable(GLES20.GL_BLEND)
     blitToSurface(currentInputTex, flipY = flipYForEncoder, flipX = flipXForEncoder)
+  }
+
+  /**
+   * Prepares the picture a chroma key composites over: a decoded image (decoded once and cached) or, for a
+   * background video, the frame the host decoded for this timeline position. Leaves the texture id at 0 when
+   * the key draws over transparency or a solid colour, so the shader falls back to those modes.
+   *
+   * Must run on the GL thread, before the keyed layers are drawn.
+   */
+  private fun prepareChromaBackground(
+    settings: ChromaKeySettings?,
+    frame: ChromaBackgroundFrame?,
+    viewportWidth: Int,
+    viewportHeight: Int
+  ) {
+    chromaBackgroundTextureId = 0
+    chromaBackgroundFit[0] = 1f
+    chromaBackgroundFit[1] = 1f
+    if (settings == null || !settings.enabled) return
+    if (!ChromaKeyResolver.usesBackgroundMedia(settings)) return
+
+    if (settings.backgroundType == ChromaKeyResolver.BACKGROUND_VIDEO) {
+      val decoded = frame ?: return
+      if (decoded.textureId <= 0) return
+      // The keyer samples one 2D texture, so a decoded video frame is normalised into a viewport-sized 2D
+      // texture here - aspect-correct ("cover"), with the decoder's texture matrix applied. The result is
+      // already framed for the screen, so the shader must not crop it again.
+      val prepared = videoFrameTo2D(decoded, viewportWidth, viewportHeight)
+      if (prepared <= 0) return
+      chromaBackgroundTextureId = prepared
+      chromaBackgroundFit[0] = 1f
+      chromaBackgroundFit[1] = 1f
+      return
+    }
+
+    var textureId = 0
+    var bgWidth = 0
+    var bgHeight = 0
+    if (frame != null && frame.textureId > 0) {
+      // The caller already decoded and uploaded the image (preview image loader / export pre-loader);
+      // reuse that texture instead of decoding the same file a second time.
+      textureId = frame.textureId
+      bgWidth = frame.width
+      bgHeight = frame.height
+    } else {
+      val uri = settings.backgroundUri?.trim().orEmpty()
+      if (uri.isEmpty()) return
+      val cached = chromaBackgroundTexture(uri) ?: return
+      textureId = cached.texId
+      bgWidth = cached.width
+      bgHeight = cached.height
+    }
+
+    if (textureId <= 0) return
+    chromaBackgroundTextureId = textureId
+    val fit = ChromaKeyResolver.coverFit(bgWidth, bgHeight, viewportWidth, viewportHeight)
+    chromaBackgroundFit[0] = fit[0]
+    chromaBackgroundFit[1] = fit[1]
+  }
+
+  /** Decoded + uploaded chroma background image for [uri]; Android rejects unknown schemes without throwing. */
+  private fun chromaBackgroundTexture(uri: String): CachedTexture? {
+    chromaBackgroundBitmaps[uri]?.let { return it }
+    val bitmap = try {
+      val parsed = android.net.Uri.parse(uri)
+      val stream = when (parsed.scheme?.lowercase()) {
+        "file" -> java.io.File(parsed.path ?: return null).inputStream()
+        "content", "android.resource" -> context.contentResolver.openInputStream(parsed) ?: return null
+        null, "" -> java.io.File(uri).inputStream()
+        else -> context.contentResolver.openInputStream(parsed) ?: return null
+      }
+      stream.use { java.io.BufferedInputStream(it) }.use { android.graphics.BitmapFactory.decodeStream(it) }
+    } catch (t: Throwable) {
+      Log.w(TAG, "Chroma background image could not be decoded: $uri", t)
+      null
+    } ?: return null
+    val w = bitmap.width
+    val h = bitmap.height
+    val generation = bitmap.generationId
+    val texId = uploadImageTexture("chroma_bg:$uri", bitmap)
+    bitmap.recycle()
+    if (texId <= 0) return null
+    val entry = CachedTexture(texId, w, h, generation, currentFrameCounter)
+    chromaBackgroundBitmaps[uri] = entry
+    return entry
+  }
+
+  /**
+   * Normalises a decoded video frame into the viewport-sized 2D texture the keyer samples: the decoder's
+   * texture matrix is applied, and the picture is scaled to *cover* the frame without distortion.
+   *
+   * @return the 2D texture id, or 0 when no shader program is available (the caller then keys to
+   *   transparency rather than binding an OES texture to a `sampler2D`).
+   */
+  private fun videoFrameTo2D(
+    decoded: ChromaBackgroundFrame,
+    viewportWidth: Int,
+    viewportHeight: Int
+  ): Int {
+    // The destination is 2D, but the sampler must match the source: OES frames need programOes.
+    val program = if (decoded.isOes) programOes else program2D
+    if (program == 0) return 0
+    fboChromaBackground.setup(viewportWidth, viewportHeight)
+    fboChromaBackground.bind()
+    GLES20.glViewport(0, 0, viewportWidth, viewportHeight)
+    GLES20.glClearColor(0f, 0f, 0f, 0f)
+    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+    GLES20.glUseProgram(program)
+
+    // Cover fit: enlarge the picture until it fills the frame (the same rule the image background uses,
+    // applied to the geometry because this pass bakes the background into screen space). A rotated frame
+    // swaps which screen axis the picture's own axes map to, exactly like the clip layer matrices do.
+    val rotation = ((decoded.rotationDegrees % 360) + 360) % 360
+    val isTransposed = rotation == 90 || rotation == 270
+    val displayW = if (isTransposed) decoded.height else decoded.width
+    val displayH = if (isTransposed) decoded.width else decoded.height
+    val fit = ChromaKeyResolver.coverFit(displayW, displayH, viewportWidth, viewportHeight)
+    val fitX = 1f / fit[0].coerceAtLeast(0.05f)
+    val fitY = 1f / fit[1].coerceAtLeast(0.05f)
+    val scaleX = if (isTransposed) fitY else fitX
+    val scaleY = if (isTransposed) fitX else fitY
+    Matrix.setIdentityM(mvpMatrix, 0)
+    if (rotation != 0) {
+      Matrix.rotateM(
+        mvpMatrix,
+        0,
+        com.example.engine.export.ExportOrientationPolicy.glRotationDegrees(rotation.toFloat()),
+        0f,
+        0f,
+        1f
+      )
+    }
+    Matrix.scaleM(mvpMatrix, 0, scaleX, scaleY, 1f)
+    if (decoded.texMatrix != null) {
+      System.arraycopy(decoded.texMatrix, 0, texMatrix, 0, 16)
+    } else {
+      Matrix.setIdentityM(texMatrix, 0)
+    }
+    bindCommonUniforms(
+      program = program,
+      textureId = decoded.textureId,
+      isOes = decoded.isOes,
+      opacity = 1f,
+      adjustments = VideoAdjustments(),
+      filter = FilterSettings(),
+      chromaKey = ChromaKeySettings(),
+      viewportWidth = viewportWidth,
+      viewportHeight = viewportHeight
+    )
+    drawQuad(program)
+    fboChromaBackground.unbind()
+    return fboChromaBackground.getTextureId()
   }
 
   private fun renderNativeLayersKotlin(
@@ -1070,7 +1258,8 @@ class GpuCompositionRenderer(private val context: Context) {
           frame.clipSourcePosMs * 1000L
         )
       },
-      grainSeed = (frame.clipSourcePosMs % 10000L).toFloat() / 1000f
+      grainSeed = (frame.clipSourcePosMs % 10000L).toFloat() / 1000f,
+      isBaseLayer = false
     )
 
     val scissorTransition = transitionClipStart >= 0f && transitionClipEnd > transitionClipStart
@@ -1148,12 +1337,14 @@ class GpuCompositionRenderer(private val context: Context) {
     )
     val texA = processMainVideoTo2D(
       frameA, before.textureId, before.isOes, before.texMatrix,
-      viewportWidth, viewportHeight, adjustments, filter, chromaKey, effectColorMatrix,
+      viewportWidth, viewportHeight, adjustments, filter,
+      ChromaKeyResolver.settingsFor(tr.clipBefore, chromaKey), effectColorMatrix,
       targetFbo = fboTransitionA
     )
     val texB = processMainVideoTo2D(
       frameB, after.textureId, after.isOes, after.texMatrix,
-      viewportWidth, viewportHeight, adjustments, filter, chromaKey, effectColorMatrix,
+      viewportWidth, viewportHeight, adjustments, filter,
+      ChromaKeyResolver.settingsFor(tr.clipAfter, chromaKey), effectColorMatrix,
       targetFbo = fboTransitionB
     )
     if (texA <= 0 || texB <= 0) return 0
@@ -1590,7 +1781,13 @@ class GpuCompositionRenderer(private val context: Context) {
     mask: MaskSettings? = null,
     /** Grain seed (seconds-ish). Preview seeds from the frame's presentation time, export from
      *  the clip's source time; both feed the same shader expression. */
-    grainSeed: Float = 0f
+    grainSeed: Float = 0f,
+    /**
+     * True for the main picture, false for a PIP / overlay layer. Only the main picture fills the frame,
+     * so only it can draw an image / video behind the key: an overlay texture is positioned later by its
+     * layer matrix, and a background baked into it would move and scale with the overlay.
+     */
+    isBaseLayer: Boolean = true
   ) {
     val uMVPMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
     val uTexMatrixHandle = GLES20.glGetUniformLocation(program, "uTexMatrix")
@@ -1708,15 +1905,44 @@ class GpuCompositionRenderer(private val context: Context) {
         GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uChromaSmoothness"), max(0.001f, chromaKey.smoothness))
         GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uChromaSpill"), chromaKey.spillSuppression)
         GLES20.glUniform1f(GLES20.glGetUniformLocation(program, "uChromaEdge"), chromaKey.edgeControl)
+        GLES20.glUniform1f(
+          GLES20.glGetUniformLocation(program, "uChromaFgOpacity"),
+          chromaKey.foregroundOpacity.coerceIn(0f, 1f)
+        )
 
-        val bgType = if (chromaKey.backgroundType == "SolidColor") 1 else 0
-        GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uChromaBgType"), bgType)
+        // Background: 0 transparent, 1 solid colour, 2 image / video frame (already a 2D texture).
+        val wantsTexture = isBaseLayer &&
+          ChromaKeyResolver.backgroundModeId(chromaKey) == ChromaKeyResolver.BACKGROUND_MODE_TEXTURE
+        val bgMode = if (wantsTexture && chromaBackgroundTextureId > 0) {
+          ChromaKeyResolver.BACKGROUND_MODE_TEXTURE
+        } else {
+          if (wantsTexture) {
+            // No background texture available: a transparent key is honest, a black frame is not.
+            0
+          } else {
+            ChromaKeyResolver.backgroundModeId(chromaKey)
+          }
+        }
+        GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uChromaBgType"), bgMode)
         val bgColor = chromaKey.backgroundColor.toInt()
         val bgR = Color.red(bgColor) / 255f
         val bgG = Color.green(bgColor) / 255f
         val bgB = Color.blue(bgColor) / 255f
         val bgA = Color.alpha(bgColor) / 255f
         GLES20.glUniform4f(GLES20.glGetUniformLocation(program, "uChromaBgColor"), bgR, bgG, bgB, bgA)
+
+        val bgTexHandle = GLES20.glGetUniformLocation(program, "uChromaBgTex")
+        if (bgTexHandle >= 0) {
+          GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+          GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, if (bgMode == ChromaKeyResolver.BACKGROUND_MODE_TEXTURE) chromaBackgroundTextureId else 0)
+          GLES20.glUniform1i(bgTexHandle, 2)
+          GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        }
+        GLES20.glUniform2f(
+          GLES20.glGetUniformLocation(program, "uChromaBgFit"),
+          chromaBackgroundFit[0],
+          chromaBackgroundFit[1]
+        )
       } else {
         GLES20.glUniform1i(uChromaEnabledHandle, 0)
       }
@@ -1816,6 +2042,8 @@ class GpuCompositionRenderer(private val context: Context) {
     textScratchBitmap?.recycle()
     textScratchBitmap = null
     fboOverlayMap.clear()
+    fboChromaBackground.release()
+    chromaBackgroundBitmaps.clear()
     fboTransitionA.release()
     fboTransitionB.release()
     shaderTransitions.onContextLost()
@@ -1836,6 +2064,8 @@ class GpuCompositionRenderer(private val context: Context) {
     overlayFaceBeautyStage.release()
     arOverlayStage.release()
     subjectCutoutStage.release()
+    fboChromaBackground.release()
+    chromaBackgroundBitmaps.clear()
     fboMain2D.release()
     fboTransitionA.release()
     fboTransitionB.release()

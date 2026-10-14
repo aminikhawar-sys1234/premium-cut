@@ -102,7 +102,9 @@ object GpuShaders {
       uniform vec4 uColorOffset;
       uniform int uUseColorMatrix;
       
-      // Chroma Key
+      // Chroma Key - a line-for-line port of com.example.engine.composition.ChromaKeyMath.
+      // Chroma-plane (Rec.709 YCbCr) distance, key-direction spill suppression, foreground opacity and
+      // three background modes. toolchain/verify/verify_chroma_key.py checks the two paths agree.
       uniform int uChromaEnabled;
       uniform vec3 uChromaKeyColor;
       #define uKeyColor uChromaKeyColor
@@ -110,8 +112,70 @@ object GpuShaders {
       uniform float uChromaSmoothness;
       uniform float uChromaSpill;
       uniform float uChromaEdge;
-      uniform int uChromaBgType; // 0=Transparent, 1=SolidColor
+      uniform float uChromaFgOpacity;
+      uniform int uChromaBgType; // 0=Transparent, 1=SolidColor, 2=Image/Video texture
       uniform vec4 uChromaBgColor;
+      uniform sampler2D uChromaBgTex;
+      uniform vec2 uChromaBgFit; // cover-fit uv scale: uv = (vTextureCoord - 0.5) * uChromaBgFit + 0.5
+
+      // Shared constants with ChromaKeyMath (see that file for the tuning notes).
+      #define CHROMA_LUMA vec3(0.2126, 0.7152, 0.0722)
+      #define CHROMA_CB_SCALE 1.8556
+      #define CHROMA_CR_SCALE 1.5748
+      #define CHROMA_DESATURATED_LUMA_WEIGHT 0.6
+      #define CHROMA_MIN_KEY_CHROMA 0.02
+      #define CHROMA_SIMILARITY_SCALE 0.45
+      #define CHROMA_SOFTNESS_SCALE 0.30
+      #define CHROMA_MIN_FEATHER 0.001
+      #define CHROMA_MAX_THRESHOLD 0.95
+
+      vec3 chromaOf(vec3 rgb) {
+        float y = dot(rgb, CHROMA_LUMA);
+        return vec3((rgb.b - y) / CHROMA_CB_SCALE, (rgb.r - y) / CHROMA_CR_SCALE, y);
+      }
+
+      float chromaAlpha(vec3 rgb, vec3 key) {
+        vec3 px = chromaOf(rgb);
+        vec3 kc = chromaOf(key);
+        float dcb = px.x - kc.x;
+        float dcr = px.y - kc.y;
+        float chromaDistance = sqrt(dcb * dcb + dcr * dcr);
+        float keyLength = sqrt(kc.x * kc.x + kc.y * kc.y);
+        float dist = chromaDistance;
+        if (keyLength < CHROMA_MIN_KEY_CHROMA) {
+          float dl = (px.z - kc.z) * CHROMA_DESATURATED_LUMA_WEIGHT;
+          dist = sqrt(chromaDistance * chromaDistance + dl * dl);
+        }
+        float threshold = clamp(uChromaSimilarity, 0.0, CHROMA_MAX_THRESHOLD) * CHROMA_SIMILARITY_SCALE;
+        float feather = max(CHROMA_MIN_FEATHER, clamp(uChromaSmoothness, 0.0, 1.0) * CHROMA_SOFTNESS_SCALE);
+        return smoothstep(threshold, threshold + feather, dist);
+      }
+
+      // Spill strength for a pixel that came out of the key with keyedAlpha (see ChromaKeyMath.spillStrength):
+      // the global spill slider everywhere, plus the edge-cleanup slider on the soft edge only.
+      float chromaSpillStrength(float keyedAlpha) {
+        float edge = clamp(uChromaEdge, 0.0, 1.0) * (1.0 - clamp(keyedAlpha, 0.0, 1.0));
+        return clamp(clamp(uChromaSpill, 0.0, 1.0) + edge, 0.0, 1.0);
+      }
+
+      vec3 chromaSpill(vec3 rgb, vec3 key, float strength) {
+        float s = clamp(strength, 0.0, 1.0);
+        if (s <= 0.0) return rgb;
+        vec3 px = chromaOf(rgb);
+        vec3 kc = chromaOf(key);
+        float klen = sqrt(kc.x * kc.x + kc.y * kc.y);
+        if (klen < 1e-5) return rgb;
+        float kx = kc.x / klen;
+        float ky = kc.y / klen;
+        float projection = px.x * kx + px.y * ky;
+        if (projection <= 0.0) return rgb;
+        float cb = px.x - kx * projection * s;
+        float cr = px.y - ky * projection * s;
+        float r = px.z + cr * CHROMA_CR_SCALE;
+        float b = px.z + cb * CHROMA_CB_SCALE;
+        float g = (px.z - 0.2126 * r - 0.0722 * b) / 0.7152;
+        return clamp(vec3(r, g, b), 0.0, 1.0);
+      }
       
       // Transitions
       uniform int uTransitionType;
@@ -242,44 +306,24 @@ object GpuShaders {
           color.a *= maskAlpha * uMaskOpacity;
         }
         
-        // 1. Chroma Key removal (Similarity, Smoothness, Spill suppression, Edge control, Backgrounds)
+        // 1. Chroma Key removal: chroma-distance key, soft edge, spill suppression, foreground opacity
+        //    and the transparent / solid-colour / image-video background modes.
         if (uChromaEnabled == 1) {
-          float dist = distance(color.rgb, uKeyColor);
-          float thresh = uChromaSimilarity + (uChromaEdge * 0.1);
-          float feather = max(0.001, uChromaSmoothness);
-          float alphaFactor = 1.0;
-          if (dist < thresh) {
-            alphaFactor = 0.0;
-          } else if (dist < thresh + feather) {
-            alphaFactor = (dist - thresh) / feather;
-          }
-          
-          if (alphaFactor < 1.0 && uChromaSpill > 0.0) {
-            float maxOther = max(color.r, color.b);
-            if (color.g > maxOther && uKeyColor.g > uKeyColor.r) {
-              color.g = mix(color.g, maxOther, uChromaSpill);
-            } else {
-              float keyInfluence = max(0.0, 1.0 - (dist / max(0.001, thresh + feather)));
-              vec3 keyNorm = normalize(uKeyColor + vec3(0.0001));
-              float proj = dot(color.rgb, keyNorm);
-              if (proj > 0.0) {
-                color.rgb = mix(color.rgb, color.rgb - proj * keyNorm * keyInfluence, uChromaSpill * 0.7);
-              }
-            }
-          }
-          
-          if (alphaFactor <= 0.0) {
-            if (uChromaBgType == 1) {
-              color = uChromaBgColor;
-            } else {
+          float keyAlpha = chromaAlpha(color.rgb, uKeyColor);
+          float subjectAlpha = keyAlpha * clamp(uChromaFgOpacity, 0.0, 1.0);
+          vec3 despilled = chromaSpill(color.rgb, uKeyColor, chromaSpillStrength(keyAlpha));
+          if (uChromaBgType == 2) {
+            vec2 bgUv = clamp((vTextureCoord - 0.5) * uChromaBgFit + 0.5, 0.0, 1.0);
+            vec3 bg = texture2D(uChromaBgTex, bgUv).rgb;
+            color.rgb = mix(bg, despilled, subjectAlpha);
+          } else if (uChromaBgType == 1) {
+            color.rgb = mix(uChromaBgColor.rgb, despilled, subjectAlpha);
+          } else {
+            if (subjectAlpha <= 0.001) {
               discard;
             }
-          } else if (alphaFactor < 1.0) {
-            if (uChromaBgType == 1) {
-              color = mix(uChromaBgColor, color, alphaFactor);
-            } else {
-              color.a *= alphaFactor;
-            }
+            color.rgb = despilled;
+            color.a = color.a * subjectAlpha;
           }
         }
         

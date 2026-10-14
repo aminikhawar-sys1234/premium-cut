@@ -15,8 +15,10 @@ import android.view.Surface
 import androidx.core.net.toUri
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
+import com.example.engine.composition.ChromaKeyResolver
 import com.example.engine.composition.CompositionRenderGraph
 import com.example.engine.composition.VideoCompositionEngine
+import com.example.engine.composition.gpu.ChromaBackgroundFrame
 import com.example.engine.composition.gpu.EglCore
 import com.example.engine.composition.gpu.GpuCompositionRenderer
 import com.example.engine.composition.gpu.HardwareVideoTextureSource
@@ -223,8 +225,24 @@ class PreviewCompositor(
 
     val evaluated = composition.evaluateFrame(tl, pos)
     val plan = PreviewFramePlan.of(evaluated)
-    val keep = PreviewLayerPlanner.videoDecoderPlan(tl, pos, plan.decodeClipIds, isPlaying())
+
+    // Chroma key: the keyed main clip can ask for a background video frame. It is decoded like any other
+    // layer, at the source time the loop position maps to, so a paused preview and the export see the same
+    // background picture.
+    val chromaSettings = ChromaKeyResolver.settingsFor(evaluated.activeClip, tl.chromaKey)
+    val chromaBackgroundClip = ChromaKeyResolver.backgroundClip(chromaSettings)
+    // A background video is drawn instead of the keyed pixels, so it ranks first in the decoder budget:
+    // without it the frame would lose the background the user picked. The budget itself stays at the
+    // decoder-manager limit - adding a fifth concurrent hardware decoder is what breaks playback.
+    val chromaBackgroundVideoId = chromaBackgroundClip?.takeIf { it.isVideo }?.id
+    val keep = PreviewLayerPlanner.videoDecoderPlan(
+      tl,
+      pos,
+      listOfNotNull(chromaBackgroundVideoId) + plan.decodeClipIds,
+      isPlaying()
+    )
     PreviewLayerPlanner.evictions(decoders.keys.toList(), keep).forEach(::releaseDecoder)
+    val chromaBackgroundFrame = decodeChromaBackgroundFrame(chromaSettings, chromaBackgroundClip, pos)
 
     val decoded = HashMap<String, CompositionRenderGraph.ResolvedLayer>()
     for (req in plan.decodes) {
@@ -262,8 +280,56 @@ class PreviewCompositor(
       adjustments = tl.adjustments,
       filter = tl.filter,
       chromaKey = tl.chromaKey,
-      presentation = CompositionRenderGraph.FramePresentation.PREVIEW
+      presentation = CompositionRenderGraph.FramePresentation.PREVIEW,
+      chromaBackgroundFrame = chromaBackgroundFrame
     )
+  }
+
+  /**
+   * Decoded background frame for a chroma key that draws an image or a video behind the subject. Images stay
+   * with the ordinary image loader (uploaded to a 2D texture by [uploadLoadedImages]); videos are decoded here
+   * on the GL thread, exactly like the clip layers are.
+   */
+  private fun decodeChromaBackgroundFrame(
+    settings: com.example.domain.model.ChromaKeySettings,
+    backgroundClip: VideoClip?,
+    posMs: Long
+  ): ChromaBackgroundFrame? {
+    if (backgroundClip == null) return null
+    if (!backgroundClip.isVideo) {
+      // Images go through the ordinary loader (same decode cache the other image layers use).
+      requestImage(backgroundClip.uri)
+      val bitmap = loadedImages[backgroundClip.uri] ?: return null
+      val tex = imageTextures[backgroundClip.uri] ?: return null
+      return ChromaBackgroundFrame(
+        textureId = tex,
+        isOes = false,
+        texMatrix = null,
+        width = bitmap.width,
+        height = bitmap.height
+      )
+    }
+    val source = decoderFor(backgroundClip) ?: return null
+    val loopMs = source.durationUs / 1000L
+    val sourceMs = ChromaKeyResolver.backgroundSourceMs(settings, posMs, loopMs)
+    return try {
+      if (!source.decodeFrame(sourceMs * 1000L, cancelDecode)) {
+        null
+      } else {
+        val matrix = source.updateTexImage()
+        ChromaBackgroundFrame(
+          textureId = source.oesTextureId,
+          isOes = true,
+          texMatrix = matrix.copyOf(),
+          width = source.effectiveWidth,
+          height = source.effectiveHeight,
+          rotationDegrees = source.rotationDegrees
+        )
+      }
+    } catch (e: IllegalStateException) {
+      Log.w(TAG, "Chroma background video could not be decoded: ${e.message}")
+      null
+    }
   }
 
   private fun decoderFor(clip: VideoClip): HardwareVideoTextureSource? {

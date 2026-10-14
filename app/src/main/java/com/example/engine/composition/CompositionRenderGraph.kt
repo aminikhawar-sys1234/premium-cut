@@ -5,6 +5,7 @@ import com.example.domain.model.FilterSettings
 import com.example.domain.model.TransitionType
 import com.example.domain.model.VideoAdjustments
 import com.example.domain.model.VideoClip
+import com.example.engine.composition.gpu.ChromaBackgroundFrame
 import com.example.engine.composition.gpu.GpuCompositionRenderer
 import com.example.engine.composition.gpu.TransitionSourceTexture
 
@@ -145,7 +146,14 @@ object CompositionRenderGraph {
     )
   }
 
-  /** Draws [assembled] with the destination's presentation. Call on the GL thread. */
+  /**
+   * Draws [assembled] with the destination's presentation. Call on the GL thread.
+   *
+   * [chromaKey] is the project-wide default; each clip's own setting wins inside the renderer
+   * ([com.example.engine.composition.ChromaKeyResolver]). [chromaBackgroundFrame] is the decoded background
+   * video frame for a keyed main clip that keys over a video - the preview and the export each decode it with
+   * their own decoder at the same source time, so both draw the same background.
+   */
   fun present(
     renderer: GpuCompositionRenderer,
     assembled: AssembledFrame,
@@ -154,7 +162,8 @@ object CompositionRenderGraph {
     adjustments: VideoAdjustments,
     filter: FilterSettings,
     chromaKey: ChromaKeySettings,
-    presentation: FramePresentation
+    presentation: FramePresentation,
+    chromaBackgroundFrame: ChromaBackgroundFrame? = null
   ) {
     renderer.render(
       frame = assembled.frame,
@@ -169,6 +178,7 @@ object CompositionRenderGraph {
       timelineAdjustments = adjustments,
       timelineFilter = filter,
       chromaKey = chromaKey,
+      chromaBackgroundFrame = chromaBackgroundFrame,
       flipYForEncoder = presentation.flipY,
       flipXForEncoder = presentation.flipX,
       transitionBefore = assembled.transitionBefore,

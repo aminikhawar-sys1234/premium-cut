@@ -52,18 +52,33 @@ object TimelineSerializer {
     val sourceMetas = mutableListOf<SourceMetadata>()
     collectTimelineMedia(timeline, settings, mediaRefs, sourceMetas)
 
-    // Extract from Chroma Key Background
-    val bgUri = timeline.chromaKey.backgroundUri
-    if (!bgUri.isNullOrBlank()) {
+    // Extract from Chroma Key Background (project default)
+    fun addChromaBackground(clipId: String, uri: String?, isVideo: Boolean) {
+      if (uri.isNullOrBlank()) return
       mediaRefs.add(
         MediaReference(
-          clipId = "chroma_background",
-          uri = bgUri,
-          originalPath = bgUri,
-          filename = bgUri.substringAfterLast("/").ifBlank { "Chroma Background" },
-          mediaType = if (timeline.chromaKey.backgroundType == "Video") "VIDEO" else "IMAGE",
-          mimeType = if (timeline.chromaKey.backgroundType == "Video") "video/mp4" else "image/jpeg"
+          clipId = clipId,
+          uri = uri,
+          originalPath = uri,
+          filename = uri.substringAfterLast("/").ifBlank { "Chroma Background" },
+          mediaType = if (isVideo) "VIDEO" else "IMAGE",
+          mimeType = if (isVideo) "video/mp4" else "image/jpeg"
         )
+      )
+    }
+    addChromaBackground(
+      clipId = "chroma_background",
+      uri = timeline.chromaKey.backgroundUri,
+      isVideo = timeline.chromaKey.backgroundType == "Video"
+    )
+    // Per-clip chroma backgrounds ship with the project too, so a reopened project still has its media.
+    (timeline.videoClips + timeline.overlayClips).forEach { clip ->
+      val settings = clip.chromaKey ?: return@forEach
+      if (settings.backgroundType != "Image" && settings.backgroundType != "Video") return@forEach
+      addChromaBackground(
+        clipId = "${clip.id}::chroma_background",
+        uri = settings.backgroundUri,
+        isVideo = settings.backgroundType == "Video"
       )
     }
 

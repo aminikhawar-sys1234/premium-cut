@@ -115,7 +115,16 @@ object MaskGeometry {
  */
 object SubjectMaskWorker {
   private const val TAG = "SubjectMaskWorker"
-  private const val TIMEOUT_S = 4L
+  /** First use may have to fetch the on-device model, which is slower than a steady-state frame. */
+  private const val TIMEOUT_S = 10L
+
+  /**
+   * Why the last segmentation attempt failed, in words the panel can show the user. Null while the
+   * segmenter has never failed. Never a placeholder: only set when something actually went wrong.
+   */
+  @Volatile
+  var lastFailure: String? = null
+    private set
 
   private val executor: ExecutorService = Executors.newSingleThreadExecutor { r ->
     Thread(r, "subject-cutout").apply {
@@ -131,8 +140,14 @@ object SubjectMaskWorker {
           .enableForegroundConfidenceMask()
           .build()
       )
-    }.onFailure { Log.w(TAG, "Subject segmenter unavailable", it) }.getOrNull()
+    }.onFailure {
+      lastFailure = "The on-device subject model is not available on this device (${it.javaClass.simpleName})."
+      Log.w(TAG, "Subject segmenter unavailable", it)
+    }.getOrNull()
   }
+
+  /** True when the segmenter client could be created at all (i.e. the model is installed / installable). */
+  val isAvailable: Boolean get() = segmenter != null
 
   fun submit(job: Runnable) {
     runCatching { executor.execute(job) }
@@ -145,7 +160,11 @@ object SubjectMaskWorker {
    */
   fun analyse(rgba: ByteArray, w: Int, h: Int, rotationDeg: Int): SubjectMaskPixels? {
     if (w <= 0 || h <= 0 || rgba.size < w * h * 4) return null
-    val seg = segmenter ?: return null
+    val seg = segmenter
+    if (seg == null) {
+      if (lastFailure == null) lastFailure = "The on-device subject model is not available on this device."
+      return null
+    }
     val rot = ((rotationDeg % 360) + 360) % 360
     var bitmap: Bitmap? = null
     try {
@@ -156,14 +175,15 @@ object SubjectMaskWorker {
       bitmap.setPixels(upright, 0, rw, 0, 0, rw, rh)
 
       val result = Tasks.await(seg.process(InputImage.fromBitmap(bitmap, 0)), TIMEOUT_S, TimeUnit.SECONDS)
-      val buf = result.foregroundConfidenceMask ?: return null
       val n = rw * rh
-      buf.rewind()
-      if (buf.remaining() < n) return null
-      val topDown = ByteArray(n)
-      for (i in 0 until n) {
-        topDown[i] = (buf.get().coerceIn(0f, 1f) * 255f + 0.5f).toInt().toByte()
+      // ML Kit hands back the confidence mask as a buffer of floats (one per pixel); MaskDecoding reads
+      // both the typed-float and the raw-byte layouts instead of assuming one of them.
+      val topDown = MaskDecoding.confidenceToBytes(result.foregroundConfidenceMask, n)
+      if (topDown == null) {
+        lastFailure = "The subject model returned no usable mask for this frame."
+        return null
       }
+      lastFailure = null
       // Undo the analysis rotation, then convert to GL (bottom-up) row order.
       val back = MaskGeometry.rotateCw(topDown, rw, rh, (360 - rot) % 360)
       return SubjectMaskPixels(w, h, MaskGeometry.flipRows(back, w, h))
@@ -182,17 +202,27 @@ object SubjectMaskWorker {
    */
   fun segmentTopDown(bitmap: Bitmap): ByteArray? {
     if (bitmap.width <= 0 || bitmap.height <= 0) return null
-    val seg = segmenter ?: return null
+    val seg = segmenter
+    if (seg == null) {
+      if (lastFailure == null) lastFailure = "The on-device subject model is not available on this device."
+      return null
+    }
     return try {
       val result = Tasks.await(seg.process(InputImage.fromBitmap(bitmap, 0)), TIMEOUT_S, TimeUnit.SECONDS)
-      val buf = result.foregroundConfidenceMask ?: return null
       val n = bitmap.width * bitmap.height
-      buf.rewind()
-      if (buf.remaining() < n) return null
-      ByteArray(n) { i ->
-        (buf.get().coerceIn(0f, 1f) * 255f + 0.5f).toInt().coerceIn(0, 255).toByte()
+      val bytes = MaskDecoding.confidenceToBytes(result.foregroundConfidenceMask, n)
+      if (bytes == null) {
+        lastFailure = "The subject model returned no usable mask for this frame."
+        return null
       }
+      lastFailure = null
+      bytes
     } catch (t: Throwable) {
+      lastFailure = when (t) {
+        is java.util.concurrent.TimeoutException, is java.util.concurrent.ExecutionException ->
+          "The on-device subject model did not answer in time (${TIMEOUT_S}s). Retry, or remove the background from a still frame."
+        else -> "Background removal failed on this device: ${t.javaClass.simpleName}${t.message?.let { ": $it" } ?: ""}."
+      }
       Log.w(TAG, "Subject segmentation failed", t)
       null
     }

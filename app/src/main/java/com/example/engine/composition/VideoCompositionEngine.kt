@@ -331,8 +331,10 @@ class VideoCompositionEngine(private val context: Context) {
     for (composedOverlay in frame.activeOverlays) {
       val rawOverlayBitmap = overlayBitmaps[composedOverlay.clip.id]
       if (rawOverlayBitmap != null && !rawOverlayBitmap.isRecycled) {
-        val overlayBitmap = if (chromaKey.enabled) {
-          ChromaKeyProcessor.applyChromaKey(rawOverlayBitmap, chromaKey)
+        // Clip-local keying wins over the project default, exactly like the GPU path.
+        val overlayChroma = ChromaKeyResolver.settingsFor(composedOverlay.clip, chromaKey)
+        val overlayBitmap = if (overlayChroma.enabled) {
+          ChromaKeyProcessor.applyChromaKey(rawOverlayBitmap, overlayChroma)
         } else rawOverlayBitmap
 
         val overlayMatrix = Matrix()
