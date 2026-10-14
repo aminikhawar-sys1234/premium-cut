@@ -92,6 +92,7 @@ object GpuShaders {
       uniform float uGlow;
       uniform float uVignette;
       uniform float uGrain;
+      uniform float uGrainSeed;
       uniform float uSharpness;
       uniform float uClarity;
       uniform vec2 uTexelSize;
@@ -159,14 +160,18 @@ object GpuShaders {
           bc += texture2D(uTexture, clamp(clampedCoord + vec2(bRad, bRad), 0.0, 1.0)) * 0.0625;
           color = bc;
         } else if (uSharpness > 0.01) {
-          // 4-tap Laplacian sharpening
+          // 4-tap unsharp mask with ColorLookModel.SHARPEN_GAIN (1.5).
+          // The old form `c - uSharpness * ((up+down+left+right) - 4.0*c)` is
+          // `c + 4.0 * uSharpness * (c - average)`, i.e. 2.67x the preview's gain, which is why
+          // exports of sharp projects looked crunchier than the preview.
           vec4 c = texture2D(uTexture, clampedCoord);
           vec4 up = texture2D(uTexture, clamp(clampedCoord + vec2(0.0, uTexelSize.y), 0.0, 1.0));
           vec4 down = texture2D(uTexture, clamp(clampedCoord - vec2(0.0, uTexelSize.y), 0.0, 1.0));
           vec4 left = texture2D(uTexture, clamp(clampedCoord - vec2(uTexelSize.x, 0.0), 0.0, 1.0));
           vec4 right = texture2D(uTexture, clamp(clampedCoord + vec2(uTexelSize.x, 0.0), 0.0, 1.0));
-          vec4 laplacian = (up + down + left + right) - 4.0 * c;
-          color = c - uSharpness * laplacian;
+          vec4 average = (up + down + left + right) * 0.25;
+          color.rgb = c.rgb + (c.rgb - average.rgb) * (uSharpness * 1.5);
+          color.a = c.a;
         } else {
           color = texture2D(uTexture, clampedCoord);
         }
@@ -296,10 +301,13 @@ object GpuShaders {
         color.b += uTint * 0.08;
         
         // 6. Highlights & Shadows
-        if (uHighlights != 0.0 || uShadows != 0.0) {
-          float l = dot(color.rgb, vec3(0.299, 0.587, 0.114));
-          float shadowMask = 1.0 - smoothstep(0.0, 0.5, l);
-          float highlightMask = smoothstep(0.5, 1.0, l);
+        // Rec.709 luma and the 0.0/0.6, 0.4/1.0 masks of ColorLookModel, i.e. exactly what the
+        // preview shader does. This stage used Rec.601 luma with 0.0/0.5 and 0.5/1.0, which is
+        // why graded exports did not match what the editor showed.
+        if (abs(uHighlights) > 0.001 || abs(uShadows) > 0.001) {
+          float l = dot(color.rgb, vec3(0.2126, 0.7152, 0.0722));
+          float shadowMask = 1.0 - smoothstep(0.0, 0.6, l);
+          float highlightMask = smoothstep(0.4, 1.0, l);
           color.rgb += uShadows * shadowMask * 0.2;
           color.rgb += uHighlights * highlightMask * 0.2;
         }
@@ -360,7 +368,7 @@ object GpuShaders {
         
         // 8. Vignette
         if (uVignette > 0.01) {
-          vec2 coord = (vTextureCoord - 0.5) * 2.0;
+          vec2 coord = (clampedCoord - 0.5) * 2.0;
           float distFromCenter = length(coord);
           float vig = 1.0 - smoothstep(0.7, 1.4, distFromCenter * (0.8 + uVignette * 0.8));
           color.rgb *= vig;
@@ -368,7 +376,10 @@ object GpuShaders {
         
         // 9. Grain
         if (uGrain > 0.01) {
-          float noise = (rand(vTextureCoord) - 0.5) * uGrain * 0.3;
+          // Same 0.25 amplitude as the preview and the same seed input, so a frame graded with
+          // grain exports the grain pattern the editor showed (preview seeds it from the frame's
+          // presentation time; export seeds it from the clip's source time).
+          float noise = (rand(clampedCoord + vec2(uGrainSeed * 0.13, uGrainSeed * 0.17)) - 0.5) * uGrain * 0.25;
           color.rgb += vec3(noise);
         }
         

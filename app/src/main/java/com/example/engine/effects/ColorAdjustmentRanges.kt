@@ -7,6 +7,9 @@ import kotlin.math.abs
 /**
  * Shared ranges and defaults for Adjust sliders. Preview and export read the
  * same [VideoAdjustments] fields; this object only documents valid UI ranges.
+ *
+ * The rendering-side ranges and constants live in [ColorLookModel]; `ColorLookModelRangesTest`
+ * asserts the two stay in sync, so a slider can never offer a value the shader clamps away.
  */
 object ColorAdjustmentRanges {
   data class Spec(
@@ -45,6 +48,15 @@ object ColorAdjustmentRanges {
     brightness, contrast, saturation, temperature, tint, highlights, shadows, exposure, sharpness
   )
 
+  /**
+   * Neutral values for the Adjust tab.
+   *
+   * This also clears the three Smart Auto values (Auto Enhance, Color Fixings, Color Correct)
+   * because their sliders live in the Adjust tab — resetting Adjust used to leave them applied,
+   * so the preview kept a look the panel claimed to have cleared.
+   * Video Quality-only controls (Super Clarity, HDR Boost, Denoise, Anti-Flicker) are cleared by
+   * [resetQuality], which the Video Quality tab's Reset calls.
+   */
   fun resetPrimary(src: VideoAdjustments): VideoAdjustments = src.copy(
     brightness = brightness.default,
     contrast = contrast.default,
@@ -60,7 +72,11 @@ object ColorAdjustmentRanges {
     clarity = clarity.default,
     fade = fade.default,
     vignette = vignette.default,
-    grain = grain.default
+    grain = grain.default,
+    // Smart Auto: reachable from the Adjust tab, so Adjust-Reset must clear them too.
+    autoEnhance = 0f,
+    colorFix = 0f,
+    colorCorrect = 0f
   )
 
   fun resetQuality(src: VideoAdjustments): VideoAdjustments = src.copy(

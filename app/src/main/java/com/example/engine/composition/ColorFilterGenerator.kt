@@ -168,16 +168,14 @@ object ColorFilterGenerator {
   /**
    * Converts Android's 4x5 row-major ColorMatrix array (20 floats) to Media3 / OpenGL
    * 4x4 column-major matrix (16 floats), with normalized offsets (0..1).
+   *
+   * Element 15 was `arr[18]` (the alpha row's alpha scale) instead of `arr[15]` (row 0's alpha
+   * term), which corrupted the matrix's last column whenever a matrix had a non-identity alpha
+   * term. Delegated to [com.example.engine.effects.ColorLookModel.toGlMatrixAndOffset] so the
+   * preview and the export renderer share one conversion.
    */
-  fun colorMatrixToGlMatrix(colorMatrix: ColorMatrix): FloatArray {
-    val arr = colorMatrix.array
-    return floatArrayOf(
-      arr[0], arr[5], arr[10], arr[15],
-      arr[1], arr[6], arr[11], arr[16],
-      arr[2], arr[7], arr[12], arr[17],
-      arr[4] / 255.0f, arr[9] / 255.0f, arr[14] / 255.0f, arr[18]
-    )
-  }
+  fun colorMatrixToGlMatrix(colorMatrix: ColorMatrix): FloatArray =
+    com.example.engine.effects.ColorLookModel.toGlMatrixAndOffset(colorMatrix.array).first
 
   /**
    * Checks if a ColorMatrix represents the identity transform (no filtering/adjustments).

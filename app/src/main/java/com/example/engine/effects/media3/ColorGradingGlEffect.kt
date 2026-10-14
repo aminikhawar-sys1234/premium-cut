@@ -9,12 +9,8 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.GlEffect
 import androidx.media3.effect.GlShaderProgram
 import com.example.domain.model.FilterSettings
-import com.example.domain.model.FilterType
 import com.example.domain.model.VideoAdjustments
-import com.example.engine.composition.ColorFilterGenerator
-import com.example.engine.effects.FilterCatalog
-import kotlin.math.abs
-import kotlin.math.pow
+import com.example.engine.effects.ColorLookModel
 
 /**
  * OpenGL-based Color Grading effect for Media3 Effect API.
@@ -94,90 +90,51 @@ class ColorGradingGlEffect(
       adjustments: VideoAdjustments,
       filterSettings: FilterSettings = FilterSettings()
     ): ColorGradingGlEffect {
-      var mat4x4: FloatArray? = null
-      var offset: FloatArray? = null
-
-      if (filterSettings.enabled && filterSettings.type != FilterType.NONE && filterSettings.intensity > 0.01f) {
-        val colorMatrix = ColorFilterGenerator.getFilterMatrix(filterSettings.type, filterSettings.intensity)
-        if (colorMatrix != null) {
-          val (m4, off) = convertColorMatrixToGl(PreviewEffectApplyPolicy.forceOpaqueAlpha(colorMatrix))
-          mat4x4 = m4
-          offset = off
-        }
-      }
-
-      val extras = FilterCatalog.spatialExtras(filterSettings)
-      return ColorGradingGlEffect(
-        brightness = adjustments.brightness,
-        contrast = adjustments.contrast,
-        saturation = adjustments.saturation,
-        exposure = adjustments.exposure,
-        temperature = adjustments.temperature,
-        tint = adjustments.tint,
-        highlights = adjustments.highlights,
-        shadows = adjustments.shadows,
-        whites = adjustments.whites,
-        blacks = adjustments.blacks,
-        vignette = adjustments.vignette,
-        grain = adjustments.grain,
-        sharpness = (adjustments.sharpness + extras.sharpness).coerceIn(0f, 1f),
-        clarity = (adjustments.clarity + adjustments.superClarity + extras.clarity).coerceIn(0f, 1f),
-        fade = adjustments.fade,
-        autoEnhance = (adjustments.autoEnhance + extras.enhance).coerceIn(0f, 1f),
-        hdrBoost = (adjustments.hdrBoost + adjustments.colorCorrect + extras.hdrLook).coerceIn(0f, 1f),
-        colorFix = adjustments.colorFix,
-        denoise = (adjustments.denoise + adjustments.antiFlicker * 0.5f).coerceIn(0f, 1f),
-        glow = extras.glow.coerceIn(0f, 1f),
-        colorMatrix4x4 = mat4x4,
-        colorOffset = offset
-      )
+      val presetMatrix = presetMatrixFor(filterSettings)
+      // Every uniform now comes from ColorLookModel, the same resolver the export
+      // renderer calls. That is what makes preview and export render the same look.
+      val params = ColorLookModel.effectiveWithAndroidMatrix(adjustments, filterSettings, presetMatrix)
+      return fromLookParams(params)
     }
+
+    /** The artistic preset's Android ColorMatrix, or null when none applies. */
+    fun presetMatrixFor(filterSettings: FilterSettings): android.graphics.ColorMatrix? {
+      val array = ColorLookModel.presetMatrix(filterSettings) ?: return null
+      return android.graphics.ColorMatrix(array)
+    }
+
+    /** Builds the effect straight from an already-resolved [ColorLookModel.LookParams]. */
+    fun fromLookParams(params: ColorLookModel.LookParams): ColorGradingGlEffect = ColorGradingGlEffect(
+      brightness = params.brightness,
+      contrast = params.contrast,
+      saturation = params.saturation,
+      exposure = params.exposure,
+      temperature = params.temperature,
+      tint = params.tint,
+      highlights = params.highlights,
+      shadows = params.shadows,
+      whites = params.whites,
+      blacks = params.blacks,
+      vignette = params.vignette,
+      grain = params.grain,
+      sharpness = params.sharpness,
+      clarity = params.clarity,
+      fade = params.fade,
+      autoEnhance = params.autoEnhance,
+      hdrBoost = params.hdrBoost,
+      colorFix = params.colorFix,
+      denoise = params.denoise,
+      glow = params.glow,
+      colorMatrix4x4 = params.colorMatrix,
+      colorOffset = params.colorOffset
+    )
 
     /**
      * Converts a 20-element Android [ColorMatrix] (4 rows x 5 cols) into
      * an OpenGL 4x4 column-major matrix and a 4-element normalized offset vector.
      */
-    fun convertColorMatrixToGl(colorMatrix: ColorMatrix): Pair<FloatArray, FloatArray> {
-      val arr = colorMatrix.array
-      // arr is: [a, b, c, d, e,
-      //          f, g, h, i, j,
-      //          k, l, m, n, o,
-      //          p, q, r, s, t]
-      val gl4x4 = FloatArray(16)
-      // Column 0
-      gl4x4[0] = arr[0]
-      gl4x4[1] = arr[5]
-      gl4x4[2] = arr[10]
-      gl4x4[3] = arr[15]
-
-      // Column 1
-      gl4x4[4] = arr[1]
-      gl4x4[5] = arr[6]
-      gl4x4[6] = arr[11]
-      gl4x4[7] = arr[16]
-
-      // Column 2
-      gl4x4[8] = arr[2]
-      gl4x4[9] = arr[7]
-      gl4x4[10] = arr[12]
-      gl4x4[11] = arr[17]
-
-      // Column 3
-      gl4x4[12] = arr[3]
-      gl4x4[13] = arr[8]
-      gl4x4[14] = arr[13]
-      gl4x4[15] = arr[18]
-
-      // Offset normalized by 255.0
-      val off = floatArrayOf(
-        arr[4] / 255f,
-        arr[9] / 255f,
-        arr[14] / 255f,
-        arr[19] / 255f
-      )
-
-      return Pair(gl4x4, off)
-    }
+    fun convertColorMatrixToGl(colorMatrix: ColorMatrix): Pair<FloatArray, FloatArray> =
+      ColorLookModel.toGlMatrixAndOffset(colorMatrix.array)
 
     const val COLOR_GRADING_FRAGMENT_SHADER: String = """#version 100
 precision mediump float;
@@ -457,122 +414,48 @@ data class ColorGradingSnapshot(
   val colorMatrix4x4: FloatArray? = null,
   val colorOffset: FloatArray? = null
 ) {
-  fun isNoOp(): Boolean {
-    val isDefaultAdjustments = abs(brightness) < 0.001f &&
-      abs(contrast - 1f) < 0.001f &&
-      abs(saturation - 1f) < 0.001f &&
-      abs(exposure) < 0.001f &&
-      abs(temperature) < 0.001f &&
-      abs(tint) < 0.001f &&
-      abs(highlights) < 0.001f &&
-      abs(shadows) < 0.001f &&
-      abs(whites) < 0.001f &&
-      abs(blacks) < 0.001f &&
-      vignette < 0.01f &&
-      grain < 0.01f &&
-      sharpness < 0.01f &&
-      clarity < 0.01f &&
-      fade < 0.01f &&
-      autoEnhance < 0.01f &&
-      hdrBoost < 0.01f &&
-      colorFix < 0.01f &&
-      denoise < 0.01f &&
-      glow < 0.01f
-    return isDefaultAdjustments && colorMatrix4x4 == null
-  }
+  fun isNoOp(): Boolean = lookParams().isNeutral()
 
   /**
-   * CPU replica of the preview fragment shader for a single sample (no spatial
-   * taps). Used to prove a look actually changes pixels, including when the
-   * incoming video alpha is 0.
+   * The resolved [ColorLookModel.LookParams] behind this snapshot. Preview and export both
+   * resolve their uniforms from [ColorLookModel], so this is the shared, deterministic form
+   * of the look.
    */
-  fun evaluatePreviewPixel(r: Float, g: Float, b: Float, a: Float = 0f): FloatArray {
-    var cr = r
-    var cg = g
-    var cb = b
-    val expScale = 2.0.pow(exposure.toDouble()).toFloat()
-    cr = cr * expScale + brightness
-    cg = cg * expScale + brightness
-    cb = cb * expScale + brightness
-    if (abs(contrast - 1f) > 0.001f) {
-      cr = (cr - 0.5f) * contrast + 0.5f
-      cg = (cg - 0.5f) * contrast + 0.5f
-      cb = (cb - 0.5f) * contrast + 0.5f
-    }
-    if (abs(saturation - 1f) > 0.001f) {
-      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
-      cr = lum + (cr - lum) * saturation
-      cg = lum + (cg - lum) * saturation
-      cb = lum + (cb - lum) * saturation
-    }
-    if (abs(temperature) > 0.001f || abs(tint) > 0.001f) {
-      cr += temperature * 0.15f + tint * 0.08f
-      cg -= tint * 0.12f
-      cb -= temperature * 0.15f - tint * 0.08f
-    }
-    if (abs(highlights) > 0.001f || abs(shadows) > 0.001f) {
-      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
-      val shadowWeight = 1f - smoothstep(0f, 0.6f, lum)
-      val highlightWeight = smoothstep(0.4f, 1f, lum)
-      val add = shadows * shadowWeight * 0.2f + highlights * highlightWeight * 0.2f
-      cr += add
-      cg += add
-      cb += add
-    }
-    if (abs(whites) > 0.001f || abs(blacks) > 0.001f) {
-      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
-      val whiteW = smoothstep(0.65f, 1f, lum)
-      val blackW = 1f - smoothstep(0f, 0.35f, lum)
-      val add = whites * whiteW * 0.18f + blacks * blackW * 0.18f
-      cr += add
-      cg += add
-      cb += add
-    }
-    if (autoEnhance > 0.01f) {
-      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
-      cr = lum + (cr - lum) * (1f + autoEnhance * 0.20f)
-      cg = lum + (cg - lum) * (1f + autoEnhance * 0.20f)
-      cb = lum + (cb - lum) * (1f + autoEnhance * 0.20f)
-      cr = (cr - 0.5f) * (1f + autoEnhance * 0.15f) + 0.5f + autoEnhance * 0.04f
-      cg = (cg - 0.5f) * (1f + autoEnhance * 0.15f) + 0.5f + autoEnhance * 0.04f
-      cb = (cb - 0.5f) * (1f + autoEnhance * 0.15f) + 0.5f + autoEnhance * 0.04f
-    }
-    if (hdrBoost > 0.01f) {
-      val lum = cr * 0.2126f + cg * 0.7152f + cb * 0.0722f
-      cr = lum + (cr - lum) * (1f + hdrBoost * 0.25f)
-      cg = lum + (cg - lum) * (1f + hdrBoost * 0.25f)
-      cb = lum + (cb - lum) * (1f + hdrBoost * 0.25f)
-      cr = (cr - 0.5f) * (1f + hdrBoost * 0.22f) + 0.5f + hdrBoost * 0.02f
-      cg = (cg - 0.5f) * (1f + hdrBoost * 0.22f) + 0.5f + hdrBoost * 0.02f
-      cb = (cb - 0.5f) * (1f + hdrBoost * 0.22f) + 0.5f + hdrBoost * 0.02f
-    }
-    if (colorFix > 0.01f) {
-      cr *= 1f - colorFix * 0.04f
-      cg *= 1f - colorFix * 0.03f
-      cb *= 1f + colorFix * 0.06f
-    }
-    if (fade > 0.01f) {
-      cr = cr + (0.5f - cr) * fade * 0.55f
-      cg = cg + (0.5f - cg) * fade * 0.55f
-      cb = cb + (0.5f - cb) * fade * 0.55f
-    }
-    val matrix = colorMatrix4x4
-    val offset = colorOffset
-    if (matrix != null && offset != null) {
-      val nr = matrix[0] * cr + matrix[4] * cg + matrix[8] * cb + matrix[12] * a + offset[0]
-      val ng = matrix[1] * cr + matrix[5] * cg + matrix[9] * cb + matrix[13] * a + offset[1]
-      val nb = matrix[2] * cr + matrix[6] * cg + matrix[10] * cb + matrix[14] * a + offset[2]
-      cr = nr
-      cg = ng
-      cb = nb
-    }
-    return floatArrayOf(cr.coerceIn(0f, 1f), cg.coerceIn(0f, 1f), cb.coerceIn(0f, 1f), 1f)
-  }
+  fun lookParams(): ColorLookModel.LookParams = ColorLookModel.LookParams(
+    brightness = brightness,
+    contrast = contrast,
+    saturation = saturation,
+    exposure = exposure,
+    temperature = temperature,
+    tint = tint,
+    highlights = highlights,
+    shadows = shadows,
+    whites = whites,
+    blacks = blacks,
+    fade = fade,
+    autoEnhance = autoEnhance,
+    hdrBoost = hdrBoost,
+    colorFix = colorFix,
+    denoise = denoise,
+    glow = glow,
+    vignette = vignette,
+    grain = grain,
+    sharpness = sharpness,
+    clarity = clarity,
+    colorMatrix = colorMatrix4x4,
+    colorOffset = colorOffset
+  )
 
-  private fun smoothstep(edge0: Float, edge1: Float, x: Float): Float {
-    val t = ((x - edge0) / (edge1 - edge0)).coerceIn(0f, 1f)
-    return t * t * (3f - 2f * t)
-  }
+  /**
+   * CPU reference implementation of the preview fragment shader for a single sample.
+   *
+   * Delegates to [ColorLookModel.evaluate], the same routine the export pipeline and the
+   * parity tests use, so the preview shader's maths is verified against one implementation
+   * instead of a hand-maintained second copy. Spatial taps (sharpen, clarity, denoise, glow,
+   * vignette, grain) contribute nothing at neutral and are outside this replica.
+   */
+  fun evaluatePreviewPixel(r: Float, g: Float, b: Float, a: Float = 0f): FloatArray =
+    ColorLookModel.evaluate(lookParams(), r, g, b, a)
 
   companion object {
     fun from(effect: ColorGradingGlEffect): ColorGradingSnapshot = effect.constructorSnapshot()

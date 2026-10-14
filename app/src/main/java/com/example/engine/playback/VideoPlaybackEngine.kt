@@ -524,9 +524,17 @@ class VideoPlaybackEngine(
       lut?.first?.let { LutStripBaker.bitmapFor(context, it) }
     }
     val effects = PreviewFilterEffects.effectsFor(clip, currentTimeline, lutBmp, lut?.second ?: 1f)
-    val grading = effects.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
+    // Publish onto the node that is ACTUALLY installed in the player's video graph.
+    //
+    // `effects` always contains a freshly built grading effect, but it only becomes the resident
+    // one once setVideoEffects succeeds. Recording it as [boundMainGrading] before that meant
+    // later slider ticks published onto an object no shader program was reading, while the real
+    // resident node kept its old snapshot — so the preview stopped reacting to Filters / Adjust /
+    // Video Quality after the first graph rebuild that did not actually apply (the
+    // `!shouldSetEffects` path, hit whenever the graph signature was unchanged but no grading
+    // node was resident). [boundMainGrading] is now assigned only in the APPLIED branch below.
+    val grading = boundMainGrading ?: effects.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
     grading?.publishLive(gradingSnapshotFor(clip))
-    boundMainGrading = grading
 
     val surfaceBound = PreviewVideoSurfaceRegistry.hasBoundSurface(player)
     if (PreviewEffectApplyPolicy.shouldDeferLookApply(surfaceBound)) {
@@ -566,6 +574,8 @@ class VideoPlaybackEngine(
       Media3EffectPipeline.ApplyResult.APPLIED -> {
         lastMedia3GraphSignature = graphSig
         lastMedia3Signature = valueSig
+        // The graph is live: this instance is now the resident grading node.
+        boundMainGrading = effects.filterIsInstance<ColorGradingGlEffect>().firstOrNull() ?: grading
         lookFallbackActive = false
         PreviewVideoSurfaceRegistry.rebindCurrent(player)
         PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
@@ -591,6 +601,9 @@ class VideoPlaybackEngine(
       }
       Media3EffectPipeline.ApplyResult.FAILED -> {
         pendingMedia3Effects = null
+        // Nothing was installed: drop the resident node so the next look change retries the
+        // graph build instead of publishing into a dead object.
+        boundMainGrading = null
         _playerError.value = "Preview look could not be applied (${effects.size} effects). Recreating the player."
         Log.e(TAG, "Preview look apply failed; recreating player (lastGood=${lastGoodMedia3Effects.size})")
         if (!recreatingPlayer) recreatePreviewPlayer("setVideoEffects_failed")

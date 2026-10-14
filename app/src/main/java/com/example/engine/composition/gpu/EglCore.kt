@@ -26,23 +26,59 @@ class EglCore(
     private const val EGL_RECORDABLE_ANDROID = 0x3142
     private const val TAG = "EglCore"
 
-    /** GL major version of the context currently bound on this thread's compositor. */
+    /**
+     * GL major version of the context currently bound on this thread's compositor.
+     *
+     * Only ever raised or lowered by the code that owns a live context: a GLES2 [EglCore]
+     * created after a GLES3 one no longer downgrades a GLES3 context that is still rendering
+     * (that used to make the compositor recompile its shaders for the wrong feature level).
+     */
     @Volatile
     var activeGlVersion: Int = 2
       internal set
+
+    private val displayLock = Any()
+    private var sharedDisplay: EGLDisplay = EGL14.EGL_NO_DISPLAY
+    private var displayRefCount = 0
+    private val liveGles3Contexts = java.util.concurrent.atomic.AtomicInteger(0)
+
+    /**
+     * `eglInitialize`/`eglTerminate` act on the whole default display, not on one context: the
+     * first [EglCore] used to be able to terminate the display out from under a second one
+     * (preview compositor + export renderer) and leave its contexts dead. The display is now
+     * shared and reference counted, and only the last release terminates it.
+     */
+    private fun acquireDisplay(): EGLDisplay {
+      synchronized(displayLock) {
+        if (sharedDisplay == EGL14.EGL_NO_DISPLAY) {
+          val display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
+          if (display == EGL14.EGL_NO_DISPLAY) {
+            throw RuntimeException("unable to get EGL14 display")
+          }
+          val version = IntArray(2)
+          if (!EGL14.eglInitialize(display, version, 0, version, 1)) {
+            throw RuntimeException("unable to initialize EGL14")
+          }
+          sharedDisplay = display
+        }
+        displayRefCount++
+        return sharedDisplay
+      }
+    }
+
+    private fun releaseDisplay() {
+      synchronized(displayLock) {
+        if (displayRefCount > 0) displayRefCount--
+        if (displayRefCount == 0 && sharedDisplay != EGL14.EGL_NO_DISPLAY) {
+          EGL14.eglTerminate(sharedDisplay)
+          sharedDisplay = EGL14.EGL_NO_DISPLAY
+        }
+      }
+    }
   }
 
   init {
-    eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-    if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
-      throw RuntimeException("unable to get EGL14 display")
-    }
-
-    val version = IntArray(2)
-    if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
-      eglDisplay = EGL14.EGL_NO_DISPLAY
-      throw RuntimeException("unable to initialize EGL14")
-    }
+    eglDisplay = acquireDisplay()
 
     val baseSharedContext = sharedContext ?: EGL14.EGL_NO_CONTEXT
 
@@ -59,6 +95,7 @@ class EglCore(
           eglConfig = config3
           eglContext = context3
           glVersion = 3
+          liveGles3Contexts.incrementAndGet()
           activeGlVersion = 3
         }
       }
@@ -76,7 +113,8 @@ class EglCore(
       eglConfig = config2
       eglContext = context2
       glVersion = 2
-      if (activeGlVersion < 3) activeGlVersion = 2
+      // Never downgrade a GLES3 context that is still alive.
+      if (liveGles3Contexts.get() == 0) activeGlVersion = 2
     }
   }
 
@@ -169,7 +207,10 @@ class EglCore(
       EGL14.eglMakeCurrent(eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT)
       EGL14.eglDestroyContext(eglDisplay, eglContext)
       EGL14.eglReleaseThread()
-      EGL14.eglTerminate(eglDisplay)
+      if (glVersion == 3 && liveGles3Contexts.decrementAndGet() <= 0) {
+        activeGlVersion = 2
+      }
+      releaseDisplay()
     }
     eglDisplay = EGL14.EGL_NO_DISPLAY
     eglContext = EGL14.EGL_NO_CONTEXT
