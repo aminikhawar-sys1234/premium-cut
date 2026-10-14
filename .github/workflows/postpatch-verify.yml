@@ -229,9 +229,24 @@ jobs:
           script: |
             set +e
             adb shell "getprop ro.build.version.sdk; getprop ro.hardware.egl" || true
+            # Every measurement the tests write to look-verification.txt is also printed, and
+            # instrumentation stdout lands in logcat: that copy survives a failed adb pull or a
+            # crashed test process.
+            adb logcat -c || true
+            nohup adb logcat -v brief > logcat.txt 2>&1 &
+            LOGPID=$!
             ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue
             GRADLE_EXIT=$?
-            adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt || true
+            # The external copy, then the internal one through run-as: some emulator images refuse
+            # `adb pull` of /sdcard/Android/data/<id>/files.
+            kill $LOGPID 2>/dev/null || true
+            sleep 1
+            wc -l logcat.txt || true
+            adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt 2>/dev/null || true
+            if [ ! -s look-verification.txt ]; then
+              adb shell "run-as $APP_ID cat files/look-verification.txt" > look-verification.txt 2>/dev/null || true
+              if [ -s look-verification.txt ]; then echo "fetched look-verification.txt through run-as"; fi
+            fi
             echo "gradle exit code: $GRADLE_EXIT"
             exit $GRADLE_EXIT
 
@@ -240,6 +255,7 @@ jobs:
         run: |
           python3 - <<'PY'
           import glob, os, xml.etree.ElementTree as ET
+          import glob as _glob
           out = ["## Device tests (emulator, SwiftShader GLES)", ""]
           failures = []
           total = 0
@@ -268,11 +284,34 @@ jobs:
               out += [f"- `{f}`" for f in failures[:30]]
           else:
               out += ["", "No failing device test."]
-          if os.path.exists("look-verification.txt"):
+          if os.path.exists("look-verification.txt") and os.path.getsize("look-verification.txt") > 0:
               text = open("look-verification.txt", errors="replace").read()
               out += ["", "### Measured pixels (written by the device tests)", "", "```", text.strip()[:15000], "```"]
           else:
-              out += ["", "`look-verification.txt` was not produced (device tests did not reach the end)."]
+              # Fall back to the stdout Gradle captured for the tests: every report line is also
+              # printed, so the measurements survive a failed pull and a crashed run.
+              scraped = []
+              for path in sorted(_glob.glob("app/build/outputs/androidTest-results/**/*.xml", recursive=True)):
+                  try:
+                      root = ET.parse(path).getroot()
+                  except Exception:
+                      continue
+                  for node in root.iter("system-out"):
+                      scraped.extend((node.text or "").splitlines())
+              if not scraped and os.path.exists("logcat.txt"):
+                  # Instrumentation stdout is redirected to logcat; strip the "I/System.out(pid): ".
+                  for raw in open("logcat.txt", errors="replace"):
+                      if "System.out" not in raw:
+                          continue
+                      payload = raw.split("): ", 1)[1].rstrip("\n") if "): " in raw else raw.rstrip("\n")
+                      if payload.strip():
+                          scraped.append(payload)
+              scraped = [line for line in scraped if line.strip()]
+              if scraped:
+                  out += ["", "### Measured pixels (scraped from the device stdout / logcat)", "", "```",
+                          "\n".join(scraped[-300:])[:15000], "```"]
+              else:
+                  out += ["", "`look-verification.txt` was not produced and the device stdout was empty."]
           open("device-report.md", "w").write("\n".join(out) + "\n")
           PY
 
@@ -284,6 +323,8 @@ jobs:
           path: |
             device-report.md
             look-verification.txt
+            logcat.txt
+            gradle-logs
             app/build/reports/androidTests
             app/build/outputs/androidTest-results
           if-no-files-found: ignore

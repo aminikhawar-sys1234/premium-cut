@@ -6,10 +6,13 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.example.domain.model.FilterSettings
 import com.example.domain.model.FilterType
+import com.example.domain.model.TransitionType
 import com.example.domain.model.VideoAdjustments
+import com.example.engine.composition.gpu.ShaderTransitionCompositor
 import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeNoException
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -451,33 +454,109 @@ class ColorPipelineGpuInstrumentedTest {
   // 7. Two live EGL contexts (preview + export) can render at the same time
   // -------------------------------------------------------------------------------------
 
+  /** One GL worker thread; every EGL call of a harness happens on the thread that owns it. */
+  private class GlWorker(val name: String) {
+    private val executor = java.util.concurrent.Executors.newSingleThreadExecutor { r -> Thread(r, name) }
+
+    fun <T> call(block: () -> T): T {
+      val future = executor.submit(java.util.concurrent.Callable { block() })
+      try {
+        return future.get()
+      } catch (e: java.util.concurrent.ExecutionException) {
+        throw e.cause ?: e
+      }
+    }
+
+    fun shutdown() = executor.shutdown()
+  }
+
   @Test
   fun releasingOneGlContextDoesNotKillTheOther() {
-    // EglCore used to call eglTerminate() on the shared default display, so releasing the
-    // preview compositor's context left the export renderer with a dead display.
-    val first = LookGpuHarness()
-    val second = LookGpuHarness()
+    // EglCore used to call eglTerminate() on the shared default display, so releasing the preview
+    // compositor's context left the export renderer with a dead display. EGL state is per thread,
+    // so each harness gets its own worker thread - the same split the app uses (preview compositor
+    // thread vs export GL thread).
+    val previewWorker = GlWorker("preview-gl")
+    val exportWorker = GlWorker("export-gl")
+    val neutral = exportLook(VideoAdjustments(), FilterSettings())
+    var previewHarness: LookGpuHarness? = null
+    var exportHarness: LookGpuHarness? = null
+    var previewProgram: LookGpuHarness.Program? = null
+    var exportProgram: LookGpuHarness.Program? = null
     try {
-      val programA = first.buildExportProgram()
-      val programB = second.buildExportProgram()
-      assertTrue("first context failed to build the export program", programA.ok)
-      assertTrue("second context failed to build the export program", programB.ok)
-      val neutral = exportLook(VideoAdjustments(), FilterSettings())
-      val beforeA = luma(first.render(programA, neutral, 0f, preview = false))
-      val beforeB = luma(second.render(programB, neutral, 0f, preview = false))
+      val beforeA = previewWorker.call {
+        val h = LookGpuHarness().also { previewHarness = it }
+        val p = h.buildExportProgram().also { previewProgram = it }
+        luma(h.render(p, neutral, 0f, preview = false))
+      }
+      val beforeB = exportWorker.call {
+        val h = LookGpuHarness().also { exportHarness = it }
+        val p = h.buildExportProgram().also { exportProgram = it }
+        luma(h.render(p, neutral, 0f, preview = false))
+      }
+      assertTrue("the preview context produced a black frame (luma $beforeA)", beforeA > 0.05f)
+      assertTrue("the export context produced a black frame (luma $beforeB)", beforeB > 0.05f)
 
-      first.close()
+      previewWorker.call { previewHarness!!.close() }
 
-      val afterB = luma(second.render(programB, neutral, 0f, preview = false))
+      val afterB = exportWorker.call {
+        luma(exportHarness!!.render(exportProgram!!, neutral, 0f, preview = false))
+      }
       LookVerificationReport.line(
-        "two contexts: lumaA=%.4f lumaB(before)=%.4f lumaB(after releasing A)=%.4f".format(
-          beforeA, beforeB, afterB
-        )
+        "two contexts on two threads: lumaA=%.4f lumaB(before)=%.4f lumaB(after releasing A)=%.4f"
+          .format(beforeA, beforeB, afterB)
       )
       assertTrue("the surviving context produced a black frame after the other was released", afterB > 0.05f)
       assertTrue("the surviving context changed after the other was released", abs(afterB - beforeB) < 1f / 255f)
     } finally {
-      runCatching { second.close() }
+      runCatching { exportWorker.call { exportHarness?.close() } }
+      runCatching { previewWorker.call { previewHarness?.close() } }
+      previewWorker.shutdown()
+      exportWorker.shutdown()
+    }
+  }
+
+  // -------------------------------------------------------------------------------------
+  // 8. Shader transitions still render (the engine the exporter falls back from)
+  // -------------------------------------------------------------------------------------
+
+  @Test
+  fun shaderTransitionsStillRenderIntoTheFrameOnTheGpu() {
+    val compositor = ShaderTransitionCompositor()
+    val available = compositor.isAvailable()
+    LookVerificationReport.line(
+      "shader transition compositor: available=$available, ${LookGpuHarness.glVersionString()}"
+    )
+    assumeTrue("this device's GL context is not GLES3; the shader transition engine is ES3-only", available)
+    try {
+      val texA = gl().uploadSolidRgb(0.10f, 0.70f, 0.20f)
+      val texB = gl().uploadSolidRgb(0.80f, 0.10f, 0.60f)
+      gl().bindFbo()
+      val rendered = compositor.render(
+        TransitionType.FADE, 0.5f, texA, texB, gl().size, gl().size, gl().fboId
+      )
+      gl().bindFbo()
+      val frame = gl().readBackRgb()
+      val mean = meanRgb(frame)
+      LookVerificationReport.line(
+        "transition FADE@50%%: rendered=$rendered meanRgb=%.4f/%.4f/%.4f".format(
+          mean[0], mean[1], mean[2]
+        )
+      )
+      assertTrue("the shader transition did not render", rendered)
+      val deltaA = abs(mean[0] - 0.10f) + abs(mean[1] - 0.70f) + abs(mean[2] - 0.20f)
+      val deltaB = abs(mean[0] - 0.80f) + abs(mean[1] - 0.10f) + abs(mean[2] - 0.60f)
+      LookVerificationReport.line(
+        "transition output vs clip A = %.4f, vs clip B = %.4f (a hard cut would be 0)".format(deltaA, deltaB)
+      )
+      assertTrue("the FADE produced a black frame ($deltaA/$deltaB)", mean[0] + mean[1] + mean[2] > 0.05f)
+      assertTrue(
+        "the FADE rendered exactly one of the two clips instead of blending them " +
+          "(delta A=$deltaA, delta B=$deltaB)",
+        deltaA > 0.05f && deltaB > 0.05f
+      )
+    } finally {
+      runCatching { compositor.release() }
     }
   }
 }

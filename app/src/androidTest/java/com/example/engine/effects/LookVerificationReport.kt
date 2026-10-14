@@ -27,8 +27,16 @@ internal object LookVerificationReport {
 
   fun line(text: String) = append(text) { it.appendLine(text) }
 
+  /** The copy `adb pull` fetches. */
   fun file(context: Context): File =
     File(context.getExternalFilesDir(null) ?: context.filesDir, FILE_NAME)
+
+  /**
+   * The copy `adb shell run-as <applicationId> cat files/look-verification.txt` fetches. Some
+   * emulator images refuse `adb pull` of `/sdcard/Android/data/<applicationId>/files`, and a
+   * verification run must not lose its measurements to a shell permission quirk.
+   */
+  fun internalFile(context: Context): File = File(context.filesDir, FILE_NAME)
 
   private fun append(@Suppress("UNUSED_PARAMETER") tag: String, block: (StringBuilder) -> Unit) {
     synchronized(lock) {
@@ -37,10 +45,15 @@ internal object LookVerificationReport {
       block(sb)
       val text = sb.toString()
       println(text)
-      val target = if (ctx != null) file(ctx) else null
-      if (target != null) {
-        target.parentFile?.mkdirs()
-        target.appendText(text)
+      if (ctx != null) {
+        for (target in listOf(file(ctx), internalFile(ctx))) {
+          try {
+            target.parentFile?.mkdirs()
+            target.appendText(text)
+          } catch (_: Throwable) {
+            // A report file must never fail a test.
+          }
+        }
       }
     }
   }

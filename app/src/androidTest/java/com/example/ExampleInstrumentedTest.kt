@@ -17,8 +17,11 @@ import org.junit.Assert.*
 class ExampleInstrumentedTest {
     @Test
     fun useAppContext() {
-        // Context of the app under test.
+        // Context of the app under test. Compares against the module's own application id: the
+        // hard-coded "com.example" this template shipped with has not matched
+        // `applicationId` (com.aistudio.videostudio.hkmqzp) since the app was renamed, so the
+        // test failed on every device even though the app was fine.
         val appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        assertEquals("com.example", appContext.packageName)
+        assertEquals(BuildConfig.APPLICATION_ID, appContext.packageName)
     }
 }

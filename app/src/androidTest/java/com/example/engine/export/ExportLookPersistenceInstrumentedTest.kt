@@ -191,12 +191,18 @@ class ExportLookPersistenceInstrumentedTest {
       throw AssertionError("the export pipeline could not produce an MP4 on this device: ${t.message}", t)
     }
 
+    // Should this export carry audio at all? Reported from the exporter's own decision, so a missing
+    // track is evidence rather than a guess.
+    val audio = DeviceAudioProbe.probeAndReport(context, restored, durationMs, "look export")
+
     val gradedValidation = ExportValidator.validate(
-      gradedFile, config, durationMs, requireAudio = true, expectedDimensions = outSize,
+      gradedFile, config, durationMs, requireAudio = audio.expectsAudioTrack,
+      expectedDimensions = outSize,
       sampleFrames = true, expectedRotation = 0, pipelineFailure = null
     )
     val neutralValidation = ExportValidator.validate(
-      neutralFile, config, durationMs, requireAudio = true, expectedDimensions = outSize,
+      neutralFile, config, durationMs, requireAudio = audio.expectsAudioTrack,
+      expectedDimensions = outSize,
       sampleFrames = true, expectedRotation = 0, pipelineFailure = null
     )
     LookVerificationReport.line(

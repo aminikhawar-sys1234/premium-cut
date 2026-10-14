@@ -33,15 +33,26 @@ internal class LookGpuHarness(val size: Int = DEFAULT_SIZE, source: ByteArray? =
         val fx = x.toFloat() / (size - 1)
         val fy = y.toFloat() / (size - 1)
         val patch = ((x * 6 / size) + (y * 6 / size)) % 3
-        val r: Float = when (patch) {
-          0 -> 0.80f + 0.15f * fx
-          1 -> 0.15f + 0.30f * fy
+        // The first and last 1/8 of the frame are near-black and near-white bands: the tone
+        // controls (blacks / whites / shadows / highlights) weight pixels by luma, so a frame that
+        // only covers the mid range cannot show whether they do anything.
+        val r: Float = when {
+          fx < 0.125f -> 0.02f
+          fx > 0.875f -> 0.98f
+          patch == 0 -> 0.80f + 0.15f * fx
+          patch == 1 -> 0.15f + 0.30f * fy
           else -> 0.30f * fx + 0.20f
         }
-        val g: Float = 0.25f + 0.55f * fy
-        val b: Float = when (patch) {
-          0 -> 0.12f
-          1 -> 0.75f - 0.25f * fx
+        val g: Float = when {
+          fx < 0.125f -> 0.02f
+          fx > 0.875f -> 0.98f
+          else -> 0.25f + 0.55f * fy
+        }
+        val b: Float = when {
+          fx < 0.125f -> 0.02f
+          fx > 0.875f -> 0.98f
+          patch == 0 -> 0.12f
+          patch == 1 -> 0.75f - 0.25f * fx
           else -> 0.55f + 0.35f * fx
         }
         px[i++] = (r.coerceIn(0f, 1f) * 255f).toInt().toByte()
@@ -223,7 +234,7 @@ internal class LookGpuHarness(val size: Int = DEFAULT_SIZE, source: ByteArray? =
     alpha: Int = 255
   ): FloatArray {
     check(program.ok) { "program did not compile" }
-    core.makeCurrent(surface!!)
+    makeCurrent()
     GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
     GLES20.glViewport(0, 0, size, size)
     GLES20.glDisable(GLES20.GL_BLEND)
@@ -286,16 +297,64 @@ internal class LookGpuHarness(val size: Int = DEFAULT_SIZE, source: ByteArray? =
     drawQuad(program.id)
     GLES20.glFinish()
 
+    return readBackRgb()
+  }
+
+  /**
+   * Reads the current framebuffer back as RGB floats in 0..1 and returns the pixel buffer to the
+   * start, so [lastAlphaAt] can still sample it. The readback is RGBA, four bytes per pixel: the
+   * RGB triple of pixel n lives at byte offsets 4n, 4n+1, 4n+2 (reading it as a flat byte stream
+   * mixed the alpha byte into every fourth colour component).
+   */
+  fun readBackRgb(): FloatArray {
     readback.clear()
     GLES20.glReadPixels(0, 0, size, size, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, readback)
     readback.position(0)
     val out = FloatArray(size * size * 3)
-    var i = 0
-    while (i < size * size * 3) {
-      out[i] = (readback.get(i).toInt() and 0xFF) / 255f
-      i++
+    for (pixel in 0 until size * size) {
+      out[pixel * 3] = (readback.get(pixel * 4).toInt() and 0xFF) / 255f
+      out[pixel * 3 + 1] = (readback.get(pixel * 4 + 1).toInt() and 0xFF) / 255f
+      out[pixel * 3 + 2] = (readback.get(pixel * 4 + 2).toInt() and 0xFF) / 255f
     }
     return out
+  }
+
+  /** Makes this harness' EGL context current on the calling thread. */
+  fun makeCurrent() {
+    try {
+      core.makeCurrent(surface!!)
+    } catch (t: Throwable) {
+      val eglError = try {
+        "0x" + Integer.toHexString(android.opengl.EGL14.eglGetError())
+      } catch (_: Throwable) {
+        "unknown"
+      }
+      throw RuntimeException("EGL makeCurrent failed (eglGetError=$eglError, glVersion=${core.glVersion}, " +
+        "GL_VERSION=${GLES20.glGetString(GLES20.GL_VERSION)})", t)
+    }
+  }
+
+  /** The framebuffer this harness renders into, for callers that draw with their own GL code. */
+  val fboId: Int get() = fbo
+
+  /** Binds this harness' framebuffer and viewport (for callers that draw with their own GL code). */
+  fun bindFbo() {
+    makeCurrent()
+    GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, fbo)
+    GLES20.glViewport(0, 0, size, size)
+  }
+
+  /** Uploads a solid RGB colour as a texture of this harness' size. */
+  fun uploadSolidRgb(r: Float, g: Float, b: Float): Int {
+    val px = ByteArray(size * size * 4)
+    var i = 0
+    while (i < px.size) {
+      px[i++] = (r.coerceIn(0f, 1f) * 255f).toInt().toByte()
+      px[i++] = (g.coerceIn(0f, 1f) * 255f).toInt().toByte()
+      px[i++] = (b.coerceIn(0f, 1f) * 255f).toInt().toByte()
+      px[i++] = 0xFF.toByte()
+    }
+    return uploadTexture(px)
   }
 
   /** Output alpha of the last read-back frame, sampled from the raw RGBA bytes. */
