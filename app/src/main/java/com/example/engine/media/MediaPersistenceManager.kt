@@ -187,8 +187,9 @@ object MediaPersistenceManager {
       // A clip that keys over its own imported background keeps that media alive across app restarts.
       return withUri.copy(chromaKey = settings.copy(backgroundUri = persistMedia(context, bg)))
     }
-    val videos = hydrated.videoClips.map(::persistClip)
-    val overlays = hydrated.overlayClips.map(::persistClip)
+    // Lambda instead of ::persistClip: a suspend local function cannot be used as a function reference here.
+    val videos = hydrated.videoClips.map { clip -> persistClip(clip) }
+    val overlays = hydrated.overlayClips.map { clip -> persistClip(clip) }
     val audios = hydrated.audioClips.map { clip ->
       clip.copy(uri = persistMedia(context, clip.uri))
     }
