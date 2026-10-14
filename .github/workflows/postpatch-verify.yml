@@ -1,0 +1,292 @@
+name: Post-patch verification (filters / colour)
+
+# Verification workflow for the Filters / Adjust / Video Quality patch.
+#
+# It runs exactly the commands the report promises —
+#   ./gradlew :app:compileDebugKotlin
+#   ./gradlew :app:testDebugUnitTest
+#   ./gradlew test                (every variant, the task the main CI uses)
+#   ./gradlew :app:assembleDebugAndroidTest
+#   ./gradlew :app:lintDebug
+# — plus the device (emulator with a real GLES driver) instrumented tests, and then posts the
+# results as a pull-request comment. The comment matters: the runner logs and the artifact
+# downloads of this repository are not reachable from the reviewing workstation, so the numbers
+# have to come back through the API.
+#
+# The device job also pulls `look-verification.txt`, which the instrumented tests write with the
+# measured pixel deltas, shader compile logs and export frame comparisons.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - main
+      - master
+
+concurrency:
+  group: postpatch-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+env:
+  CMAKE_VERSION: '3.22.1'
+  NDK_VERSION: '28.2.13676358'
+  APP_ID: 'com.aistudio.videostudio.hkmqzp'
+
+jobs:
+  build-and-unit-tests:
+    name: Build, unit tests, lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
+
+      - name: Install Android SDK toolchain (CMake + NDK)
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
+          if [ -z "$SDKMANAGER" ]; then echo "sdkmanager not found under $SDK_ROOT"; exit 1; fi
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          if [ ! -d "$SDK_ROOT/cmake/$CMAKE_VERSION" ] || [ ! -d "$SDK_ROOT/ndk/$NDK_VERSION" ]; then
+            "$SDKMANAGER" --install "cmake;$CMAKE_VERSION" "ndk;$NDK_VERSION"
+          fi
+          "$SDKMANAGER" --install "platforms;android-36" "build-tools;36.0.0" || true
+          test -d "$SDK_ROOT/cmake/$CMAKE_VERSION"
+          test -d "$SDK_ROOT/ndk/$NDK_VERSION"
+
+      - name: Toolchain versions
+        run: |
+          java -version
+          ./gradlew --version
+
+      - name: Compile Kotlin (debug)
+        run: ./gradlew :app:compileDebugKotlin --stacktrace
+
+      - name: Debug unit tests
+        run: ./gradlew :app:testDebugUnitTest --stacktrace
+
+      - name: All unit tests (every variant)
+        run: ./gradlew test --stacktrace
+
+      - name: Compile instrumented tests (androidTest APK)
+        run: ./gradlew :app:assembleDebugAndroidTest --stacktrace
+
+      - name: Android Lint
+        run: ./gradlew :app:lintDebug --stacktrace
+
+      - name: Summarise unit-test results
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+          out = ["## Automated build + unit tests (`./gradlew`)", ""]
+          rows = []
+          failures = []
+          for path in sorted(glob.glob("app/build/test-results/**/*.xml", recursive=True)):
+              try:
+                  root = ET.parse(path).getroot()
+              except Exception as exc:
+                  out.append(f"- could not parse {path}: {exc}")
+                  continue
+              suite = root.get("name", os.path.basename(path))
+              tests = int(root.get("tests", 0)); fails = int(root.get("failures", 0))
+              errors = int(root.get("errors", 0)); skipped = int(root.get("skipped", 0))
+              if tests == 0 and fails == 0 and errors == 0:
+                  continue
+              rows.append((suite, tests, fails, errors, skipped, path))
+              for case in root.iter("testcase"):
+                  for kind in ("failure", "error"):
+                      node = case.find(kind)
+                      if node is not None:
+                          msg = (node.get("message") or (node.text or "")).strip().replace("\n", " ")[:600]
+                          failures.append(f"{case.get('classname')}.{case.get('name')} ({path}): {msg}")
+          total_tests = sum(r[1] for r in rows)
+          total_bad = sum(r[2] + r[3] for r in rows)
+          out.append(f"- suites: **{len(rows)}**, cases: **{total_tests}**, failed/errored: **{total_bad}**")
+          out.append(f"- report files found: {len(rows)}")
+          if failures:
+              out += ["", "### Failing cases", ""]
+              out += [f"- `{f}`" for f in failures[:40]]
+          else:
+              out += ["", "No failing unit test."]
+          open("build-report.md", "w").write("\n".join(out) + "\n")
+          PY
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automated-android
+          path: |
+            build-report.md
+            app/build/test-results
+            app/build/reports/tests
+          if-no-files-found: ignore
+
+  device-tests:
+    name: Device tests (emulator, real GLES)
+    needs: build-and-unit-tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
+
+      - name: Install Android SDK toolchain (CMake + NDK)
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          if [ ! -d "$SDK_ROOT/cmake/$CMAKE_VERSION" ] || [ ! -d "$SDK_ROOT/ndk/$NDK_VERSION" ]; then
+            "$SDKMANAGER" --install "cmake;$CMAKE_VERSION" "ndk;$NDK_VERSION"
+          fi
+          test -d "$SDK_ROOT/cmake/$CMAKE_VERSION"
+          test -d "$SDK_ROOT/ndk/$NDK_VERSION"
+
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      - name: Run instrumented tests on the emulator
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          force-avd-creation: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
+          disable-animations: true
+          script: |
+            set +e
+            adb shell "getprop ro.build.version.sdk; getprop ro.hardware.egl" || true
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue
+            GRADLE_EXIT=$?
+            adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt || true
+            echo "gradle exit code: $GRADLE_EXIT"
+            exit $GRADLE_EXIT
+
+      - name: Summarise instrumented results
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, os, xml.etree.ElementTree as ET
+          out = ["## Device tests (emulator, SwiftShader GLES)", ""]
+          failures = []
+          total = 0
+          for path in sorted(glob.glob("app/build/outputs/androidTest-results/**/*.xml", recursive=True)):
+              try:
+                  root = ET.parse(path).getroot()
+              except Exception as exc:
+                  out.append(f"- could not parse {path}: {exc}")
+                  continue
+              for suite in ([root] if root.tag == "testsuite" else root.iter("testsuite")):
+                  tests = int(suite.get("tests", 0)); total += tests
+                  out.append(
+                      f"- `{suite.get('name')}`: {tests} tests, {suite.get('failures', 0)} failures, "
+                      f"{suite.get('errors', 0)} errors, {suite.get('skipped', 0)} skipped, "
+                      f"{suite.get('time', '?')}s"
+                  )
+              for case in root.iter("testcase"):
+                  for kind in ("failure", "error"):
+                      node = case.find(kind)
+                      if node is not None:
+                          msg = (node.get("message") or (node.text or "")).strip().replace("\n", " ")[:700]
+                          failures.append(f"{case.get('classname')}.{case.get('name')}: {msg}")
+          out.append(f"- total instrumented cases: **{total}**")
+          if failures:
+              out += ["", "### Failing device cases", ""]
+              out += [f"- `{f}`" for f in failures[:30]]
+          else:
+              out += ["", "No failing device test."]
+          if os.path.exists("look-verification.txt"):
+              text = open("look-verification.txt", errors="replace").read()
+              out += ["", "### Measured pixels (written by the device tests)", "", "```", text.strip()[:15000], "```"]
+          else:
+              out += ["", "`look-verification.txt` was not produced (device tests did not reach the end)."]
+          open("device-report.md", "w").write("\n".join(out) + "\n")
+          PY
+
+      - name: Upload device reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: device-results
+          path: |
+            device-report.md
+            look-verification.txt
+            app/build/reports/androidTests
+            app/build/outputs/androidTest-results
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish results on the pull request
+    needs: [build-and-unit-tests, device-tests]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download reports
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Compose and post the comment
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          BUILD_RESULT: ${{ needs.build-and-unit-tests.result }}
+          DEVICE_RESULT: ${{ needs.device-tests.result }}
+        run: |
+          {
+            echo "### Post-patch verification — \`${{ github.sha }}\`"
+            echo
+            echo "- build + unit tests job: **${BUILD_RESULT}**"
+            echo "- device (emulator) tests job: **${DEVICE_RESULT}**"
+            echo "- run: ${RUN_URL}"
+            echo
+            cat artifacts/automated-android/build-report.md 2>/dev/null || echo "_no automated report_"
+            echo
+            cat artifacts/device-results/device-report.md 2>/dev/null || echo "_no device report_"
+          } > comment.md
+          if [ -n "$PR_NUMBER" ]; then
+            gh pr comment "$PR_NUMBER" --repo "${{ github.repository }}" --body-file comment.md
+          else
+            echo "no pull request number; comment body follows"
+            cat comment.md
+          fi
