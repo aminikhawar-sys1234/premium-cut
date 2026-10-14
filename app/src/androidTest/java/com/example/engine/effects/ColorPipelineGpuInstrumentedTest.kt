@@ -229,13 +229,13 @@ class ColorPipelineGpuInstrumentedTest {
         )
       )
       val failures = mutableListOf<String>()
+      var cpuDiffTotal = 0.0
+      var pixels = 0
       for (adj in probes) {
         val params = exportLook(adj, FilterSettings())
         val frame = gl().render(export, params, 1f, preview = false)
         val delta = meanAbsDiff(frame, baseline)
         // CPU reference for the same look: the two must agree pixel for pixel.
-        var cpuDiffTotal = 0.0
-        var pixels = 0
         val cpu = FloatArray(gl().size * gl().size * 3)
         var p = 0
         while (p < cpu.size) {
