@@ -38,6 +38,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.*
 import com.example.engine.SelectedTrackElement
+import com.example.engine.composition.ChromaKeyResolver
 import com.example.ui.StudioViewModel
 import com.example.ui.components.formatDuration
 import com.example.ui.theme.*
@@ -520,7 +521,22 @@ fun ChromaKeyPanel(
   val context = LocalContext.current
   val coroutineScope = rememberCoroutineScope()
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
-  var chroma by remember(timeline.chromaKey) { mutableStateOf(timeline.chromaKey) }
+  val selectedIds by viewModel.timelineEngine.selectedClipIds.collectAsState()
+  val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
+
+  // The clip this panel edits. Null = nothing selected, and then the edits are the project default that
+  // every clip without its own key inherits (the old, project-wide behaviour in a clearly labelled place).
+  val targetClip = remember(timeline, selectedIds, selectedElement) { viewModel.getSelectedChromaClip() }
+  val effective = remember(timeline, targetClip?.id) {
+    targetClip?.chromaKey ?: timeline.chromaKey
+  }
+  var chroma by remember(targetClip?.id, effective) { mutableStateOf(effective) }
+  var customKeyOpen by remember(targetClip?.id) { mutableStateOf(false) }
+
+  val push: (ChromaKeySettings) -> Unit = { next ->
+    chroma = next
+    viewModel.setChromaKeyFor(targetClip?.id, next)
+  }
 
   val bgPickerLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.PickVisualMedia()
@@ -532,8 +548,16 @@ fun ChromaKeyPanel(
           sourceUriString = uri.toString(),
           suggestedName = "Chroma Background"
         )
-        chroma = chroma.copy(backgroundUri = persistentPath, backgroundType = "Image")
-        viewModel.timelineEngine.updateChromaKey(chroma)
+        // A picked video must be stored as a video: the compositor decodes frames for a video
+        // background and uploads a still texture for an image one.
+        val mime = runCatching { context.contentResolver.getType(uri) }.getOrNull()
+        val isVideo = mime?.startsWith("video") == true
+        push(
+          chroma.copy(
+            backgroundUri = persistentPath,
+            backgroundType = if (isVideo) ChromaKeyResolver.BACKGROUND_VIDEO else ChromaKeyResolver.BACKGROUND_IMAGE
+          )
+        )
       }
     }
   }
@@ -597,6 +621,42 @@ fun ChromaKeyPanel(
       }
     }
 
+    // 2. Which clip is being keyed (or the project default when nothing is selected).
+    Row(
+      modifier = Modifier.fillMaxWidth(),
+      horizontalArrangement = Arrangement.SpaceBetween,
+      verticalAlignment = Alignment.CenterVertically
+    ) {
+      val isPerClip = targetClip?.chromaKey != null
+      Text(
+        text = when {
+          targetClip == null -> "No clip on the playhead"
+          isPerClip -> "Editing clip: ${targetClip.name}"
+          else -> "Key for: ${targetClip.name} (first change stores it on this clip)"
+        },
+        style = MaterialTheme.typography.bodySmall.copy(color = if (targetClip != null) CyanAccent else AmberAccent),
+        fontSize = 11.sp,
+        maxLines = 1,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier.weight(1f)
+      )
+      TextButton(
+        onClick = { viewModel.resetChromaKey(targetClip?.id) },
+        contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+        modifier = Modifier.height(28.dp)
+      ) {
+        Text("Reset", color = TextSecondary, fontSize = 11.sp)
+      }
+    }
+    if (targetClip == null) {
+      Text(
+        "Move the playhead over a clip (or select one on the timeline) to key it. There is no clip here, so "
+          + "these settings are the project default that every un-keyed clip inherits.",
+        fontSize = 10.sp,
+        color = TextSecondary
+      )
+    }
+
     Box(
       modifier = Modifier
         .fillMaxWidth()
@@ -613,10 +673,7 @@ fun ChromaKeyPanel(
       Text("Enable Chroma Key", style = MaterialTheme.typography.bodyMedium.copy(color = TextPrimary, fontSize = 13.sp))
       Switch(
         checked = chroma.enabled,
-        onCheckedChange = {
-          chroma = chroma.copy(enabled = it)
-          viewModel.timelineEngine.updateChromaKey(chroma)
-        },
+        onCheckedChange = { push(chroma.copy(enabled = it)) },
         colors = SwitchDefaults.colors(checkedThumbColor = GreenAccent)
       )
     }
@@ -626,20 +683,23 @@ fun ChromaKeyPanel(
         modifier = Modifier.fillMaxWidth().height(260.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp)
       ) {
-        // 1. Color Selection
+        // 1. Color Selection: the shipped presets plus a full picker for a studio colour that is not listed.
         item {
-          Text("Key Color", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
+          Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Text("Key Color", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
+            Text(
+              text = "#${"%06X".format(chroma.targetColor.toInt() and 0xFFFFFF)}",
+              fontSize = 11.sp,
+              color = TextSecondary
+            )
+          }
           Spacer(modifier = Modifier.height(4.dp))
-          val presetColors = listOf(
-            0xFF00FF00L to "Green",
-            0xFF0000FFL to "Blue",
-            0xFFFF00FFL to "Magenta",
-            0xFFFF0000L to "Red",
-            0xFF000000L to "Black",
-            0xFFFFFFFFL to "White"
-          )
           Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.horizontalScroll(rememberScrollState())) {
-            presetColors.forEach { (colorVal, label) ->
+            ChromaKeyResolver.KEY_PRESETS.forEach { (label, colorVal) ->
               val isSelected = chroma.targetColor == colorVal
               Box(
                 modifier = Modifier
@@ -651,10 +711,7 @@ fun ChromaKeyPanel(
                     color = if (isSelected) CyanAccent else StudioBorder,
                     shape = CircleShape
                   )
-                  .clickable {
-                    chroma = chroma.copy(targetColor = colorVal)
-                    viewModel.timelineEngine.updateChromaKey(chroma)
-                  },
+                  .clickable { push(chroma.copy(targetColor = colorVal)) },
                 contentAlignment = Alignment.Center
               ) {
                 if (isSelected) {
@@ -668,6 +725,57 @@ fun ChromaKeyPanel(
               }
             }
           }
+          Spacer(modifier = Modifier.height(6.dp))
+          TextButton(
+            onClick = { customKeyOpen = !customKeyOpen },
+            contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp),
+            modifier = Modifier.height(28.dp)
+          ) {
+            Text(if (customKeyOpen) "Hide colour picker" else "Custom key colour…", color = CyanAccent, fontSize = 11.sp)
+          }
+        }
+
+        // 1b. Custom key colour: R/G/B picker (works for any screen colour, including the ones not in the presets).
+        if (customKeyOpen) {
+          item {
+            val keyInt = chroma.targetColor.toInt()
+            val r = ((keyInt ushr 16) and 0xFF).toFloat() / 255f
+            val g = ((keyInt ushr 8) and 0xFF).toFloat() / 255f
+            val b = (keyInt and 0xFF).toFloat() / 255f
+            fun withChannel(nr: Float? = null, ng: Float? = null, nb: Float? = null): Long {
+              val rr = ((nr ?: r) * 255f + 0.5f).toInt().coerceIn(0, 255)
+              val gg = ((ng ?: g) * 255f + 0.5f).toInt().coerceIn(0, 255)
+              val bb = ((nb ?: b) * 255f + 0.5f).toInt().coerceIn(0, 255)
+              return 0xFF000000L or (rr.toLong() shl 16) or (gg.toLong() shl 8) or bb.toLong()
+            }
+            Column(modifier = Modifier.fillMaxWidth()) {
+              Text("Red", fontSize = 10.sp, color = TextSecondary)
+              Slider(
+                value = r,
+                onValueChange = { push(chroma.copy(targetColor = withChannel(nr = it))) },
+                colors = SliderDefaults.colors(thumbColor = Color(0xFFEF4444), activeTrackColor = Color(0xFFEF4444))
+              )
+              Text("Green", fontSize = 10.sp, color = TextSecondary)
+              Slider(
+                value = g,
+                onValueChange = { push(chroma.copy(targetColor = withChannel(ng = it))) },
+                colors = SliderDefaults.colors(thumbColor = GreenAccent, activeTrackColor = GreenAccent)
+              )
+              Text("Blue", fontSize = 10.sp, color = TextSecondary)
+              Slider(
+                value = b,
+                onValueChange = { push(chroma.copy(targetColor = withChannel(nb = it))) },
+                colors = SliderDefaults.colors(thumbColor = Color(0xFF60A5FA), activeTrackColor = Color(0xFF60A5FA))
+              )
+              Box(
+                modifier = Modifier
+                  .fillMaxWidth()
+                  .height(22.dp)
+                  .clip(RoundedCornerShape(6.dp))
+                  .background(Color(chroma.targetColor))
+              )
+            }
+          }
         }
 
         // 2. Similarity Slider
@@ -679,27 +787,21 @@ fun ChromaKeyPanel(
           Slider(
             value = chroma.similarity,
             valueRange = 0.05f..0.95f,
-            onValueChange = {
-              chroma = chroma.copy(similarity = it, intensity = it)
-              viewModel.timelineEngine.updateChromaKey(chroma)
-            },
+            onValueChange = { push(chroma.copy(similarity = it, intensity = it)) },
             colors = SliderDefaults.colors(thumbColor = GreenAccent, activeTrackColor = GreenAccent)
           )
         }
 
-        // 3. Smoothness Slider
+        // 3. Edge Softness Slider (feather of the matte)
         item {
           Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-            Text("Smoothness", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))
+            Text("Edge Softness", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))
             Text("${(chroma.smoothness * 100).toInt()}%", style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary))
           }
           Slider(
             value = chroma.smoothness,
             valueRange = 0.01f..0.50f,
-            onValueChange = {
-              chroma = chroma.copy(smoothness = it)
-              viewModel.timelineEngine.updateChromaKey(chroma)
-            },
+            onValueChange = { push(chroma.copy(smoothness = it, edgeAdjustment = it)) },
             colors = SliderDefaults.colors(thumbColor = GreenAccent, activeTrackColor = GreenAccent)
           )
         }
@@ -713,10 +815,35 @@ fun ChromaKeyPanel(
           Slider(
             value = chroma.spillSuppression,
             valueRange = 0.0f..1.0f,
-            onValueChange = {
-              chroma = chroma.copy(spillSuppression = it, spillReduction = it)
-              viewModel.timelineEngine.updateChromaKey(chroma)
-            },
+            onValueChange = { push(chroma.copy(spillSuppression = it, spillReduction = it)) },
+            colors = SliderDefaults.colors(thumbColor = GreenAccent, activeTrackColor = GreenAccent)
+          )
+        }
+
+        // 4b. Edge Cleanup: extra de-spill on the soft edge, where a green screen leaves its fringe.
+        item {
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Edge Cleanup (halo)", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))
+            Text("${(chroma.edgeControl * 100).toInt()}%", style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary))
+          }
+          Slider(
+            value = chroma.edgeControl,
+            valueRange = 0.0f..1.0f,
+            onValueChange = { push(chroma.copy(edgeControl = it)) },
+            colors = SliderDefaults.colors(thumbColor = GreenAccent, activeTrackColor = GreenAccent)
+          )
+        }
+
+        // 4c. Foreground opacity.
+        item {
+          Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text("Foreground Opacity", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))
+            Text("${(chroma.foregroundOpacity * 100).toInt()}%", style = MaterialTheme.typography.bodySmall.copy(color = TextPrimary))
+          }
+          Slider(
+            value = chroma.foregroundOpacity,
+            valueRange = 0.0f..1f,
+            onValueChange = { push(chroma.copy(foregroundOpacity = it)) },
             colors = SliderDefaults.colors(thumbColor = GreenAccent, activeTrackColor = GreenAccent)
           )
         }
@@ -725,20 +852,26 @@ fun ChromaKeyPanel(
         item {
           Text("Background Replacement", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary, fontWeight = FontWeight.Bold))
           Spacer(modifier = Modifier.height(4.dp))
-          val bgTypes = listOf("Transparent", "SolidColor", "Image")
-          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+          val bgTypes = listOf(
+            ChromaKeyResolver.BACKGROUND_TRANSPARENT,
+            ChromaKeyResolver.BACKGROUND_SOLID,
+            ChromaKeyResolver.BACKGROUND_IMAGE,
+            ChromaKeyResolver.BACKGROUND_VIDEO
+          )
+          Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            modifier = Modifier.horizontalScroll(rememberScrollState())
+          ) {
             bgTypes.forEach { type ->
               FilterChip(
                 selected = chroma.backgroundType == type,
-                onClick = {
-                  chroma = chroma.copy(backgroundType = type)
-                  viewModel.timelineEngine.updateChromaKey(chroma)
-                },
+                onClick = { push(chroma.copy(backgroundType = type)) },
                 label = {
                   Text(when (type) {
-                    "Transparent" -> "Transparent"
-                    "SolidColor" -> "Solid Color"
-                    else -> "Image / Video"
+                    ChromaKeyResolver.BACKGROUND_TRANSPARENT -> "Transparent"
+                    ChromaKeyResolver.BACKGROUND_SOLID -> "Solid Color"
+                    ChromaKeyResolver.BACKGROUND_IMAGE -> "Image"
+                    else -> "Video"
                   })
                 },
                 colors = FilterChipDefaults.filterChipColors(
@@ -752,15 +885,23 @@ fun ChromaKeyPanel(
           }
         }
 
-        // Background Image/Video Upload Button if Image background type selected
-        if (chroma.backgroundType == "Image") {
+        // Background Image/Video Pick
+        if (chroma.backgroundType == ChromaKeyResolver.BACKGROUND_IMAGE ||
+          chroma.backgroundType == ChromaKeyResolver.BACKGROUND_VIDEO
+        ) {
           item {
             val bgUri = chroma.backgroundUri
             val hasBg = !bgUri.isNullOrBlank()
             Button(
               onClick = {
                 bgPickerLauncher.launch(
-                  androidx.activity.result.PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                  androidx.activity.result.PickVisualMediaRequest(
+                    if (chroma.backgroundType == ChromaKeyResolver.BACKGROUND_VIDEO) {
+                      ActivityResultContracts.PickVisualMedia.VideoOnly
+                    } else {
+                      ActivityResultContracts.PickVisualMedia.ImageOnly
+                    }
+                  )
                 )
               },
               colors = ButtonDefaults.buttonColors(containerColor = CyanAccent, contentColor = Color.Black),
@@ -770,7 +911,11 @@ fun ChromaKeyPanel(
               Icon(Icons.Default.Upload, contentDescription = null, modifier = Modifier.size(16.dp))
               Spacer(modifier = Modifier.width(6.dp))
               Text(
-                text = if (hasBg) "Change Background Media" else "Upload Background Image / Video",
+                text = if (hasBg) {
+                  "Change Background ${if (chroma.backgroundType == ChromaKeyResolver.BACKGROUND_VIDEO) "Video" else "Image"}"
+                } else {
+                  "Pick Background ${if (chroma.backgroundType == ChromaKeyResolver.BACKGROUND_VIDEO) "Video" else "Image"}"
+                },
                 fontWeight = FontWeight.Bold,
                 fontSize = 12.sp
               )
@@ -786,7 +931,7 @@ fun ChromaKeyPanel(
           }
         }
 
-        if (chroma.backgroundType == "SolidColor") {
+        if (chroma.backgroundType == ChromaKeyResolver.BACKGROUND_SOLID) {
           item {
             Text("Solid Background Color", style = MaterialTheme.typography.bodySmall.copy(color = TextSecondary))
             Spacer(modifier = Modifier.height(4.dp))
@@ -810,12 +955,23 @@ fun ChromaKeyPanel(
                       color = if (isSelected) AmberAccent else StudioBorder,
                       shape = CircleShape
                     )
-                    .clickable {
-                      chroma = chroma.copy(backgroundColor = colorVal)
-                      viewModel.timelineEngine.updateChromaKey(chroma)
-                    }
+                    .clickable { push(chroma.copy(backgroundColor = colorVal)) }
                 )
               }
+            }
+          }
+        }
+
+        // 6. Apply the current key to every clip (and make it the project default for clips added later).
+        if (targetClip != null) {
+          item {
+            OutlinedButton(
+              onClick = { viewModel.applyChromaKeyToAllClips(chroma) },
+              modifier = Modifier.fillMaxWidth().height(38.dp),
+              border = BorderStroke(1.dp, CyanAccent),
+              shape = RoundedCornerShape(8.dp)
+            ) {
+              Text("Apply to all clips", color = CyanAccent, fontSize = 12.sp)
             }
           }
         }

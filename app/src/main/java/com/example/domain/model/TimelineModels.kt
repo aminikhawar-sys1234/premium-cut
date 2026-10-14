@@ -338,6 +338,12 @@ data class VideoClip(
   val arOverlay: String? = null,
   /** Background-removal look as "strength,softness,mode,bgColor" (see BgRemoveCodec); null = defaults. Only used while [isBackgroundRemoved]. */
   val bgRemove: String? = null,
+  /**
+   * Chroma-key settings for THIS clip (key colour, similarity, edge softness, spill, background).
+   * null = inherit [Timeline.chromaKey]; a value - including a disabled one - wins over the project
+   * default, so keying one layer never keys the others. Saves, undoes and exports with the timeline.
+   */
+  val chromaKey: ChromaKeySettings? = null,
   /** Expression + bone-parent script (see ClipMotion.kt). */
   val motion: ClipMotionScript = ClipMotionScript()
 ) : TimelineClip {
@@ -1223,6 +1229,8 @@ data class ChromaKeySettings(
   val backgroundType: String = "SolidColor", // "SolidColor", "Image", "Video", "Transparent"
   val backgroundColor: Long = 0xFF000000,
   val backgroundUri: String? = null,
+  /** Alpha multiplier applied to the keyed foreground; 1 = keep the subject fully opaque (UI: Foreground Opacity). */
+  val foregroundOpacity: Float = 1f,
   val intensity: Float = similarity,
   val shadow: Float = 0.3f,
   val edgeAdjustment: Float = smoothness,

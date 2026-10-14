@@ -53,6 +53,7 @@ fun AiMattingToolPanel(
   val selectedIds by viewModel.timelineEngine.selectedClipIds.collectAsState()
   val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
   val status by SubjectCutoutRegistry.status.collectAsState()
+  val statusDetail by SubjectCutoutRegistry.statusDetail.collectAsState()
 
   val cutClip = remember(timeline, selectedIds, selectedElement) { viewModel.getSelectedCutoutClip() }
   val isMainTrackClip = remember(timeline, cutClip?.id) { timeline.videoClips.any { it.id == cutClip?.id } }
@@ -134,7 +135,10 @@ fun AiMattingToolPanel(
             verticalAlignment = Alignment.CenterVertically
           ) {
             Text(
-              "The AI model isn't ready yet. It downloads once through Google Play services (needs internet).",
+              // The real reason the model could not run (missing model, timeout, unsupported media),
+              // never a generic "something went wrong".
+              statusDetail
+                ?: "The on-device subject model isn't ready yet. It downloads once through Google Play services (needs internet).",
               fontSize = 11.sp,
               color = TextSecondary,
               modifier = Modifier.weight(1f)

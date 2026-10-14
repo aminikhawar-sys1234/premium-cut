@@ -26,6 +26,22 @@ class TransitionSourceTexture(
 )
 
 /**
+ * One decoded frame of the media a chroma key draws behind the subject (see
+ * [com.example.engine.composition.ChromaKeyResolver]). The preview decodes it with its own clip decoder and
+ * the export with the encoder-side decoder, so both draw the same background picture.
+ */
+class ChromaBackgroundFrame(
+  val textureId: Int,
+  val isOes: Boolean,
+  val texMatrix: FloatArray? = null,
+  /** Display size of the frame (rotation already applied), 0 when unknown. */
+  val width: Int = 0,
+  val height: Int = 0,
+  /** Rotation the compositor has to apply to the decoded frame (the decoder reports it in the container). */
+  val rotationDegrees: Int = 0
+)
+
+/**
  * Bridges the app's per-frame composition into the shader-based transition engine
  * (`com.ahstudio.transition`). It receives two already-normalised, viewport-sized 2D textures
  * (clip A = outgoing, clip B = incoming) and renders the transition into [outputFbo].

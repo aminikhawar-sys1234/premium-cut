@@ -179,12 +179,16 @@ object MediaPersistenceManager {
     timeline: com.example.domain.model.Timeline
   ): com.example.domain.model.Timeline = withContext(Dispatchers.IO) {
     val hydrated = MediaPlayableUri.hydrateTimeline(context, timeline)
-    val videos = hydrated.videoClips.map { clip ->
-      clip.copy(uri = persistMedia(context, clip.uri))
+    fun persistClip(clip: com.example.domain.model.VideoClip): com.example.domain.model.VideoClip {
+      val withUri = clip.copy(uri = persistMedia(context, clip.uri))
+      val settings = withUri.chromaKey ?: return withUri
+      val bg = settings.backgroundUri
+      if (bg.isNullOrBlank()) return withUri
+      // A clip that keys over its own imported background keeps that media alive across app restarts.
+      return withUri.copy(chromaKey = settings.copy(backgroundUri = persistMedia(context, bg)))
     }
-    val overlays = hydrated.overlayClips.map { clip ->
-      clip.copy(uri = persistMedia(context, clip.uri))
-    }
+    val videos = hydrated.videoClips.map(::persistClip)
+    val overlays = hydrated.overlayClips.map(::persistClip)
     val audios = hydrated.audioClips.map { clip ->
       clip.copy(uri = persistMedia(context, clip.uri))
     }

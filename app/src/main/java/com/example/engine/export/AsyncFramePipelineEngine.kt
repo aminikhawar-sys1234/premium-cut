@@ -18,9 +18,11 @@ import android.os.HandlerThread
 import android.util.Log
 import android.view.Surface
 import com.example.domain.model.*
+import com.example.engine.composition.ChromaKeyResolver
 import com.example.engine.composition.CompositionRenderGraph
 import com.example.engine.composition.VideoCompositionEngine
 import com.example.engine.composition.graph.SharedCompositionGraph
+import com.example.engine.composition.gpu.ChromaBackgroundFrame
 import com.example.engine.composition.gpu.EglCore
 import com.example.engine.composition.gpu.GpuCompositionRenderer
 import com.example.engine.composition.gpu.HardwareVideoTextureSource
@@ -174,6 +176,12 @@ private class HardwareClipDecoder(
   fun updateTexImageOnGl() {
     textureSource.updateTexImage()
   }
+
+  /** Decoded track duration in microseconds (0 when unknown); used to loop chroma background videos. */
+  val durationUs: Long get() = textureSource.durationUs
+  val effectiveWidth: Int get() = textureSource.effectiveWidth
+  val effectiveHeight: Int get() = textureSource.effectiveHeight
+  val rotationDegrees: Int get() = textureSource.rotationDegrees
 
   fun release() {
     textureSource.release()
@@ -472,15 +480,19 @@ class AsyncFramePipelineEngine(private val context: Context) {
     val imageTextures = mutableMapOf<String, Int>()
 
     try {
-      // 1. Pre-load images (clamped to export resolution to avoid texture bloat)
+      // 1. Pre-load images (clamped to export resolution to avoid texture bloat). Chroma-key background
+      //    images are included: they are drawn every frame of the clip that keys over them.
+      val imageUris = LinkedHashSet<String>()
       for (clip in timeline.videoClips + timeline.overlayClips) {
-        if (!clip.isVideo && clip.uri.isNotBlank()) {
-          try {
-            val bmp = decodeSampledBitmap(context, clip.uri, exportWidth, exportHeight)
-            if (bmp != null) imageBitmaps[clip.uri] = bmp
-          } catch (e: Exception) {
-            Log.w(tag, "Failed to load image for ${clip.uri}", e)
-          }
+        if (!clip.isVideo && clip.uri.isNotBlank()) imageUris.add(clip.uri)
+      }
+      imageUris.addAll(ChromaKeyResolver.imageBackgroundUris(timeline))
+      for (uri in imageUris) {
+        try {
+          val bmp = decodeSampledBitmap(context, uri, exportWidth, exportHeight)
+          if (bmp != null) imageBitmaps[uri] = bmp
+        } catch (e: Exception) {
+          Log.w(tag, "Failed to load image for $uri", e)
         }
       }
 
@@ -801,6 +813,31 @@ class AsyncFramePipelineEngine(private val context: Context) {
               if (tr.clipAfter.isVideo) currentNeededClipIds.add(tr.clipAfter.id)
             }
 
+            // Chroma-key background: a video has to be decoded like any other layer, at the looped
+            // source time, so the export draws the same background picture the preview draws.
+            // Image / solid backgrounds are decoded and uploaded by the GPU renderer itself.
+            val frameChroma = ChromaKeyResolver.settingsFor(frame.activeClip, timeline.chromaKey)
+            val chromaBgClip = ChromaKeyResolver.backgroundClip(frameChroma)
+            var chromaBackgroundFrame: ChromaBackgroundFrame? = null
+            if (chromaBgClip != null && chromaBgClip.isVideo) {
+              currentNeededClipIds.add(chromaBgClip.id)
+              val loopMs = (decoders[chromaBgClip.id]?.durationUs ?: 0L) / 1000L
+              val chromaSrcMs = ChromaKeyResolver.backgroundSourceMs(frameChroma, timelinePosMs, loopMs)
+              val bgDec = decodeClipFrame(chromaBgClip, chromaSrcMs, currentNeededClipIds)
+              if (bgDec != null) {
+                chromaBackgroundFrame = ChromaBackgroundFrame(
+                  textureId = bgDec.textureId,
+                  isOes = true,
+                  texMatrix = bgDec.transformMatrix.copyOf(),
+                  width = bgDec.effectiveWidth,
+                  height = bgDec.effectiveHeight,
+                  rotationDegrees = bgDec.rotationDegrees
+                )
+              } else {
+                Log.w(tag, "Chroma-key background video could not be decoded at ${chromaSrcMs}ms; keying to transparency for this frame")
+              }
+            }
+
             val decoded = HashMap<String, CompositionRenderGraph.ResolvedLayer>()
             fun rememberDecoded(clip: VideoClip, dec: HardwareClipDecoder) {
               if (dec.textureId == 0 || clip.id in decoded) return
@@ -874,7 +911,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
               adjustments = frame.activeClip?.adjustments ?: timeline.adjustments,
               filter = frame.activeClip?.filter ?: timeline.filter,
               chromaKey = timeline.chromaKey,
-              presentation = CompositionRenderGraph.FramePresentation.export(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER)
+              presentation = CompositionRenderGraph.FramePresentation.export(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER),
+              chromaBackgroundFrame = chromaBackgroundFrame
             )
             // Submit GPU work without a full GPU/CPU stall. eglSwapBuffers already publishes
             // the frame to the encoder; glFinish serialized every frame and made long exports

@@ -124,9 +124,15 @@ object MediaPlayableUri {
     }
   }
 
-  /** Rewrites every clip URI that already has a local file to a stable `file://` form. */
+  /**
+   * Rewrites every clip URI that already has a local file to a stable `file://` form, including the
+   * per-clip chroma-key background media (a clip can key over its own imported image or video).
+   */
   fun hydrateTimeline(context: Context, timeline: Timeline): Timeline {
-    fun video(clip: VideoClip) = clip.copy(uri = resolvePlayableString(context, clip.uri))
+    fun video(clip: VideoClip): VideoClip {
+      val withUri = clip.copy(uri = resolvePlayableString(context, clip.uri))
+      return withChromaBackground(context, withUri)
+    }
     fun audio(clip: AudioClip) = clip.copy(uri = resolvePlayableString(context, clip.uri))
     val bg = timeline.chromaKey.backgroundUri
     val hydratedBg = if (bg.isNullOrBlank()) bg else resolvePlayableString(context, bg)
@@ -138,19 +144,34 @@ object MediaPlayableUri {
     )
   }
 
+  private fun withChromaBackground(context: Context, clip: VideoClip): VideoClip {
+    val settings = clip.chromaKey ?: return clip
+    val bg = settings.backgroundUri
+    if (bg.isNullOrBlank()) return clip
+    return clip.copy(chromaKey = settings.copy(backgroundUri = resolvePlayableString(context, bg)))
+  }
+
   fun hasUriChanges(before: Timeline, after: Timeline): Boolean {
     if (before.chromaKey.backgroundUri != after.chromaKey.backgroundUri) return true
+    if (clipsChanged(before.videoClips, after.videoClips)) return true
+    if (clipsChanged(before.overlayClips, after.overlayClips)) return true
     if (before.videoClips.size != after.videoClips.size) return true
     if (before.overlayClips.size != after.overlayClips.size) return true
     if (before.audioClips.size != after.audioClips.size) return true
-    before.videoClips.forEachIndexed { i, clip ->
-      if (clip.uri != after.videoClips[i].uri) return true
-    }
-    before.overlayClips.forEachIndexed { i, clip ->
-      if (clip.uri != after.overlayClips[i].uri) return true
-    }
+
     before.audioClips.forEachIndexed { i, clip ->
       if (clip.uri != after.audioClips[i].uri) return true
+    }
+    return false
+  }
+
+  /** True when a clip list's playable URIs (or their chroma-key background) changed. */
+  private fun clipsChanged(before: List<VideoClip>, after: List<VideoClip>): Boolean {
+    if (before.size != after.size) return true
+    before.forEachIndexed { i, clip ->
+      val other = after[i]
+      if (clip.uri != other.uri) return true
+      if (clip.chromaKey?.backgroundUri != other.chromaKey?.backgroundUri) return true
     }
     return false
   }

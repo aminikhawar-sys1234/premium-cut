@@ -272,7 +272,9 @@ class SubjectCutoutStage {
 
   private fun noteFailure() {
     if (consecutiveFailures.incrementAndGet() >= MAX_FAILURES) {
-      SubjectCutoutRegistry.setStatus(CutoutStatus.UNAVAILABLE)
+      // Report the real reason (model missing, timeout, decode failure) so the panel can tell the user
+      // what to do instead of only greying the switch out.
+      SubjectCutoutRegistry.setStatus(CutoutStatus.UNAVAILABLE, SubjectMaskWorker.lastFailure)
     }
   }
 

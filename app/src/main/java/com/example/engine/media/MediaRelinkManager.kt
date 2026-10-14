@@ -11,6 +11,9 @@ import java.io.File
 
 object MediaRelinkManager {
 
+  /** Suffix that turns a clip id into the missing-media id of that clip's chroma background. */
+  private const val CHROMA_BACKGROUND_SUFFIX = "::chroma_background"
+
   /**
    * Verifies whether a given URI or file path is currently accessible on the device.
    */
@@ -245,8 +248,29 @@ object MediaRelinkManager {
       }
     }
 
+    // Per-clip chroma-key backgrounds (a clip can key over its own imported image / video).
+    (timeline.videoClips + timeline.overlayClips).forEach { clip ->
+      val settings = clip.chromaKey ?: return@forEach
+      if (settings.backgroundType != "Image" && settings.backgroundType != "Video") return@forEach
+      val uri = settings.backgroundUri
+      if (uri.isNullOrBlank() || isMediaAccessible(context, uri)) return@forEach
+      missingList.add(
+        MissingMediaItem(
+          clipId = chromaBackgroundClipId(clip.id),
+          clipName = "${clip.name} - Chroma Background",
+          currentUri = uri,
+          originalFilename = resolveFileName(context, uri),
+          mediaType = if (settings.backgroundType == "Video") "VIDEO" else "IMAGE",
+          trackType = "Chroma Background"
+        )
+      )
+    }
+
     return missingList
   }
+
+  /** Missing-media id of the chroma background that belongs to one clip. */
+  fun chromaBackgroundClipId(clipId: String): String = "$clipId$CHROMA_BACKGROUND_SUFFIX"
 
   /**
    * Relinks a specific missing media item to a newly provided URI and updates metadata.
@@ -302,10 +326,24 @@ object MediaRelinkManager {
     }
     updated = updated.copy(audioClips = newAudioClips)
 
-    // Check chroma background
+    // Check chroma background (project default)
     if (clipId == "chroma_background") {
       updated = updated.copy(
         chromaKey = updated.chromaKey.copy(backgroundUri = newUri)
+      )
+    }
+
+    // Per-clip chroma background: the item id carries the clip it belongs to.
+    val ownerClipId = clipId.substringAfter("$CHROMA_BACKGROUND_SUFFIX", "").ifEmpty { null }
+    if (ownerClipId != null) {
+      fun relink(clip: com.example.domain.model.VideoClip): com.example.domain.model.VideoClip {
+        val settings = clip.chromaKey ?: return clip
+        if (clip.id != ownerClipId) return clip
+        return clip.copy(chromaKey = settings.copy(backgroundUri = newUri))
+      }
+      updated = updated.copy(
+        videoClips = updated.videoClips.map(::relink),
+        overlayClips = updated.overlayClips.map(::relink)
       )
     }
 

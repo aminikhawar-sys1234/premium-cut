@@ -66,6 +66,11 @@ object SubjectCutoutRegistry {
   private val _status = MutableStateFlow(CutoutStatus.IDLE)
   val status: StateFlow<CutoutStatus> = _status.asStateFlow()
 
+  private val _statusDetail = MutableStateFlow<String?>(null)
+
+  /** Why the segmenter is [CutoutStatus.UNAVAILABLE], in words the panel can show. Null otherwise. */
+  val statusDetail: StateFlow<String?> = _statusDetail.asStateFlow()
+
   /** Invoked off the GL thread with a clip id when a fresh mask is ready (paused preview should re-render). */
   @Volatile var onMaskReady: ((String) -> Unit)? = null
 
@@ -82,17 +87,22 @@ object SubjectCutoutRegistry {
 
   fun isActive(clipId: String): Boolean = params.containsKey(clipId)
 
-  fun setStatus(s: CutoutStatus) { _status.value = s }
+  fun setStatus(s: CutoutStatus, detail: String? = null) {
+    _statusDetail.value = if (s == CutoutStatus.UNAVAILABLE) detail else null
+    _status.value = s
+  }
 
   /** Lets the panel's Retry button clear an UNAVAILABLE state. */
   fun retry() {
     epoch++
+    _statusDetail.value = null
     _status.value = CutoutStatus.IDLE
   }
 
   fun clear() {
     params = emptyMap()
     epoch++
+    _statusDetail.value = null
     _status.value = CutoutStatus.IDLE
     onMaskReady = null
   }

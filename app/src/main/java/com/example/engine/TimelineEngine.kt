@@ -2227,10 +2227,78 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     return true
   }
 
+  /**
+   * Project-wide chroma default. Used for clips that carry no setting of their own and by the panel's
+   * "apply to all clips" action; a clip's own [VideoClip.chromaKey] wins over it.
+   */
   fun updateChromaKey(chromaKey: ChromaKeySettings) {
     withStateLock {
       recordHistory()
       _timeline.value = _timeline.value.copy(chromaKey = chromaKey)
+    }
+  }
+
+  /**
+   * Writes the chroma key of ONE clip. The value lives on the clip, so it saves, undoes and exports with the
+   * timeline and never leaks onto the other layers. Coalesced history keeps a slider drag one undo step.
+   * Returns false when no clip matches [clipId].
+   */
+  fun updateClipChromaKey(clipId: String, chromaKey: ChromaKeySettings): Boolean {
+    val tl = _timeline.value
+    if (tl.videoClips.none { it.id == clipId } && tl.overlayClips.none { it.id == clipId }) return false
+    if ((tl.videoClips + tl.overlayClips).firstOrNull { it.id == clipId }?.chromaKey == chromaKey) return true
+    withStateLock {
+      recordHistoryCoalesced("clip_chroma:$clipId")
+      val update: (VideoClip) -> VideoClip = { c -> if (c.id == clipId) c.copy(chromaKey = chromaKey) else c }
+      _timeline.value = tl.copy(
+        videoClips = tl.videoClips.map(update),
+        overlayClips = tl.overlayClips.map(update)
+      )
+    }
+    return true
+  }
+
+  /** Removes a clip's own chroma key so it falls back to the project default again (undoable). */
+  fun clearClipChromaKey(clipId: String): Boolean {
+    val tl = _timeline.value
+    if ((tl.videoClips + tl.overlayClips).firstOrNull { it.id == clipId }?.chromaKey == null) return false
+    withStateLock {
+      recordHistory()
+      val update: (VideoClip) -> VideoClip = { c -> if (c.id == clipId) c.copy(chromaKey = null) else c }
+      _timeline.value = tl.copy(
+        videoClips = tl.videoClips.map(update),
+        overlayClips = tl.overlayClips.map(update)
+      )
+    }
+    return true
+  }
+
+  /**
+   * Copies a chroma setting onto every video and overlay clip (the panel's "apply to all clips"), and keeps it
+   * as the project default so clips added later are keyed the same way. One undo step.
+   */
+  fun applyChromaKeyToAllClips(chromaKey: ChromaKeySettings) {
+    val tl = _timeline.value
+    withStateLock {
+      recordHistory()
+      _timeline.value = tl.copy(
+        chromaKey = chromaKey,
+        videoClips = tl.videoClips.map { it.copy(chromaKey = chromaKey) },
+        overlayClips = tl.overlayClips.map { it.copy(chromaKey = chromaKey) }
+      )
+    }
+  }
+
+  /** Clears every per-clip chroma key and the project default, for the panel's reset action. */
+  fun resetChromaKeys() {
+    val tl = _timeline.value
+    withStateLock {
+      recordHistory()
+      _timeline.value = tl.copy(
+        chromaKey = ChromaKeySettings(),
+        videoClips = tl.videoClips.map { it.copy(chromaKey = null) },
+        overlayClips = tl.overlayClips.map { it.copy(chromaKey = null) }
+      )
     }
   }
 

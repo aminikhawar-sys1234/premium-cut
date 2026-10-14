@@ -68,6 +68,9 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
   val effectiveHeight: Int get() = if (rotationDegrees == 90 || rotationDegrees == 270) width else height
 
   var frameRate: Float = 30f
+
+  /** Duration of the video track in microseconds (0 when the container does not declare one). */
+  var durationUs: Long = 0L
     private set
   var isHardwareAccelerated: Boolean = true
     private set
@@ -152,6 +155,12 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       extractor = ex
 
       // 3. Extract dimensions and rotation metadata
+      // Track duration only. MediaExtractor.durationUs() needs API 28 while this app runs on API 24+.
+      durationUs = if (trackFormat.containsKey(MediaFormat.KEY_DURATION)) {
+        runCatching { trackFormat.getLong(MediaFormat.KEY_DURATION) }.getOrDefault(0L)
+      } else {
+        0L
+      }
       val rawW = trackFormat.getInteger(MediaFormat.KEY_WIDTH).coerceAtLeast(1)
       val rawH = trackFormat.getInteger(MediaFormat.KEY_HEIGHT).coerceAtLeast(1)
       val meta = MediaMetadataHelper.extractMetadata(context, clip.uri)

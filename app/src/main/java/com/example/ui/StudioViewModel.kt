@@ -302,7 +302,11 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     viewModelScope.launch {
       var previousTimeline: Timeline? = null
       timelineEngine.timeline.collectLatest { timeline ->
-        val lookOnly = previousTimeline?.let { PreviewLookPolicy.isLookOnlyChange(it, timeline) } == true
+        // While the GPU compositor is the preview, a chroma-key edit only changes what the shader draws
+        // from the (fresh) timeline, so it must not rebuild/restart the player on every slider tick.
+        val compositorActive = playbackEngine.compositorActive.value
+        val lookOnly = previousTimeline
+          ?.let { PreviewLookPolicy.isLookOnlyChange(it, timeline, compositorActive) } == true
         previousTimeline = timeline
         com.example.engine.color.ColorEngineHost.syncFromTimeline(timeline.videoClips)
         if (!lookOnly) {
@@ -2549,6 +2553,46 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val pos = timelineEngine.currentPositionMs.value
     return tl.videoClips.find { pos >= it.timelineStartMs && pos < it.timelineStartMs + it.durationMs }
       ?: tl.videoClips.firstOrNull()
+  }
+
+  /**
+   * The clip the Chroma Key panel edits: only an explicit selection counts. With no selection the panel
+   * edits the project default instead (see [setChromaKeyFor]), so a slider never silently keys whichever
+   * clip the playhead happens to sit on.
+   */
+  fun getSelectedChromaClip(): VideoClip? {
+    val tl = timelineEngine.timeline.value
+    val selectedId = timelineEngine.selectedClipIds.value.firstOrNull()
+      ?: (timelineEngine.selectedElement.value as? SelectedTrackElement.Overlay)?.clipId
+      ?: (timelineEngine.selectedElement.value as? SelectedTrackElement.Video)?.clipId
+    (tl.videoClips + tl.overlayClips).find { it.id == selectedId }?.let { return it }
+    // No visual clip selected (or a text / sticker is selected): key the picture the playhead shows.
+    val pos = timelineEngine.currentPositionMs.value
+    return tl.videoClips.find { pos >= it.timelineStartMs && pos < it.timelineStartMs + it.durationMs }
+  }
+
+  /**
+   * Writes a chroma key. With a clip it is stored on that clip (so it saves, undoes and exports with the
+   * timeline and never keys another layer); with no clip it becomes the project default that every clip
+   * without its own key inherits.
+   */
+  fun setChromaKeyFor(clipId: String?, settings: ChromaKeySettings) {
+    if (clipId == null) timelineEngine.updateChromaKey(settings)
+    else timelineEngine.updateClipChromaKey(clipId, settings)
+  }
+
+  /** Removes a clip's own chroma key (falling back to the project default), or resets the default itself. */
+  fun resetChromaKey(clipId: String?) {
+    if (clipId == null) {
+      timelineEngine.updateChromaKey(ChromaKeySettings())
+    } else if (!timelineEngine.clearClipChromaKey(clipId)) {
+      timelineEngine.updateClipChromaKey(clipId, ChromaKeySettings())
+    }
+  }
+
+  /** Copies the current key onto every clip and keeps it as the project default. One undo step. */
+  fun applyChromaKeyToAllClips(settings: ChromaKeySettings) {
+    timelineEngine.applyChromaKeyToAllClips(settings)
   }
 
   /**
