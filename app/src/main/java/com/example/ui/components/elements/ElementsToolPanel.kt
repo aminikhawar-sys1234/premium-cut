@@ -58,6 +58,11 @@ fun ElementsToolPanel(
   var lastAddedTitle by remember { mutableStateOf<String?>(null) }
 
   val categories = remember { ElementCategory.values() }
+  // Firebase asset library; empty until it syncs, and the grid falls back to the bundled
+  // catalog on its own while that happens.
+  val remoteElements by FirebaseElementsRepository.remoteElements.collectAsState()
+  val context = LocalContext.current
+  LaunchedEffect(Unit) { FirebaseElementsRepository.ensureLoaded(context) }
 
   val displayedElements = remember(searchQuery, selectedCategory) {
     if (searchQuery.isNotBlank()) {

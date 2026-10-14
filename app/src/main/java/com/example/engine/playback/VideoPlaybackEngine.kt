@@ -27,6 +27,7 @@ import com.example.engine.controller.PreviewMixPolicy
 import com.example.engine.color.ColorEngineHost
 import com.example.engine.effects.media3.ColorGradingGlEffect
 import com.example.engine.effects.media3.ColorGradingSnapshot
+import com.example.engine.effects.media3.LivePreviewLook
 import com.example.engine.effects.media3.LutStripBaker
 import com.example.engine.effects.media3.Media3EffectPipeline
 import com.example.engine.effects.media3.PreviewEffectApplyPolicy
@@ -79,6 +80,12 @@ class VideoPlaybackEngine(
     private const val TAG = "VideoPlaybackEngine"
     private const val UI_TICK_MS = 16L
     private const val PAUSED_SEEK_EPSILON_MS = 30L
+    /**
+     * Minimum gap between two repaints of the held (paused) frame. Slider drags emit far
+     * faster than this, so the trailing repaint in [requestPausedFrameRefresh] guarantees
+     * the LAST value still reaches the screen instead of being swallowed by the throttle.
+     */
+    private const val PAUSED_REPAINT_INTERVAL_MS = 40L
   }
 
   private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
@@ -179,9 +186,13 @@ class VideoPlaybackEngine(
   @Volatile private var applyingEffects = false
   @Volatile private var recreatingPlayer = false
   @Volatile private var deferredLooksPending = false
+  /** True while the device could only run the identity passthrough (no grading node available). */
+  @Volatile private var lookFallbackActive = false
   private var lastPresentAtElapsedMs = 0L
   private var lastPresentPosMs = -1L
   private var spatialLookJob: Job? = null
+  /** Trailing repaint of the held frame so a fast slider drag cannot drop its final value. */
+  private var pausedRepaintJob: Job? = null
 
   private val previewPlayerListener = object : Player.Listener {
     override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -366,31 +377,99 @@ class VideoPlaybackEngine(
    * the playhead is still on a different clip (filter tap before seek).
    */
   /**
+   * Live Filters / Adjust / Video Quality entry point.
+   *
+   * Writes [look] into the in-memory timeline, pushes the new values onto the resident
+   * ColorGrading node **of the clip the look belongs to** (not merely the clip under the
+   * playhead), and repaints the held frame so the change is on screen on the very next
+   * presented frame. Never rebuilds ExoPlayer, drops the decoder or seeks away.
+   */
+  fun publishLiveLook(look: LivePreviewLook) {
+    replaceTimelineLooks(
+      timeline = PreviewLookPolicy.applyLookToTimeline(currentTimeline, look),
+      look = look
+    )
+  }
+
+  /**
    * Updates the in-memory timeline look without reloading decoders or seeking.
    * Filter / adjust / quality values publish onto the resident ColorGrading
    * node. LUT / VFX graph changes are latest-wins coalesced so slider ticks
    * cannot ANR or call setVideoEffects.
+   *
+   * @param look when non-null, the look is published for the clip it targets instead of
+   *   being inferred from the playhead. A look applied to a clip that is not on screen must
+   *   still grade that clip's node, otherwise the edit looks like it did nothing.
    */
-  fun replaceTimelineLooks(timeline: Timeline) {
+  fun replaceTimelineLooks(timeline: Timeline, look: LivePreviewLook? = null) {
     currentTimeline = timeline
     _activeClip.value = findClipAt(currentPosMs)
     if (_compositorActive.value) {
       compositor?.updateTimeline(timeline)
+      // The GPU compositor grades every layer from the timeline, so a new generation is
+      // enough — but ask for the redraw explicitly so a paused preview repaints as well.
+      compositor?.requestRender()
       return
     }
-    publishLiveGrading(_activeClip.value)
-    val graphSig = PreviewFilterEffects.media3GraphSignature(_activeClip.value, currentTimeline)
+    publishLookToBoundNodes(look)
+    val targetClipId = look?.clipId
+    val clip = targetClipId?.let { id -> currentTimeline.videoClips.find { it.id == id } } ?: _activeClip.value
+    val graphSig = PreviewFilterEffects.media3GraphSignature(clip, currentTimeline)
     when {
-      boundMainGrading == null -> applyActiveLookToPlayers(force = true)
+      boundMainGrading == null && !lookFallbackActive ->
+        applyActiveLookToPlayers(force = true, preferClipId = targetClipId)
       PreviewEffectApplyPolicy.shouldRebuildGraph(lastMedia3GraphSignature, graphSig, force = false) ->
-        scheduleSpatialLook()
+        scheduleSpatialLook(preferClipId = targetClipId)
       else -> requestPausedFrameRefresh()
     }
   }
 
-  private fun requestPausedFrameRefresh() {
+  /**
+   * Pushes the latest look values onto every resident ColorGrading node they apply to.
+   *
+   * A look published for a clip id grades that clip's node: the main-track node for a main
+   * clip, the overlay node for a PiP clip. Publishing the playhead clip instead was the bug
+   * that made Adjust / Video Quality edits on a selected-but-offscreen clip invisible.
+   */
+  private fun publishLookToBoundNodes(look: LivePreviewLook?) {
+    val tl = currentTimeline
+    val targetId = look?.clipId
+    if (targetId != null) {
+      val overlay = tl.overlayClips.find { it.id == targetId }
+      if (overlay != null) {
+        boundOverlayGrading[overlay.id]?.publishLive(gradingSnapshotFor(overlay))
+        return
+      }
+    }
+    val mainClip = targetId?.let { id -> tl.videoClips.find { it.id == id } } ?: _activeClip.value
+    publishLiveGrading(mainClip)
+  }
+
+  private fun gradingSnapshotFor(clip: VideoClip?): ColorGradingSnapshot = ColorGradingSnapshot.from(
+    clip.effectiveAdjustments(currentTimeline),
+    PreviewFilterEffects.effectiveFilter(clip, currentTimeline)
+  )
+
+  /**
+   * Repaints the held (paused) frame so a freshly published look is visible.
+   *
+   * Slider drags emit faster than the repaint rate. The throttle must therefore **coalesce**
+   * rather than drop: a trailing repaint is scheduled for the end of the current window so
+   * the slider's final value is always the one on screen.
+   */
+  private fun requestPausedFrameRefresh(force: Boolean = false) {
     if (engineController.timelineSyncManager.isPlaying) return
-    presentCurrentFrame(rebindSurface = false)
+    val elapsed = SystemClock.elapsedRealtime() - lastPresentAtElapsedMs
+    if (force || elapsed >= PAUSED_REPAINT_INTERVAL_MS) {
+      presentCurrentFrame(rebindSurface = false, force = true)
+      return
+    }
+    if (pausedRepaintJob != null) return
+    pausedRepaintJob = scope.launch {
+      delay(PAUSED_REPAINT_INTERVAL_MS - elapsed)
+      pausedRepaintJob = null
+      presentCurrentFrame(rebindSurface = false, force = true)
+    }
   }
 
   private fun scheduleSpatialLook(preferClipId: String? = null) {
@@ -401,17 +480,15 @@ class VideoPlaybackEngine(
       val beforeGraph = lastMedia3GraphSignature
       applyActiveLookToPlayers(force = false, preferClipId = preferClipId)
       if (!engineController.timelineSyncManager.isPlaying) {
-        presentCurrentFrame(rebindSurface = lastMedia3GraphSignature != beforeGraph)
+        // force: the LUT / VFX rebuild has to repaint the held frame even when a previous
+        // repaint happened inside the throttle window, or the new look stays invisible.
+        presentCurrentFrame(rebindSurface = lastMedia3GraphSignature != beforeGraph, force = true)
       }
     }
   }
 
   private fun publishLiveGrading(clip: VideoClip?) {
-    val snapshot = ColorGradingSnapshot.from(
-      clip.effectiveAdjustments(currentTimeline),
-      PreviewFilterEffects.effectiveFilter(clip, currentTimeline)
-    )
-    boundMainGrading?.publishLive(snapshot)
+    boundMainGrading?.publishLive(gradingSnapshotFor(clip))
   }
 
   fun applyActiveLookToPlayers(force: Boolean = false, preferClipId: String? = null) {
@@ -433,6 +510,10 @@ class VideoPlaybackEngine(
     if (!graphChanged) {
       lastMedia3Signature = valueSig
       applyOverlayLooks(force)
+      // The resident shader already has the new values; ExoPlayer still has to draw one more
+      // frame for them to be visible. Without this the whole call was a no-op while paused
+      // (refreshCurrentFrame / LUT taps updated uniforms nobody ever rendered again).
+      requestPausedFrameRefresh()
       return
     }
 
@@ -444,12 +525,7 @@ class VideoPlaybackEngine(
     }
     val effects = PreviewFilterEffects.effectsFor(clip, currentTimeline, lutBmp, lut?.second ?: 1f)
     val grading = effects.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
-    grading?.publishLive(
-      ColorGradingSnapshot.from(
-        clip.effectiveAdjustments(currentTimeline),
-        PreviewFilterEffects.effectiveFilter(clip, currentTimeline)
-      )
-    )
+    grading?.publishLive(gradingSnapshotFor(clip))
     boundMainGrading = grading
 
     val surfaceBound = PreviewVideoSurfaceRegistry.hasBoundSurface(player)
@@ -473,6 +549,7 @@ class VideoPlaybackEngine(
       lastMedia3Signature = valueSig
       Log.d(TAG, "Skipped empty setVideoEffects (graph=$graphSig)")
       applyOverlayLooks(force)
+      requestPausedFrameRefresh()
       return
     }
 
@@ -489,6 +566,7 @@ class VideoPlaybackEngine(
       Media3EffectPipeline.ApplyResult.APPLIED -> {
         lastMedia3GraphSignature = graphSig
         lastMedia3Signature = valueSig
+        lookFallbackActive = false
         PreviewVideoSurfaceRegistry.rebindCurrent(player)
         PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
         restorePlaybackAfterGraphChange(playWhenReady, volume)
@@ -502,6 +580,9 @@ class VideoPlaybackEngine(
         lastMedia3GraphSignature = graphSig
         lastMedia3Signature = valueSig
         boundMainGrading = null
+        // The device cannot run the grading graph. Stop trying to rebuild it on every slider
+        // tick: that only swings setVideoEffects repeatedly and never restores the look.
+        lookFallbackActive = true
         PreviewVideoSurfaceRegistry.rebindCurrent(player)
         PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
         restorePlaybackAfterGraphChange(playWhenReady, volume)
@@ -523,7 +604,7 @@ class VideoPlaybackEngine(
    * presents a picture. Required after surface recreation (editor reopen) and after
    * setVideoEffects, both of which otherwise leave a black or frozen preview.
    */
-  fun presentCurrentFrame(rebindSurface: Boolean = true) {
+  fun presentCurrentFrame(rebindSurface: Boolean = true, force: Boolean = false) {
     if (isTrimPreviewMode) return
     if (_compositorActive.value) {
       compositor?.requestRender()
@@ -532,7 +613,7 @@ class VideoPlaybackEngine(
     if (rebindSurface) PreviewVideoSurfaceRegistry.rebindCurrent(player)
     if (engineController.timelineSyncManager.isPlaying) return
     val now = SystemClock.elapsedRealtime()
-    if (now - lastPresentAtElapsedMs < 40L && lastPresentPosMs == currentPosMs) return
+    if (!force && now - lastPresentAtElapsedMs < PAUSED_REPAINT_INTERVAL_MS && lastPresentPosMs == currentPosMs) return
     lastPresentAtElapsedMs = now
     lastPresentPosMs = currentPosMs
     val clip = _activeClip.value ?: findClipAt(currentPosMs) ?: return
@@ -557,6 +638,7 @@ class VideoPlaybackEngine(
     lastMedia3GraphSignature = null
     lastPreviewFilterSignature = null
     boundMainGrading = null
+    lookFallbackActive = false
     try {
       if (player.playbackState == Player.STATE_IDLE && player.mediaItemCount > 0) {
         player.prepare()
@@ -672,6 +754,9 @@ class VideoPlaybackEngine(
   fun resetPlaybackSession() {
     spatialLookJob?.cancel()
     spatialLookJob = null
+    pausedRepaintJob?.cancel()
+    pausedRepaintJob = null
+    lookFallbackActive = false
     try { pause() } catch (_: Throwable) {}
     teardownCompositor()
     releaseOverlayPlayers()
@@ -1223,6 +1308,8 @@ class VideoPlaybackEngine(
       PreviewVideoSurfaceRegistry.onPlayerSurfaceBound = null
     }
     spatialLookJob?.cancel()
+    pausedRepaintJob?.cancel()
+    pausedRepaintJob = null
     trimPollJob?.cancel()
     scope.cancel()
     teardownCompositor()

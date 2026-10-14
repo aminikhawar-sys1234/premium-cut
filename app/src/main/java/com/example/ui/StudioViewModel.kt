@@ -448,6 +448,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   fun navigateTo(screen: AppScreen) {
     if (screen != AppScreen.EDITOR && screen != AppScreen.EXPORT) {
+      // Leaving the editor with the Filters sheet still open must not strand an uncommitted
+      // look: commit it and drop the live override (which also hides the preview HUD).
+      flushLiveLook()
       timelineEngine.pause()
       if (_currentScreen.value == AppScreen.EDITOR || _currentScreen.value == AppScreen.EXPORT) {
         try {
@@ -493,9 +496,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     _livePreviewLook.value = look
     if (playbackEngineDelegate.isInitialized()) {
       try {
-        playbackEngine.replaceTimelineLooks(
-          PreviewLookPolicy.applyLookToTimeline(timelineEngine.timeline.value, look)
-        )
+        // publishLiveLook (not replaceTimelineLooks): the engine has to grade the clip the
+        // look was applied to, then repaint the held frame. Publishing the playhead clip's
+        // look instead was why off-screen / selected-clip edits appeared to do nothing.
+        playbackEngine.publishLiveLook(look)
       } catch (t: Throwable) {
         android.util.Log.w("StudioViewModel", "Live look preview update failed", t)
       }
@@ -507,11 +511,20 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
+  /**
+   * Commits the pending look to the timeline and drops the live override.
+   *
+   * Clearing matters: [_livePreviewLook] also drives the on-preview "what is applied" HUD,
+   * which must disappear when the Filters / Adjust / Video Quality sheet closes. The committed
+   * timeline holds identical values, so the picture does not change.
+   */
   fun flushLiveLook() {
     persistLookJob?.cancel()
     persistLookJob = null
     commitLiveLook()
+    _livePreviewLook.value = null
   }
+
 
   private fun commitLiveLook() {
     val look = _livePreviewLook.value ?: return
@@ -544,6 +557,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       if (!playbackEngineDelegate.isInitialized()) return
       playbackEngine.replaceTimelineLooks(timelineEngine.timeline.value)
       playbackEngine.applyActiveLookToPlayers(force = false, preferClipId = preferClipId)
+      // LUT / VFX graph switches must repaint the held frame; applyActiveLookToPlayers only
+      // does that when the graph id changed, which a value-only LUT tweak never is.
+      playbackEngine.presentCurrentFrame(rebindSurface = false, force = true)
     } catch (t: Throwable) {
       android.util.Log.w("StudioViewModel", "Preview look refresh failed", t)
     }

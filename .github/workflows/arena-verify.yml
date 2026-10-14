@@ -1,0 +1,73 @@
+name: Arena verify (temporary)
+
+# TEMPORARY: compiles the Kotlin sources of this branch and posts the compiler
+# output back as a PR comment, because the sandbox that produced the change cannot
+# download GitHub Actions log archives. Delete this file once the fix is verified.
+
+on:
+  push:
+    branches:
+      - 'arena/**'
+  workflow_dispatch:
+
+jobs:
+  compile-and-report:
+    name: Compile Kotlin and report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+
+    env:
+      CMAKE_VERSION: '3.22.1'
+      NDK_VERSION: '28.2.13676358'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v5
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Make Gradle Wrapper executable
+        run: chmod +x gradlew
+
+      - name: Install Android SDK toolchain (CMake + NDK)
+        run: |
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" -type f -name sdkmanager | sort | tail -1)"
+          yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+          "$SDKMANAGER" --install "cmake;$CMAKE_VERSION" "ndk;$NDK_VERSION" || true
+
+      - name: Compile Kotlin sources
+        id: compile
+        run: |
+          set -o pipefail
+          ./gradlew compileDebugKotlin compileDebugUnitTestKotlin --continue --stacktrace 2>&1 | tail -400 > kotlin-build.log || true
+          echo "---- BEGIN COMPILER OUTPUT ----"
+          cat kotlin-build.log
+          echo "---- END COMPILER OUTPUT ----"
+
+      - name: Post the compiler output as a PR comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          {
+            echo "### Arena verify — Kotlin compile output"
+            echo
+            echo '```'
+            grep -E "^e: |^w: |error: |FAILURE:|BUILD (SUCCESSFUL|FAILED)|What went wrong|Could not|Unresolved" kotlin-build.log | head -120 || true
+            echo '```'
+          } > comment.md
+          cat comment.md
+          gh api -X POST repos/${{ github.repository }}/issues/51/comments -F body=@comment.md || true
