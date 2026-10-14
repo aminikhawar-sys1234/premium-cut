@@ -179,7 +179,7 @@ object MediaPersistenceManager {
     timeline: com.example.domain.model.Timeline
   ): com.example.domain.model.Timeline = withContext(Dispatchers.IO) {
     val hydrated = MediaPlayableUri.hydrateTimeline(context, timeline)
-    fun persistClip(clip: com.example.domain.model.VideoClip): com.example.domain.model.VideoClip {
+    suspend fun persistClip(clip: com.example.domain.model.VideoClip): com.example.domain.model.VideoClip {
       val withUri = clip.copy(uri = persistMedia(context, clip.uri))
       val settings = withUri.chromaKey ?: return withUri
       val bg = settings.backgroundUri

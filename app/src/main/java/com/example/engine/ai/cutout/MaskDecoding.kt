@@ -37,18 +37,21 @@ object MaskDecoding {
   }
 
   private fun fromByteBuffer(buffer: ByteBuffer, pixelCount: Int): ByteArray? {
-    val needed = pixelCount * 4L
-    if (buffer.capacity() >= needed) {
+    val capacity = buffer.capacity()
+    if (capacity >= pixelCount * 4) {
       // Documented layout: float confidence per pixel, in the buffer's own byte order.
-      val floats = buffer.rewind().asFloatBuffer()
+      // (No chained call on rewind(): its covariant return type is not guaranteed by every Kotlin/JDK
+      // combination the app is built with.)
+      buffer.rewind()
+      val floats: FloatBuffer = buffer.asFloatBuffer()
       val out = ByteArray(pixelCount)
       for (i in 0 until pixelCount) out[i] = toByte(floats.get())
       return out
     }
-    if (buffer.capacity() >= pixelCount) {
+    if (capacity >= pixelCount) {
       // Byte mask (0..255) - the layout some API levels expose.
-      val out = ByteArray(pixelCount)
       buffer.rewind()
+      val out = ByteArray(pixelCount)
       for (i in 0 until pixelCount) out[i] = buffer.get()
       return out
     }
