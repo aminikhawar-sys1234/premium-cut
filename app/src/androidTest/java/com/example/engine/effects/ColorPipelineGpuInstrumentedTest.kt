@@ -254,8 +254,10 @@ class ColorPipelineGpuInstrumentedTest {
         }
         if (name in spatialSliders) {
           LookVerificationReport.line(
-            "$name gpuDelta=%.4f maxPixelDelta=%.4f (neighbour/coordinate stage: measured on the GPU, " +
-              "not comparable with the single-pixel CPU reference)".format(delta, maxDelta)
+            (
+              "$name gpuDelta=%.4f maxPixelDelta=%.4f (neighbour/coordinate stage: measured on " +
+                "the GPU, not comparable with the single-pixel CPU reference)"
+              ).format(delta, maxDelta)
           )
           continue
         }
