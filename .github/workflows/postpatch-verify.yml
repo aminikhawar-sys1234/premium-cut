@@ -78,19 +78,38 @@ jobs:
           ./gradlew --version
 
       - name: Compile Kotlin (debug)
-        run: ./gradlew :app:compileDebugKotlin --stacktrace
+        run: |
+          set -o pipefail
+          mkdir -p gradle-logs
+          ./gradlew :app:compileDebugKotlin --stacktrace 2>&1 | tee gradle-logs/01-compile-debug-kotlin.log
 
       - name: Debug unit tests
-        run: ./gradlew :app:testDebugUnitTest --stacktrace
+        if: always()
+        run: |
+          set -o pipefail
+          mkdir -p gradle-logs
+          ./gradlew :app:testDebugUnitTest --stacktrace 2>&1 | tee gradle-logs/02-test-debug-unit.log
 
       - name: All unit tests (every variant)
-        run: ./gradlew test --stacktrace
+        if: always()
+        run: |
+          set -o pipefail
+          mkdir -p gradle-logs
+          ./gradlew test --stacktrace 2>&1 | tee gradle-logs/03-test-all-variants.log
 
       - name: Compile instrumented tests (androidTest APK)
-        run: ./gradlew :app:assembleDebugAndroidTest --stacktrace
+        if: always()
+        run: |
+          set -o pipefail
+          mkdir -p gradle-logs
+          ./gradlew :app:assembleDebugAndroidTest --stacktrace 2>&1 | tee gradle-logs/04-assemble-androidtest.log
 
       - name: Android Lint
-        run: ./gradlew :app:lintDebug --stacktrace
+        if: always()
+        run: |
+          set -o pipefail
+          mkdir -p gradle-logs
+          ./gradlew :app:lintDebug --stacktrace 2>&1 | tee gradle-logs/05-lint-debug.log
 
       - name: Summarise unit-test results
         if: always()
@@ -127,6 +146,20 @@ jobs:
               out += [f"- `{f}`" for f in failures[:40]]
           else:
               out += ["", "No failing unit test."]
+
+          # Runner logs are not reachable from the reviewing workstation, so the Gradle output of a
+          # failing step travels back inside this comment.
+          import glob as _glob
+          for log_path in sorted(_glob.glob("gradle-logs/*.log")):
+              text = open(log_path, errors="replace").read()
+              if "BUILD FAILED" not in text and "FAILURE:" not in text:
+                  continue
+              out += ["", f"### Gradle output — `{os.path.basename(log_path)}`", ""]
+              errors = [l for l in text.splitlines() if l.startswith("e: ") or "error:" in l][:60]
+              if errors:
+                  out += ["```", "\n".join(errors), "```", ""]
+              tail = text.splitlines()[-120:]
+              out += ["```", "\n".join(tail), "```"]
           open("build-report.md", "w").write("\n".join(out) + "\n")
           PY
 
@@ -137,6 +170,7 @@ jobs:
           name: automated-android
           path: |
             build-report.md
+            gradle-logs
             app/build/test-results
             app/build/reports/tests
           if-no-files-found: ignore
