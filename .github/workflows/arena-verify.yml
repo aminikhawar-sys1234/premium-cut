@@ -5,6 +5,9 @@ name: Arena verify (temporary)
 # download GitHub Actions log archives. Delete this file once the fix is verified.
 
 on:
+  push:
+    branches:
+      - 'arena/**'
   workflow_dispatch:
 
 jobs:
