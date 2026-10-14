@@ -87,17 +87,24 @@ class ExportValidatorInstrumentedTest {
   }
 
   @Test fun fileWithoutMoovRejectedAsMuxerFailure() {
-    // Keep only ftyp + mdat: what a muxer that crashed before stop() leaves behind.
+    // Keep ftyp + mdat and drop the moov box: what a muxer that crashed before stop() leaves
+    // behind. The moov box is removed by offset instead of truncating at it - when the muxer writes
+    // moov early, truncating leaves a ~24 byte file, which the validator reports as FILE_TOO_SMALL
+    // (MIN_FILE_BYTES is 4096) before it ever inspects the boxes. That made this test depend on the
+    // device's muxer layout rather than on the behaviour it documents.
     val bytes = mp4 { TestMp4Factory.write(it) }.readBytes()
-    var off = 0; var end = bytes.size
+    var off = 0; var moovStart = -1; var moovSize = 0
     while (off + 8 <= bytes.size) {
       val size = ((bytes[off].toInt() and 0xFF) shl 24) or ((bytes[off + 1].toInt() and 0xFF) shl 16) or
         ((bytes[off + 2].toInt() and 0xFF) shl 8) or (bytes[off + 3].toInt() and 0xFF)
-      if (String(bytes, off + 4, 4, Charsets.ISO_8859_1) == "moov") { end = off; break }
+      if (String(bytes, off + 4, 4, Charsets.ISO_8859_1) == "moov") { moovStart = off; moovSize = size; break }
       if (size <= 0) break
       off += size
     }
-    val f = File(dir, "nomoov.mp4").also { it.writeBytes(bytes.copyOf(end)) }
+    assertTrue("the muxed source has no moov box", moovStart >= 0)
+    val stripped = bytes.copyOfRange(0, moovStart) + bytes.copyOfRange(moovStart + moovSize, bytes.size)
+    val f = File(dir, "nomoov.mp4").also { it.writeBytes(stripped) }
+    assertTrue("the stripped fixture must exceed the validator's minimum size", f.length() > 4_096L)
     assertRejected(ExportFailure.MUXER_INCOMPLETE, validate(f))
   }
 
