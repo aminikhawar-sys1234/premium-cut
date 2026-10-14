@@ -15,13 +15,18 @@ import java.nio.FloatBuffer
  */
 class MaskDecodingTest {
 
-  private fun floats(vararg values: Float): FloatBuffer =
-    FloatBuffer.allocate(values.size).apply { put(values); rewind() }
+  private fun floats(vararg values: Float): FloatBuffer {
+    val buffer = FloatBuffer.allocate(values.size)
+    buffer.put(values)
+    buffer.rewind()
+    return buffer
+  }
 
   private fun floatBytes(vararg values: Float, order: ByteOrder = ByteOrder.nativeOrder()): ByteBuffer {
     val buffer = ByteBuffer.allocate(values.size * 4).order(order)
     values.forEach { buffer.putFloat(it) }
-    return buffer.rewind()
+    buffer.rewind()
+    return buffer
   }
 
   @Test
@@ -51,7 +56,9 @@ class MaskDecodingTest {
 
   @Test
   fun plainByteMaskStillWorks() {
-    val bytes = ByteBuffer.allocate(4).apply { put(byteArrayOf(0, -1, 100, 50)); rewind() }
+    val bytes = ByteBuffer.allocate(4)
+    bytes.put(byteArrayOf(0, -1, 100, 50))
+    bytes.rewind()
     val mask = MaskDecoding.confidenceToBytes(bytes, 4)
     assertEquals(listOf(0, 255, 100, 50), mask!!.map { it.toInt() and 0xFF })
   }
@@ -60,7 +67,9 @@ class MaskDecodingTest {
   fun wrongSizedOrMissingMaskIsRejectedInsteadOfGuessed() {
     assertNull(MaskDecoding.confidenceToBytes(null, 4))
     assertNull(MaskDecoding.confidenceToBytes(floats(0f, 1f), 4))
-    assertNull(MaskDecoding.confidenceToBytes(ByteBuffer.allocate(3).apply { rewind() }, 4))
+    val tooSmall = ByteBuffer.allocate(3)
+    tooSmall.rewind()
+    assertNull(MaskDecoding.confidenceToBytes(tooSmall, 4))
     assertNull(MaskDecoding.confidenceToBytes(floats(1f), 0))
   }
 
