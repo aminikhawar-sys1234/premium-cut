@@ -113,16 +113,23 @@ class FilterCatalogTest {
       autoEnhance = 0.4f,
       hdrBoost = 0.5f
     )
+    // Adjust-tab Reset: the primary sliders return to identity. The Adjust tab's Smart Auto mode
+    // shows Auto Adjust (autoEnhance), so its Reset clears that too; Video Quality-only controls
+    // such as the HDR look are left for the Video Quality tab's Reset.
     val reset = ColorAdjustmentRanges.resetPrimary(dirty)
     assertEquals(0f, reset.brightness, 0f)
     assertEquals(1f, reset.contrast, 0f)
     assertEquals(1f, reset.saturation, 0f)
     assertEquals(0f, reset.exposure, 0f)
-    assertEquals(0.4f, reset.autoEnhance, 0f)
-    val quality = ColorAdjustmentRanges.resetQuality(reset)
+    assertEquals(0f, reset.autoEnhance, 0f)
+    assertEquals(0.5f, reset.hdrBoost, 0f)
+    assertNotEquals(dirty.brightness, reset.brightness)
+
+    // Video Quality-tab Reset: clears the quality controls and leaves the primary sliders alone.
+    val quality = ColorAdjustmentRanges.resetQuality(dirty)
     assertEquals(0f, quality.autoEnhance, 0f)
     assertEquals(0f, quality.hdrBoost, 0f)
-    assertNotEquals(dirty.brightness, reset.brightness)
+    assertEquals(0.4f, quality.brightness, 0f)
   }
 
   @Test
