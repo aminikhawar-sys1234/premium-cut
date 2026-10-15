@@ -208,6 +208,8 @@ private class HardwareClipDecoder(
 class AsyncFramePipelineEngine(private val context: Context) {
   private val tag = "AsyncFramePipeline"
   private val userCancelled = AtomicBoolean(false)
+  private val exportRunning = AtomicBoolean(false)
+  private val cleanupPending = AtomicBoolean(false)
   @Volatile private var currentStop: AtomicBoolean? = null
   private val composition = VideoCompositionEngine(context)
   private val audioProcessor = AudioExportProcessor(context)
@@ -245,85 +247,95 @@ class AsyncFramePipelineEngine(private val context: Context) {
     sizeOverride: Pair<Int, Int>? = null,
     isPaused: () -> Boolean = { false }
   ): File = withContext(Dispatchers.IO) {
-    userCancelled.set(false)
-    val requestedFps = config.frameRate.fps.coerceIn(15, 120)
-    val (requestedWidth, requestedHeight) = sizeOverride
-      ?.let { (max(2, it.first / 2 * 2)) to (max(2, it.second / 2 * 2)) }
-      ?: ExportDimensionResolver.resolve(config.resolution, timeline.aspectRatio)
-    val durationMs = timeline.totalDurationMs
-    if (durationMs <= 0L) {
-      throw ExportPipelineException("Timeline has no duration to export.", retryable = false)
+    if (!exportRunning.compareAndSet(false, true)) {
+      throw ExportPipelineException("An export is already running on this engine.", retryable = false)
     }
+    try {
+      if (cleanupPending.get()) {
+        throw ExportPipelineException("Previous GPU export cleanup is still pending; wait or restart the editor.", retryable = false)
+      }
+      userCancelled.set(false)
+      val requestedFps = config.frameRate.fps.coerceIn(15, 120)
+      val (requestedWidth, requestedHeight) = sizeOverride
+        ?.let { (max(2, it.first / 2 * 2)) to (max(2, it.second / 2 * 2)) }
+        ?: ExportDimensionResolver.resolve(config.resolution, timeline.aspectRatio)
+      val durationMs = timeline.totalDurationMs
+      if (durationMs <= 0L) {
+        throw ExportPipelineException("Timeline has no duration to export.", retryable = false)
+      }
 
-    // Mix audio on its own thread so encoder/EGL setup is not blocked behind PCM decode
-    // (that stall is what left the progress ring at 5% for minutes).
-    var hasAudio = audioProcessor.hasActiveAudio(timeline)
-    val mixResult = AtomicReference<ShortArray>(ShortArray(0))
-    val mixError = AtomicReference<Throwable?>(null)
-    val mixLatch = CountDownLatch(1)
-    if (hasAudio) {
-      Thread({
-        try {
-          mixResult.set(
-            runBlocking {
-              audioProcessor.mixTimelineAudio(timeline, durationMs) { userCancelled.get() }
-            }
-          )
-        } catch (t: Throwable) {
-          mixError.set(t)
-        } finally {
-          mixLatch.countDown()
+      // Mix audio on its own thread so encoder/EGL setup is not blocked behind PCM decode
+      // (that stall is what left the progress ring at 5% for minutes).
+      var hasAudio = audioProcessor.hasActiveAudio(timeline)
+      val mixResult = AtomicReference<ShortArray>(ShortArray(0))
+      val mixError = AtomicReference<Throwable?>(null)
+      val mixLatch = CountDownLatch(1)
+      if (hasAudio) {
+        Thread({
+          try {
+            mixResult.set(
+              runBlocking {
+                audioProcessor.mixTimelineAudio(timeline, durationMs) { userCancelled.get() }
+              }
+            )
+          } catch (t: Throwable) {
+            mixError.set(t)
+          } finally {
+            mixLatch.countDown()
+          }
+        }, "AH-AudioMix").apply {
+          isDaemon = true
+          start()
         }
-      }, "AH-AudioMix").apply {
-        isDaemon = true
-        start()
+      } else {
+        mixLatch.countDown()
       }
-    } else {
-      mixLatch.countDown()
-    }
 
-    // Pick codec/size/fps/bitrate the device encoder really supports (4K degrades gracefully).
-    val firstPlan = ExportEncoderPlanner.plan(config, requestedWidth, requestedHeight, requestedFps)
-    val attempts = buildAttempts(firstPlan)
+      // Pick codec/size/fps/bitrate the device encoder really supports (4K degrades gracefully).
+      val firstPlan = ExportEncoderPlanner.plan(config, requestedWidth, requestedHeight, requestedFps)
+      val attempts = buildAttempts(firstPlan)
 
-    checkUserCancelled()
-    val audioSampleRate = 48000
-    val audioChannels = 2
-
-    var lastError: Throwable? = null
-    for ((index, plan) in attempts.withIndex()) {
       checkUserCancelled()
-      Log.i(tag, "Export attempt ${index + 1}/${attempts.size}: ${plan.describe()} duration=${durationMs}ms audio=$hasAudio")
-      try {
-        return@withContext runAttempt(
-          attemptNo = index + 1,
-          timeline = timeline,
-          outputFile = outputFile,
-          plan = plan,
-          durationMs = durationMs,
-          hasAudio = hasAudio,
-          mixLatch = mixLatch,
-          mixResult = mixResult,
-          mixError = mixError,
-          audioSampleRate = audioSampleRate,
-          audioChannels = audioChannels,
-          isPaused = isPaused
-        )
-      } catch (e: CancellationException) {
-        runCatching { outputFile.delete() }
-        throw e
-      } catch (t: Throwable) {
-        runCatching { outputFile.delete() }
-        if (userCancelled.get()) throw CancellationException("Export cancelled")
-        lastError = t
-        Log.e(tag, "Export attempt ${index + 1} failed: ${t.message}", t)
-        val retryable = (t as? ExportPipelineException)?.retryable ?: true
-        if (!retryable) break
+      val audioSampleRate = 48000
+      val audioChannels = 2
+
+      var lastError: Throwable? = null
+      for ((index, plan) in attempts.withIndex()) {
+        checkUserCancelled()
+        Log.i(tag, "Export attempt ${index + 1}/${attempts.size}: ${plan.describe()} duration=${durationMs}ms audio=$hasAudio")
+        try {
+          return@withContext runAttempt(
+            attemptNo = index + 1,
+            timeline = timeline,
+            outputFile = outputFile,
+            plan = plan,
+            durationMs = durationMs,
+            hasAudio = hasAudio,
+            mixLatch = mixLatch,
+            mixResult = mixResult,
+            mixError = mixError,
+            audioSampleRate = audioSampleRate,
+            audioChannels = audioChannels,
+            isPaused = isPaused
+          )
+        } catch (e: CancellationException) {
+          runCatching { outputFile.delete() }
+          throw e
+        } catch (t: Throwable) {
+          runCatching { outputFile.delete() }
+          if (userCancelled.get()) throw CancellationException("Export cancelled")
+          lastError = t
+          Log.e(tag, "Export attempt ${index + 1} failed: ${t.message}", t)
+          val retryable = (t as? ExportPipelineException)?.retryable ?: true
+          if (!retryable) break
+        }
       }
+      val root = lastError
+      throw if (root is ExportPipelineException && !root.retryable) root
+      else ExportPipelineException("Video export failed: ${root?.message ?: "unknown error"}", root)
+    } finally {
+      exportRunning.set(false)
     }
-    val root = lastError
-    throw if (root is ExportPipelineException && !root.retryable) root
-    else ExportPipelineException("Video export failed: ${root?.message ?: "unknown error"}", root)
   }
 
   /** Encoder configurations to try, most capable first. */
@@ -337,7 +349,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
     if (first.mime != hevc) {
       list += first.copy(mime = hevc, bitrateBps = (first.bitrateBps.toLong() * 3 / 4).coerceAtLeast(1_000_000L).toInt())
     }
-    // Size fallback is only for 2K/4K. 1080p must stay exactly 1920x1080 (or 1080x1920 portrait).
+    // Larger plans get a fresh, aligned <=1080p-class fallback.
     val tooBig = max(first.width, first.height) > 1920
     if (tooBig || first.fps > 30) {
       val (w, h) = if (tooBig) ExportDimensionResolver.fit(first.width, first.height, 1920) else first.width to first.height
@@ -381,6 +393,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
    * Tries hardware then software, with and without profile/level — never a smaller resolution.
    */
   private fun openVideoEncoder(plan: EncoderPlan): OpenedEncoder {
+    require(plan.width % 16 == 0 && plan.height % 16 == 0) { "Surface encoder size must be 16-aligned: ${plan.width}x${plan.height}" }
     val candidates = decoderManager.listExportEncoderCandidates(plan.mime, plan.width, plan.height, requireSurface = true)
       .ifEmpty { listOf(DecoderManager.EncoderCandidate("", plan.mime, hardware = true)) }
     var lastError: Throwable? = null
@@ -406,8 +419,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
             return OpenedEncoder(codec, surface, format, hardware || candidate.hardware)
           } catch (cfg: Exception) {
             lastError = cfg
+            Log.e(tag, "Video configure/createInputSurface failed relaxed=$relaxed format=$format thread=${Thread.currentThread().name}", cfg)
             ExportDiagnostics.configureError(codec.name, plan.mime, plan.width, plan.height, cfg)
-            try { codec.reset() } catch (_: Exception) {}
+            try { codec.reset() } catch (reset: Exception) {
+              Log.w(tag, "Encoder reset failed; skipping relaxed reuse", reset)
+              throw cfg
+            }
           }
         }
         try { codec.release() } catch (_: Exception) {}
@@ -455,6 +472,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
     val videoEos = AtomicBoolean(false)
     val audioEos = AtomicBoolean(false)
     val lastOutputNs = AtomicLong(System.nanoTime())
+    val swapPending = AtomicBoolean(false)
 
     // The export is a frame pipeline on a loaded device (the editor UI keeps rendering progress
     // while it runs), so the two pipeline threads must not fall behind the UI thread. DISPLAY
@@ -539,6 +557,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             imageTextures[uri] = rend.uploadImageTexture(uri, bmp)
           }
         } catch (t: Throwable) {
+          Log.e(tag, "EGL/GPU initialization failed size=${exportWidth}x$exportHeight thread=${Thread.currentThread().name}", t)
           failure.compareAndSet(null, t)
         } finally {
           glInitLatch.countDown()
@@ -573,6 +592,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             it.start()
           }
         } catch (e: Exception) {
+          ExportDiagnostics.configureError(audioEncoderRef?.name, MediaFormat.MIMETYPE_AUDIO_AAC, 0, 0, e)
           throw ExportPipelineException("The AAC audio encoder could not be started (${e.message}); the project has audio, so export was stopped instead of dropping it.", e, retryable = false)
         }
       }
@@ -618,21 +638,24 @@ class AsyncFramePipelineEngine(private val context: Context) {
                   drainedSomething = true
                   lastOutputNs.set(System.nanoTime())
                   val isEos = (vInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                  // CODEC_CONFIG buffers go to the coordinator too: some encoders put the first IDR
-                  // picture in the same buffer as SPS/PPS, and dropping it leaves no decodable first frame.
-                  if (vInfo.size > 0) {
-                    val out = videoEncoder.getOutputBuffer(vIndex)
-                      ?: throw IllegalStateException("Video encoder returned a null output buffer")
-                    when (coordinator.writeVideoSample(out, vInfo)) {
-                      MuxerCoordinator.VideoSampleResult.WRITTEN -> metrics.encodedFrames.incrementAndGet()
-                      MuxerCoordinator.VideoSampleResult.DROPPED_BEFORE_KEYFRAME -> {
-                        metrics.encodedFrames.incrementAndGet()
-                        requestSyncFrame(videoEncoder, "first encoder output was not a key frame")
+                  try {
+                    // CODEC_CONFIG buffers go to the coordinator too: some encoders put the first IDR
+                    // picture in the same buffer as SPS/PPS, and dropping it leaves no decodable first frame.
+                    if (vInfo.size > 0) {
+                      val out = videoEncoder.getOutputBuffer(vIndex)
+                        ?: throw IllegalStateException("Video encoder returned a null output buffer")
+                      when (coordinator.writeVideoSample(out, vInfo)) {
+                        MuxerCoordinator.VideoSampleResult.WRITTEN -> metrics.encodedFrames.incrementAndGet()
+                        MuxerCoordinator.VideoSampleResult.DROPPED_BEFORE_KEYFRAME -> {
+                          metrics.encodedFrames.incrementAndGet()
+                          requestSyncFrame(videoEncoder, "first encoder output was not a key frame")
+                        }
+                        else -> Unit
                       }
-                      else -> Unit
                     }
+                  } finally {
+                    videoEncoder.releaseOutputBuffer(vIndex, false)
                   }
-                  videoEncoder.releaseOutputBuffer(vIndex, false)
                   if (isEos) {
                     videoEos.set(true)
                     Log.i(tag, "Video encoder signaled BUFFER_FLAG_END_OF_STREAM")
@@ -657,12 +680,15 @@ class AsyncFramePipelineEngine(private val context: Context) {
                   drainedSomething = true
                   lastOutputNs.set(System.nanoTime())
                   val isEos = (aInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                  if ((aInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && aInfo.size > 0) {
-                    val out = aenc.getOutputBuffer(aIndex)
-                      ?: throw IllegalStateException("Audio encoder returned a null output buffer")
-                    coordinator.writeAudioSample(out, aInfo)
+                  try {
+                    if ((aInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && aInfo.size > 0) {
+                      val out = aenc.getOutputBuffer(aIndex)
+                        ?: throw IllegalStateException("Audio encoder returned a null output buffer")
+                      coordinator.writeAudioSample(out, aInfo)
+                    }
+                  } finally {
+                    aenc.releaseOutputBuffer(aIndex, false)
                   }
-                  aenc.releaseOutputBuffer(aIndex, false)
                   if (isEos) {
                     audioEos.set(true)
                     Log.i(tag, "Audio encoder signaled BUFFER_FLAG_END_OF_STREAM")
@@ -788,13 +814,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
       // 8. Render loop (GL thread): every frame is drawn into the encoder Surface and its swap submits it.
       renderStarted.set(true)
       glHandler.post {
+        var renderingFrame = -1L
         try {
+          val renderSurface = windowSurface ?: error("Encoder surface missing")
+          renderSurface.makeCurrent()
           var lastEglPtsNs = -1L
           val probeFrames = linkedSetOf(0L, totalFrames / 4, totalFrames / 2, totalFrames * 3 / 4, totalFrames - 1)
           var probes = 0
           var blackProbes = 0
 
           for (frameIndex in 0 until totalFrames) {
+            renderingFrame = frameIndex
+            renderSurface.makeCurrent()
             while (isPaused() && !stop.get()) Thread.sleep(40)
             if (stop.get()) break
 
@@ -950,19 +981,24 @@ class AsyncFramePipelineEngine(private val context: Context) {
               )
             }
             val swapStart = System.nanoTime()
-            if (!win.swapBuffers()) {
-              // Capture the real EGL error instead of discarding it, so the cause (e.g. a dead encoder
-              // input surface vs. buffer allocation failure) is visible in logcat and in the export error.
-              val eglError = android.opengl.EGL14.eglGetError()
-              Log.e(
-                tag,
-                "eglSwapBuffers failed on frame $frameIndex (${exportWidth}x$exportHeight, " +
-                  "codec=${videoEncoder.name}, mime=${plan.mime}, eglError=0x${Integer.toHexString(eglError)})"
-              )
-              throw ExportPipelineException(
-                "Submitting frame $frameIndex to the video encoder failed (eglSwapBuffers). " +
-                  "EGL error 0x${Integer.toHexString(eglError)}."
-              )
+            swapPending.set(true)
+            try {
+              if (!win.swapBuffers()) {
+                // Capture the real EGL error instead of discarding it, so the cause (e.g. a dead encoder
+                // input surface vs. buffer allocation failure) is visible in logcat and in the export error.
+                val eglError = android.opengl.EGL14.eglGetError()
+                Log.e(
+                  tag,
+                  "eglSwapBuffers failed on frame $frameIndex (${exportWidth}x$exportHeight, " +
+                    "codec=${videoEncoder.name}, mime=${plan.mime}, eglError=0x${Integer.toHexString(eglError)})"
+                )
+                throw ExportPipelineException(
+                  "Submitting frame $frameIndex to the video encoder failed (eglSwapBuffers). " +
+                    "EGL error 0x${Integer.toHexString(eglError)}."
+                )
+              }
+            } finally {
+              swapPending.set(false)
             }
             metrics.encodeWaitTimeNs.addAndGet(System.nanoTime() - swapStart)
             metrics.gpuRenderTimeNs.addAndGet(System.nanoTime() - composeStart)
@@ -981,7 +1017,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             )
           }
         } catch (t: Throwable) {
-          Log.e(tag, "Render loop error", t)
+          Log.e(tag, "Render loop failed frame=$renderingFrame size=${exportWidth}x$exportHeight codec=${videoEncoder.name} mime=${plan.mime} thread=${Thread.currentThread().name} submitted=${metrics.gpuFrames.get()}", t)
           failure.compareAndSet(null, t)
           stop.set(true)
         } finally {
@@ -991,9 +1027,11 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       // Wait for the render loop; watch for an encoder that stopped consuming frames (swap would block forever).
       while (!renderCompleteLatch.await(1, TimeUnit.SECONDS)) {
-        if (stop.get()) continue
+        failure.get()?.let { throw wrap("Pipeline worker failed", it) }
+        checkUserCancelled()
+        if (stop.get()) throw CancellationException("Export stopped")
         val idleSec = (System.nanoTime() - lastOutputNs.get()) / 1_000_000_000L
-        if (idleSec > 60 && metrics.gpuFrames.get() > metrics.encodedFrames.get()) {
+        if (idleSec > 60 && (swapPending.get() || metrics.gpuFrames.get() > metrics.encodedFrames.get())) {
           throw ExportPipelineException("The video encoder stopped producing output for ${idleSec}s (frames submitted=${metrics.gpuFrames.get()}, encoded=${metrics.encodedFrames.get()}).")
         }
       }
@@ -1003,7 +1041,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       // 9. End of stream. All frames are already queued on the Surface; signal exactly once.
       Log.i(tag, "Signaling end of stream to video encoder input surface (${metrics.gpuFrames.get()} frames submitted)")
-      videoEncoder.signalEndOfInputStream()
+      try {
+        videoEncoder.signalEndOfInputStream()
+      } catch (e: Exception) {
+        Log.e(tag, "signalEndOfInputStream failed codec=${videoEncoder.name} submitted=${metrics.gpuFrames.get()}", e)
+        throw ExportPipelineException("Video encoder rejected end-of-stream", e)
+      }
 
       if (aenc != null) {
         // Flush the remaining PCM (deadline based, never silently truncated), then EOS at the exact end PTS.
@@ -1090,41 +1133,59 @@ class AsyncFramePipelineEngine(private val context: Context) {
       ExportDiagnostics.finished(outputFile.absolutePath, exportWidth, exportHeight, durationMs, outputFile.length())
       return outputFile
     } finally {
-      // Stop everything, then release in dependency order:
-      // decoders -> GL renderer/EGL surface -> encoder input Surface -> encoders -> muxer -> threads.
-      // The encoder Surface is only released here, i.e. after the drain finished on success, or on abort.
       stop.set(true)
+      cleanupPending.set(true)
       currentStop = null
-      if (renderStarted.get()) renderCompleteLatch.await(10, TimeUnit.SECONDS)
-      runCatching { drainExecutor?.shutdownNow() }
-
-      decoders.values.forEach { runCatching { it.release() } }
-      decoders.clear()
+      // Do not free a codec/muxer under its consumer or an input surface under eglSwapBuffers.
+      drainExecutor?.shutdown()
+      val drainStopped = drainExecutor?.awaitTermination(5, TimeUnit.SECONDS) ?: true
+      var renderStopped = !renderStarted.get() || renderCompleteLatch.await(5, TimeUnit.SECONDS)
+      if (!renderStopped && drainStopped) {
+        // A vendor encoder may be stuck holding the BufferQueue in swapBuffers. Stop (not
+        // release) it only after the output consumer exits, to unblock the producer on abort.
+        Log.w(tag, "Aborting stalled render: stopping video encoder to unblock its input surface")
+        runCatching { videoEncoderRef?.stop() }.onFailure { Log.w(tag, "Abort codec stop failed", it) }
+        renderStopped = renderCompleteLatch.await(5, TimeUnit.SECONDS)
+      }
 
       val cleanLatch = CountDownLatch(1)
       glHandler.post {
-        runCatching { gpuRenderer?.release() }
-        runCatching { windowSurface?.release() }
-        runCatching { eglCore?.release() }
-        cleanLatch.countDown()
+        try {
+          // This task is serialized behind init/render, even if those exceeded our deadline.
+          // In the pathological driver-hang case retain resources rather than race their release.
+          drainExecutor?.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS)
+          fun cleanup(label: String, block: () -> Unit) {
+            runCatching(block).onFailure { Log.w(tag, "Export cleanup failed: $label", it) }
+          }
+          cleanup("makeCurrent") { windowSurface?.makeCurrent() }
+          decoders.values.forEach { decoder -> cleanup("decoder") { decoder.release() } }
+          decoders.clear()
+          cleanup("renderer") { gpuRenderer?.release() }
+          cleanup("unbind EGL") { eglCore?.makeNothingCurrent() }
+          cleanup("EGL surface") { windowSurface?.release() }
+          cleanup("EGL context") { eglCore?.release() }
+          fallbackRetrievers.values.forEach { retriever -> cleanup("retriever") { retriever.release() } }
+          fallbackRetrievers.clear()
+          imageBitmaps.values.forEach { bitmap -> cleanup("bitmap") { bitmap.recycle() } }
+          imageBitmaps.clear()
+          cleanup("encoder input surface") { encoderInputSurface?.release() }
+          cleanup("video stop") { videoEncoderRef?.stop() }
+          cleanup("video release") { videoEncoderRef?.release() }
+          cleanup("audio stop") { audioEncoderRef?.stop() }
+          cleanup("audio release") { audioEncoderRef?.release() }
+          cleanup("muxer") { if (muxerCoordinator?.isStopped == false) muxerCoordinator?.stopAndRelease() }
+        } finally {
+          cleanupPending.set(false)
+          cleanLatch.countDown()
+          glThread.quitSafely()
+          decoderThread.quitSafely()
+        }
       }
-      cleanLatch.await(5, TimeUnit.SECONDS)
-
-      for (retriever in fallbackRetrievers.values) runCatching { retriever.release() }
-      fallbackRetrievers.clear()
-      imageBitmaps.values.forEach { runCatching { it.recycle() } }
-      imageBitmaps.clear()
-
-      runCatching { encoderInputSurface?.release() }
-      runCatching { videoEncoderRef?.stop() }
-      runCatching { videoEncoderRef?.release() }
-      runCatching { audioEncoderRef?.stop() }
-      runCatching { audioEncoderRef?.release() }
-      if (muxerCoordinator?.isStopped == false) {
-        runCatching { muxerCoordinator?.stopAndRelease() }
+      if (!cleanLatch.await(10, TimeUnit.SECONDS) || !renderStopped || !drainStopped) {
+        // No fallback attempt may reuse shared decoder/retriever state while cleanup is pending.
+        Log.e(tag, "Export teardown timed out; cleanup deferred on render thread, retries disabled")
+        throw ExportPipelineException("GPU/codec teardown timed out; export aborted safely. Check Logcat for the stalled worker.", retryable = false)
       }
-      glThread.quitSafely()
-      decoderThread.quitSafely()
     }
   }
 

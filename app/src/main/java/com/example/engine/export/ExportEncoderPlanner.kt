@@ -19,8 +19,8 @@ import kotlin.math.roundToInt
  * Convention: the resolution's short side (720/1080/2160...) is the short side of the output for
  * every aspect ratio (720p 1:1 = 720x720, 720p 4:3 = 960x720). Sizes are even (YUV420) and never
  * exceed [MAX_SIDE]; aspect ratio is preserved when clamping, so 4K 21:9 becomes 3840x1646 instead
- * of being squashed into 3840x2160. Exact sizes are kept (1080p stays 1920x1080); the encoder
- * planner only falls back to 16-aligned smaller sizes if the device rejects the exact one.
+ * of being squashed into 3840x2160. UI/Media3 sizes remain even; the surface encoder planner independently enforces
+ * 16-pixel alignment for vendor encoder compatibility (1920x1080 becomes 1920x1088).
  */
 object ExportDimensionResolver {
   const val MAX_SIDE = 3840
@@ -108,11 +108,8 @@ object ExportEncoderPlanner {
         else listOf(MediaFormat.MIMETYPE_VIDEO_AVC, MediaFormat.MIMETYPE_VIDEO_HEVC)
     }
 
-    // 1080p (and below) must stay at the requested pixel size. 1920x1080 is even but not
-    // 16-aligned; isSizeSupported() often returns false and the old ladder silently fell
-    // through to 1280x720 — which is the 1080p-only "export failed" the user hit, while
-    // 720p/2K/4K (all 16-aligned) succeeded. 2K/4K may still drop size when the SoC cannot
-    // encode them.
+    // Preserve the requested resolution class, adding at most 15 pixels per axis.
+    // Only large requests may drop to a smaller resolution during capability planning.
     val allowSizeDegrade = max(requestedW, requestedH) >= 2160
 
     var best: Triple<String, Int, Triple<Int, Int, Int>>? = null // mime, score, (w,h,fps)
@@ -126,7 +123,7 @@ object ExportEncoderPlanner {
     }
 
     val (mime, w, h, fps) = best?.let { Quad(it.first, it.third.first, it.third.second, it.third.third) }
-      ?: Quad(mimes.first(), requestedW, requestedH, requestedFps) // no capability info: try as requested
+      ?: ExportSurfaceSize.align(requestedW, requestedH).let { Quad(mimes.first(), it.first, it.second, requestedFps) } // no capability info: try aligned
 
     val bitrate = bitrateFor(config, mime, w, h, fps, requestedW, requestedH)
     return EncoderPlan(mime, w, h, fps, bitrate, requestedW, requestedH, requestedFps).also {
@@ -148,7 +145,8 @@ object ExportEncoderPlanner {
     val codecs = encodersFor(mime)
     if (codecs.isEmpty()) return null
     val sizes = ArrayList<Pair<Int, Int>>()
-    sizes += w to h
+    val aligned = ExportSurfaceSize.align(w, h)
+    sizes += aligned
     if (allowSizeDegrade) {
       for (longSide in LONG_SIDE_LADDER) {
         if (longSide >= max(w, h)) continue
@@ -168,15 +166,9 @@ object ExportEncoderPlanner {
         }
       }
     }
-    // Alignment-tolerant pass: 1920x1080 is in range on almost every SoC even when
-    // isSizeSupported is false because 1080 % 16 != 0. Keep the exact size.
-    for (f in fpsOptions) {
-      for (caps in codecs) {
-        val vc = caps.videoCapabilities ?: continue
-        if (withinSupportedRange(vc, w, h, f)) return Triple(w, h, f)
-      }
-    }
-    return if (allowSizeDegrade) null else Triple(w, h, fpsOptions.first())
+    // Never bypass alignment/rate capability checks just because each axis is in range.
+    // If capabilities are unavailable, the configure retry ladder still uses aligned sizes.
+    return if (allowSizeDegrade) null else Triple(aligned.first, aligned.second, fpsOptions.first())
   }
 
   internal fun withinSupportedRange(

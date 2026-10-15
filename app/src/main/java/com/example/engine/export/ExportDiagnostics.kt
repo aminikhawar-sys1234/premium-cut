@@ -1,6 +1,8 @@
 package com.example.engine.export
 
 import android.media.MediaFormat
+import android.media.MediaCodec
+import android.os.Build
 import android.util.Log
 
 /** One-shot export setup/teardown logs. Never called from the per-frame render loop. */
@@ -34,7 +36,12 @@ object ExportDiagnostics {
   }
 
   fun configureError(codecName: String?, mime: String, width: Int, height: Int, error: Throwable) {
-    Log.e(TAG, "EXPORT_CONFIGURE_FAIL codec=$codecName mime=$mime size=${width}x$height: ${error.message}", error)
+    val codecError = (error as? MediaCodec.CodecException)?.let {
+      " diagnostic=${it.diagnosticInfo} recoverable=${it.isRecoverable} transient=${it.isTransient}"
+    }.orEmpty()
+    Log.e(TAG, "EXPORT_CONFIGURE_FAIL codec=$codecName mime=$mime size=${width}x$height " +
+      "device=${Build.MANUFACTURER}/${Build.MODEL} sdk=${Build.VERSION.SDK_INT} " +
+      "thread=${Thread.currentThread().name}$codecError: ${error.message}", error)
   }
 
   fun encoderOutputFormat(format: MediaFormat) {

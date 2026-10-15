@@ -192,6 +192,12 @@ bool NextGenGpuCompositionEngine::buildPrograms() {
 
 bool NextGenGpuCompositionEngine::init() {
     if (initialized_) return true;
+    ownerContext_ = eglGetCurrentContext();
+    ownerThread_ = std::this_thread::get_id();
+    if (ownerContext_ == EGL_NO_CONTEXT) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG, "init requires a current EGL context");
+        return false;
+    }
     if (!buildPrograms()) return false;
 
     const float q[] = {
