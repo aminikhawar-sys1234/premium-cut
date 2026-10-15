@@ -11,7 +11,9 @@ the pull request. Two real instances, both in this repository:
      below it, so the step went red with 36/36 green tests;
   2. the same job had a multi-line ``if [ ... ]; then`` block. The action runs
      the block one line per ``/usr/bin/sh -c``, so dash saw a dangling ``then``
-     and again exited 2 - after gradle had already passed every test.
+     and again exited 2 - after gradle had already passed every test;
+  3. ``pkill -f "adb logcat"`` matched the command line of the very shell that
+     ran it and killed its own parent (annotation: "exit code null").
 
 This check therefore pins, for every shell block in .github/workflows:
 
@@ -127,6 +129,12 @@ def main() -> int:
     continued = [line for line in code if line.endswith("\\")]
     check(not continued, "no line continuation in the emulator script"
           + (f" -> {continued[0]}" if continued else ""))
+    background = [line for line in code if line.endswith("&")]
+    check(not background, "the emulator script starts no background process"
+          + (f" -> {background[0]}" if background else ""))
+    signalled = [line for line in code if re.search(r"\b(pkill|pgrep|kill)\b", line)]
+    check(not signalled, "the emulator script signals no process (the pattern matches its own sh)"
+          + (f" -> {signalled[0]}" if signalled else ""))
     stale = []
     for index, line in enumerate(code):
         for name in re.findall(r"(?:^|[;&|]\s*)([A-Za-z_][A-Za-z0-9_]*)=", line):

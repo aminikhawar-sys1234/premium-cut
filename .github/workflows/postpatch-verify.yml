@@ -231,13 +231,14 @@ jobs:
             # line in its own `/usr/bin/sh -c` (dash on the Ubuntu runner). So: no multi-line
             # if/fi, no variable that must survive to the next line, no bash-only syntax, and every
             # line has to exit 0 - the first non-zero line fails the whole step even when all 36
-            # tests pass. A dangling `if [ ... ]; then` line is what kept this job red.
+            # tests pass. Two things kept this job red that way: a dangling `if [ ... ]; then`
+            # line (dash exits 2), and `pkill -f "adb logcat"`, whose pattern also matches the
+            # command line of the sh that runs it, so it killed its own parent (exit code null).
+            # Hence no background process here: logcat is dumped with -d after the run.
             adb shell "getprop ro.build.version.sdk; getprop ro.hardware.egl" || true
             adb logcat -c || true
-            nohup adb logcat -v brief > logcat.txt 2>&1 &
             ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue > gradle-connected.log 2>&1; echo $? > gradle-exit.txt
-            pkill -f "adb logcat" || true
-            sleep 1
+            adb logcat -d -v brief > logcat.txt 2>/dev/null || true
             wc -l logcat.txt || true
             adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt 2>/dev/null || true
             [ -s look-verification.txt ] || adb shell "run-as $APP_ID cat files/look-verification.txt" > look-verification.txt 2>/dev/null || true
