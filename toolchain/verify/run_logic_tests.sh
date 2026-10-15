@@ -37,11 +37,15 @@ SOURCES=(
   "$MAIN/com/ahstudio/animation/speed/SpeedPresets.kt"
   "$MAIN/com/example/engine/composition/ChromaKeyMath.kt"
   "$MAIN/com/example/engine/composition/ChromaKeyResolver.kt"
+  "$MAIN/com/example/engine/composition/CompositionLookResolver.kt"
+  "$MAIN/com/example/engine/effects/media3/PreviewGraphDecision.kt"
   "$MAIN/com/example/engine/ai/cutout/MaskDecoding.kt"
   "$MAIN/com/example/engine/preview/PreviewCompositionPolicy.kt"
   # tests
   "$TEST/com/example/engine/composition/ChromaKeyMathTest.kt"
   "$TEST/com/example/engine/composition/ChromaKeyResolverTest.kt"
+  "$TEST/com/example/engine/composition/CompositionLookResolverTest.kt"
+  "$TEST/com/example/engine/effects/media3/PreviewGraphDecisionTest.kt"
   "$TEST/com/example/engine/ai/cutout/MaskDecodingTest.kt"
   "$TEST/com/example/engine/preview/PreviewCompositionPolicyTest.kt"
   # harness
@@ -63,5 +67,7 @@ echo "== running tests"
   com.example.toolchain.TestRunner \
   com.example.engine.composition.ChromaKeyMathTest \
   com.example.engine.composition.ChromaKeyResolverTest \
+  com.example.engine.composition.CompositionLookResolverTest \
+  com.example.engine.effects.media3.PreviewGraphDecisionTest \
   com.example.engine.ai.cutout.MaskDecodingTest \
   com.example.engine.preview.PreviewCompositionPolicyTest

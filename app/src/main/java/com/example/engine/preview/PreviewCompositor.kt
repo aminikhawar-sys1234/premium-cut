@@ -16,6 +16,7 @@ import androidx.core.net.toUri
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
 import com.example.engine.composition.ChromaKeyResolver
+import com.example.engine.composition.CompositionLookResolver
 import com.example.engine.composition.CompositionRenderGraph
 import com.example.engine.composition.VideoCompositionEngine
 import com.example.engine.composition.gpu.ChromaBackgroundFrame
@@ -272,13 +273,17 @@ class PreviewCompositor(
       imageTextureId = { uri -> imageTextures[uri] ?: 0 },
       drawTextAndStickers = false
     )
+    val lookFallback = CompositionLookResolver.timelineFallback(tl)
     CompositionRenderGraph.present(
       renderer = rend,
       assembled = assembled,
       viewportWidth = bufferWidth,
       viewportHeight = bufferHeight,
-      adjustments = tl.adjustments,
-      filter = tl.filter,
+      // Project-level fallback only; the renderer resolves each layer against it
+      // (CompositionLookResolver). AsyncFramePipelineEngine passes the very same thing, which is
+      // what makes an exported frame grade every layer the way this preview does.
+      adjustments = lookFallback.adjustments,
+      filter = lookFallback.filter,
       chromaKey = tl.chromaKey,
       presentation = CompositionRenderGraph.FramePresentation.PREVIEW,
       chromaBackgroundFrame = chromaBackgroundFrame

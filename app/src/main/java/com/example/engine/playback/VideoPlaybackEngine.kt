@@ -32,6 +32,7 @@ import com.example.engine.effects.media3.LutStripBaker
 import com.example.engine.effects.media3.Media3EffectPipeline
 import com.example.engine.effects.media3.PreviewEffectApplyPolicy
 import com.example.engine.effects.media3.PreviewFilterEffects
+import com.example.engine.effects.media3.PreviewGraphDecision
 import com.example.engine.effects.media3.PreviewLookPolicy
 import com.example.engine.media.MediaPlayableUri
 import com.example.engine.media.MediaRelinkManager
@@ -427,7 +428,8 @@ class VideoPlaybackEngine(
     val clip = targetClipId?.let { id -> currentTimeline.videoClips.find { it.id == id } } ?: _activeClip.value
     val graphSig = PreviewFilterEffects.media3GraphSignature(clip, currentTimeline)
     when {
-      boundMainGrading == null && !lookFallbackActive ->
+      // Same resident-node condition applyActiveLookToPlayers uses, from the same definition.
+      PreviewGraphDecision.needsResidentGradingInstall(boundMainGrading != null, lookFallbackActive) ->
         applyActiveLookToPlayers(force = true, preferClipId = targetClipId)
       PreviewEffectApplyPolicy.shouldRebuildGraph(lastMedia3GraphSignature, graphSig, force = false) ->
         scheduleSpatialLook(preferClipId = targetClipId)
@@ -515,9 +517,23 @@ class VideoPlaybackEngine(
     lastPreviewFilterSignature = PreviewFilterEffects.signature(clip, currentTimeline)
     publishLiveGrading(clip)
 
-    val missingResidentGrading = boundMainGrading == null
-    val graphChanged = PreviewEffectApplyPolicy.shouldRebuildGraph(lastMedia3GraphSignature, graphSig, force) ||
-      missingResidentGrading
+    // ONE definition of graphChanged, shared by the rebuild gate below and the install decision
+    // further down. It used to be recalculated at the install site from the graph signature alone,
+    // which dropped the missing-resident-node term: whenever "no grading node is resident" was the
+    // only reason to rebuild, the engine built a fresh effect list and then skipped
+    // setVideoEffects, so that recovery path could never actually recover.
+    //
+    // `lookFallbackActive` suppresses the missing-resident term on purpose: the device already
+    // reported it can only run the identity passthrough, and retrying on every slider tick just
+    // swings setVideoEffects without restoring the look.
+    val signatureChanged = PreviewEffectApplyPolicy.shouldRebuildGraph(lastMedia3GraphSignature, graphSig, force)
+    val graphChanged = PreviewGraphDecision.graphChanged(
+      previousGraphSignature = lastMedia3GraphSignature,
+      nextGraphSignature = graphSig,
+      residentGradingNode = boundMainGrading != null,
+      identityFallbackActive = lookFallbackActive,
+      force = force
+    )
     if (!graphChanged) {
       lastMedia3Signature = valueSig
       applyOverlayLooks(force)
@@ -541,9 +557,14 @@ class VideoPlaybackEngine(
     // one once setVideoEffects succeeds. Recording it as [boundMainGrading] before that meant
     // later slider ticks published onto an object no shader program was reading, while the real
     // resident node kept its old snapshot — so the preview stopped reacting to Filters / Adjust /
-    // Video Quality after the first graph rebuild that did not actually apply (the
-    // `!shouldSetEffects` path, hit whenever the graph signature was unchanged but no grading
-    // node was resident). [boundMainGrading] is now assigned only in the APPLIED branch below.
+    // Video Quality after the first graph rebuild that did not actually apply.
+    // [boundMainGrading] is therefore assigned only in the APPLIED branch below.
+    //
+    // The matching half of that bug was the skipped install itself: the install check recalculated
+    // `graphChanged` from the graph signature alone, so "no grading node is resident" never reached
+    // it and the skip branch stayed sticky. Both stages now share one
+    // [PreviewGraphDecision.graphChanged] value, and the skip branch no longer records the signature
+    // while a node is missing.
     val grading = boundMainGrading ?: effects.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
     grading?.publishLive(gradingSnapshotFor(clip))
 
@@ -557,16 +578,26 @@ class VideoPlaybackEngine(
     }
     deferredLooksPending = false
 
-    val shouldSetEffects = PreviewEffectApplyPolicy.shouldCallSetVideoEffects(
+    // Stage 2 of the SAME decision: the `graphChanged` computed above is passed through unchanged,
+    // so the install decision can no longer disagree with the rebuild gate.
+    val decision = PreviewGraphDecision.outcomeFor(
+      graphChanged = graphChanged,
+      signatureChanged = signatureChanged,
+      residentGradingNode = boundMainGrading != null,
+      identityFallbackActive = lookFallbackActive,
       newEffectCount = effects.size,
       previousHadEffects = lastGoodMedia3Effects.isNotEmpty() || pendingMedia3Effects != null,
-      graphChanged = lastMedia3GraphSignature != graphSig,
       force = force
     )
-    if (!shouldSetEffects) {
-      lastMedia3GraphSignature = graphSig
+    if (!decision.callSetVideoEffects) {
+      // Only record the signature when nothing is missing. Recording it while no grading node is
+      // resident is what made the state sticky: the next tick saw an "unchanged" graph and skipped
+      // the install again, forever.
+      if (!PreviewGraphDecision.needsResidentGradingInstall(boundMainGrading != null, lookFallbackActive)) {
+        lastMedia3GraphSignature = graphSig
+      }
       lastMedia3Signature = valueSig
-      Log.d(TAG, "Skipped empty setVideoEffects (graph=$graphSig)")
+      Log.d(TAG, "Skipped setVideoEffects (graph=$graphSig reason=${decision.reason})")
       applyOverlayLooks(force)
       requestPausedFrameRefresh()
       return
@@ -866,7 +897,21 @@ class VideoPlaybackEngine(
         PreviewFilterEffects.effectiveFilter(overlay, currentTimeline)
       )
       boundOverlayGrading[overlay.id]?.publishLive(snapshot)
-      if (!force && lastOverlayGraphSignatures[overlay.id] == graphSig && boundOverlayGrading[overlay.id] != null) {
+      // Same ONE decision as the main path: the resident-node term must reach the install check too.
+      // The old skip-check tested `boundOverlayGrading[id] != null` while the install check below
+      // tested only the signature, so an overlay with no resident node built a fresh effect list and
+      // then skipped the install.
+      val overlaySignatureChanged = lastOverlayGraphSignatures[overlay.id] != graphSig
+      // graphChangedOrForced, not graphChanged: applyOverlayLooks has always rebuilt every overlay
+      // graph on a forced call (`!force && signatureEqual && resident` was the only skip), which
+      // flushDeferredLooks and recreatePreviewPlayer depend on.
+      val overlayGraphChanged = PreviewGraphDecision.graphChangedOrForced(
+        previousGraphSignature = lastOverlayGraphSignatures[overlay.id],
+        nextGraphSignature = graphSig,
+        residentGradingNode = boundOverlayGrading[overlay.id] != null,
+        force = force
+      )
+      if (!overlayGraphChanged) {
         lastOverlayFilterSignatures[overlay.id] = valueSig
         continue
       }
@@ -875,16 +920,21 @@ class VideoPlaybackEngine(
       val effects = PreviewFilterEffects.effectsFor(overlay, currentTimeline, lutBmp, lut?.second ?: 1f)
       val grading = effects.filterIsInstance<ColorGradingGlEffect>().firstOrNull()
       grading?.publishLive(snapshot)
-      if (grading != null) boundOverlayGrading[overlay.id] = grading else boundOverlayGrading.remove(overlay.id)
       val previousHad = lastOverlayGraphSignatures[overlay.id] != null
-      if (!PreviewEffectApplyPolicy.shouldCallSetVideoEffects(
-          newEffectCount = effects.size,
-          previousHadEffects = previousHad,
-          graphChanged = lastOverlayGraphSignatures[overlay.id] != graphSig,
-          force = force
-        )
-      ) {
-        lastOverlayGraphSignatures[overlay.id] = graphSig
+      val overlayDecision = PreviewGraphDecision.outcomeFor(
+        graphChanged = overlayGraphChanged,
+        signatureChanged = overlaySignatureChanged,
+        residentGradingNode = boundOverlayGrading[overlay.id] != null,
+        newEffectCount = effects.size,
+        previousHadEffects = previousHad,
+        force = force
+      )
+      if (!overlayDecision.callSetVideoEffects) {
+        // Only record the signature when a node is actually resident. Recording it while none is
+        // made the state sticky: the next tick saw an unchanged graph and skipped again.
+        if (boundOverlayGrading[overlay.id] != null) {
+          lastOverlayGraphSignatures[overlay.id] = graphSig
+        }
         lastOverlayFilterSignatures[overlay.id] = valueSig
         continue
       }
@@ -897,6 +947,10 @@ class VideoPlaybackEngine(
         applyingEffects = false
       }
       if (accepted) {
+        // The graph is live: THIS instance is now the resident overlay grading node. Recording it
+        // before the install (as the code used to) meant every later publishLive wrote uniforms
+        // into an object no shader program was reading, while the resident node kept its old look.
+        if (grading != null) boundOverlayGrading[overlay.id] = grading else boundOverlayGrading.remove(overlay.id)
         lastOverlayGraphSignatures[overlay.id] = graphSig
         lastOverlayFilterSignatures[overlay.id] = valueSig
         PreviewVideoSurfaceRegistry.rebindCurrent(p)
@@ -907,6 +961,11 @@ class VideoPlaybackEngine(
         } catch (t: Throwable) {
           Log.e(TAG, "Failed to restore overlay playback after look apply", t)
         }
+      } else {
+        // Nothing was installed: drop whatever was resident so the next look change retries the
+        // graph build instead of publishing into a dead object, and leave the signature unrecorded.
+        boundOverlayGrading.remove(overlay.id)
+        Log.e(TAG, "Overlay look apply failed for ${overlay.id} (${effects.size} effects)")
       }
     }
   }
@@ -990,6 +1049,14 @@ class VideoPlaybackEngine(
       overlayPlayers.keys.toList().filter { it !in activeIds }.forEach { id ->
         overlayPlayers.remove(id)?.let { p -> try { p.stop(); p.clearVideoSurface(); p.release() } catch (_: Exception) {} }
         overlayLoadedUris.remove(id)
+        // The resident grading node lived inside the released player's video graph. Keeping it (and
+        // its recorded graph signature) meant that when the overlay scrolled back into the window a
+        // fresh player was created with no effects, while applyOverlayLooks saw an "unchanged" graph
+        // with a resident node and skipped the install - the overlay came back unfiltered and every
+        // later publishLive wrote into the dead instance.
+        boundOverlayGrading.remove(id)
+        lastOverlayGraphSignatures.remove(id)
+        lastOverlayFilterSignatures.remove(id)
       }
       for (overlay in activeOverlays) {
         val effectiveUri = proxyEngine?.getProxyUri(overlay) ?: overlay.uri
