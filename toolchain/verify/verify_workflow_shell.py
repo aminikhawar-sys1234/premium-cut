@@ -4,14 +4,21 @@
 The workflows are the only compiler and the only emulator available to this
 repository, and a broken shell line in them fails a job *after* every test has
 already passed - which reads exactly like a product bug to whoever is watching
-the pull request. One real instance: the device job used ``${PIPESTATUS[0]}``,
-a bash-only expansion, while GitHub Actions runs ``script:`` blocks with
-``/usr/bin/sh`` (dash). dash aborts with "Bad substitution" and exit code 2 and
-never reaches the lines below it, so the step went red with 36/36 green tests.
+the pull request. Two real instances, both in this repository:
+
+  1. the device job used ``${PIPESTATUS[0]}``, a bash-only expansion. dash
+     aborts with "Bad substitution" and exit code 2 and never reaches the lines
+     below it, so the step went red with 36/36 green tests;
+  2. the same job had a multi-line ``if [ ... ]; then`` block. The action runs
+     the block one line per ``/usr/bin/sh -c``, so dash saw a dangling ``then``
+     and again exited 2 - after gradle had already passed every test.
 
 This check therefore pins, for every shell block in .github/workflows:
 
   * no bash-only construct (PIPESTATUS, ``[[ ]]'', arrays, ``+=``, ``function``),
+  * in the emulator-runner block (which the action executes one line per
+    ``/usr/bin/sh -c``): no construct spanning lines, no line continuation and
+    no variable read by a later line,
   * every embedded ``python3 - <<'PY'`` heredoc parses as Python,
   * the device job records gradle's exit code, ends with ``exit 0`` and has the
     report gate that decides the job from the XML reports.
@@ -102,12 +109,32 @@ def main() -> int:
     steps = {step.get("name"): step for step in device.get("steps") or []}
     runner = steps.get("Run instrumented tests on the emulator") or {}
     script = (runner.get("with") or {}).get("script", "")
-    check('echo "$GRADLE_EXIT" > gradle-exit.txt' in script,
-          "the device job records gradle's exit code for the summary")
-    check(script.rstrip().endswith("exit 0"),
-          "the device job no longer uses gradle's exit code as the step result")
-    check("> gradle-connected.log 2>&1" in script,
-          "gradle output is captured so a non-zero exit can be quoted")
+    check("> gradle-connected.log 2>&1; echo $? > gradle-exit.txt" in script,
+          "gradle's exit code is recorded on the same line it runs on")
+
+    # The emulator-runner action splits `script:` into one command per line and runs each line in
+    # its own `/usr/bin/sh -c`, so a line is the unit of execution: no construct may span lines,
+    # and no variable may be read by a later line.
+    code = [line.strip() for line in script.splitlines()
+            if line.strip() and not line.strip().startswith("#")]
+    check(bool(code), "the emulator script has commands")
+    closed = re.compile(r"\b(fi|done|esac)\b")
+    dangling = [line for line in code
+                if line.split(" ")[0] in ("if", "for", "while", "case")
+                and not closed.search(line)]
+    check(not dangling, "no construct spans lines in the emulator script"
+          + (f" -> {dangling[0]}" if dangling else ""))
+    continued = [line for line in code if line.endswith("\\")]
+    check(not continued, "no line continuation in the emulator script"
+          + (f" -> {continued[0]}" if continued else ""))
+    stale = []
+    for index, line in enumerate(code):
+        for name in re.findall(r"(?:^|[;&|]\s*)([A-Za-z_][A-Za-z0-9_]*)=", line):
+            for other in code[index + 1:]:
+                if f"${name}" in other or f"${{{name}}}" in other:
+                    stale.append(f"{name}: {line[:40]} -> {other[:40]}")
+    check(not stale, "no variable is read by a later line of the emulator script"
+          + (f" -> {stale[0]}" if stale else ""))
     check("Gate on the instrumented reports" in steps,
           "the device job has a gate that decides from the XML reports")
     gate = (steps.get("Gate on the instrumented reports") or {}).get("run", "")

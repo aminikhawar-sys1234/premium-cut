@@ -227,41 +227,22 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -no-snapshot-save
           disable-animations: true
           script: |
-            set +e
+            # The emulator-runner action splits this block into ONE COMMAND PER LINE and runs each
+            # line in its own `/usr/bin/sh -c` (dash on the Ubuntu runner). So: no multi-line
+            # if/fi, no variable that must survive to the next line, no bash-only syntax, and every
+            # line has to exit 0 - the first non-zero line fails the whole step even when all 36
+            # tests pass. A dangling `if [ ... ]; then` line is what kept this job red.
             adb shell "getprop ro.build.version.sdk; getprop ro.hardware.egl" || true
-            # Every measurement the tests write to look-verification.txt is also printed, and
-            # instrumentation stdout lands in logcat: that copy survives a failed adb pull or a
-            # crashed test process.
             adb logcat -c || true
             nohup adb logcat -v brief > logcat.txt 2>&1 &
-            LOGPID=$!
-            # `tee` keeps the gradle failure text on the runner, and the exit code has to come
-            # from gradle rather than from tee: the reviewing workstation cannot open the runner
-            # logs, so the summariser below is the only channel for the failure reason.
-            # This script runs under /usr/bin/sh (dash), so no bash-only constructs: no pipe, no
-            # PIPESTATUS. Gradle output goes to a file, its exit code is read straight from $?, and
-            # the tail is echoed back so the reason survives even without the artefact.
-            ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue > gradle-connected.log 2>&1
-            GRADLE_EXIT=$?
-            echo "$GRADLE_EXIT" > gradle-exit.txt
-            tail -c 8000 gradle-connected.log || true
-            # The external copy, then the internal one through run-as: some emulator images refuse
-            # `adb pull` of /sdcard/Android/data/<id>/files.
-            kill $LOGPID 2>/dev/null || true
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue > gradle-connected.log 2>&1; echo $? > gradle-exit.txt
+            pkill -f "adb logcat" || true
             sleep 1
             wc -l logcat.txt || true
             adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt 2>/dev/null || true
-            if [ ! -s look-verification.txt ]; then
-              adb shell "run-as $APP_ID cat files/look-verification.txt" > look-verification.txt 2>/dev/null || true
-              if [ -s look-verification.txt ]; then echo "fetched look-verification.txt through run-as"; fi
-            fi
-            echo "gradle exit code: $GRADLE_EXIT"
-            # Gradle can exit non-zero for runner reasons (a crashed instrumentation process,
-            # emulator teardown) after every case passed, and it also exits non-zero with no
-            # report at all when the APK never installs. Both are decided from the XML reports by
-            # the gate step below, which fails this job when a suite is missing or red. The gradle
-            # exit code and its failure section stay in the summary either way.
-            exit 0
+            [ -s look-verification.txt ] || adb shell "run-as $APP_ID cat files/look-verification.txt" > look-verification.txt 2>/dev/null || true
+            tail -c 8000 gradle-connected.log || true
+            true
 
       - name: Summarise instrumented results
         if: always()
