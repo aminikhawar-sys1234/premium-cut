@@ -238,9 +238,13 @@ jobs:
             # `tee` keeps the gradle failure text on the runner, and the exit code has to come
             # from gradle rather than from tee: the reviewing workstation cannot open the runner
             # logs, so the summariser below is the only channel for the failure reason.
-            ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue 2>&1 | tee gradle-connected.log
-            GRADLE_EXIT=${PIPESTATUS[0]}
+            # This script runs under /usr/bin/sh (dash), so no bash-only constructs: no pipe, no
+            # PIPESTATUS. Gradle output goes to a file, its exit code is read straight from $?, and
+            # the tail is echoed back so the reason survives even without the artefact.
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue > gradle-connected.log 2>&1
+            GRADLE_EXIT=$?
             echo "$GRADLE_EXIT" > gradle-exit.txt
+            tail -c 8000 gradle-connected.log || true
             # The external copy, then the internal one through run-as: some emulator images refuse
             # `adb pull` of /sdcard/Android/data/<id>/files.
             kill $LOGPID 2>/dev/null || true
