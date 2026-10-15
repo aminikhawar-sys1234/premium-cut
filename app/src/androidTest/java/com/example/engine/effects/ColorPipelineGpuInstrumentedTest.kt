@@ -581,9 +581,10 @@ class ColorPipelineGpuInstrumentedTest {
         )
         val deltaA = abs(mean[0] - 0.10f) + abs(mean[1] - 0.70f) + abs(mean[2] - 0.20f)
         val deltaB = abs(mean[0] - 0.80f) + abs(mean[1] - 0.10f) + abs(mean[2] - 0.60f)
+        // label carries a '%' - pass it as an argument, never into the format string.
         LookVerificationReport.line(
-          "transition@$label output vs clip A = %.4f, vs clip B = %.4f (a hard cut would be 0)"
-            .format(deltaA, deltaB)
+          "transition@%s output vs clip A = %.4f, vs clip B = %.4f (a hard cut would be 0)"
+            .format(label, deltaA, deltaB)
         )
         assertTrue(
           "the FADE@$label rendered exactly one of the two clips instead of dimming the visible one " +

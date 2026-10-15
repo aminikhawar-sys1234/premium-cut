@@ -150,4 +150,4 @@ so the caller takes the legacy single-texture path instead of blanking the frame
 `ExportBlackFrameGuard` is pure Kotlin and unit-tested
 (`ExportBlackFrameGuardTest`, also compiled by `toolchain/verify/run_logic_tests.sh`).
 `toolchain/verify/verify_black_frame_recovery.py` is the drift guard for the
-Kotlin/C++ contract above (58 checks) for sandboxes without Gradle/NDK.
+Kotlin/C++ contract above (60 checks) for sandboxes without Gradle/NDK.

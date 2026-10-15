@@ -164,6 +164,11 @@ def main() -> int:
     check("renderFade(0.5f)" in gpu_test and "behaves like a dissolve again" in gpu_test,
           "the 50% dip through black is pinned as intended behaviour")
     check("did not render at progress" in gpu_test, "a failed pass is asserted, not just logged")
+    check('"transition@%s output vs clip A' in gpu_test,
+          "the sample-point label is passed as a format argument, not into the format string")
+    receivers = re.findall(r'"((?:[^"\\\n]|\\.)*)"\s*\.format\(', gpu_test)
+    bad = [r for r in receivers if "$label" in r or "$progress" in r]
+    check(not bad, f"no format string interpolates a percent-bearing label {bad}")
     trans = read(TRANSITION)
     check("while (GLES20.glGetError() != GLES20.GL_NO_ERROR) {}" in trans,
           "pending GL errors are drained before the pass so the check is attributable to it")
