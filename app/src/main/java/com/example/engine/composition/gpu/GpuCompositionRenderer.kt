@@ -272,6 +272,14 @@ class GpuCompositionRenderer(private val context: Context) {
   var nativeCompositorEnabled: Boolean = true
   private var nativeCompositorFailure: String? = null
 
+  /**
+   * Set false to compose an active transition with the legacy single-texture path instead of the ES3
+   * shader transition engine. The engine can report success while leaving the target blank, and its
+   * output *replaces* the whole main picture, so a blank pass is a black frame. The export turns this
+   * off when it retries after a black output.
+   */
+  var shaderTransitionsEnabled: Boolean = true
+
   /** Sticky: once the native compositor failed to produce a picture it is not trusted again here. */
   private fun disableNativeCompositor(reason: String) {
     if (nativeCompositorFailure == null) {
@@ -1434,7 +1442,7 @@ class GpuCompositionRenderer(private val context: Context) {
     val tr = frame.activeTransition ?: return 0
     if (tr.type == TransitionType.NONE || before == null || after == null) return 0
     if (before.textureId <= 0 || after.textureId <= 0) return 0
-    if (!shaderTransitions.isAvailable()) return 0
+    if (!shaderTransitionsEnabled || !shaderTransitions.isAvailable()) return 0
 
     val pos = frame.timelinePosMs
     val frameA = frame.copy(

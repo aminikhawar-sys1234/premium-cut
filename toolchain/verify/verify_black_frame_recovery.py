@@ -43,6 +43,7 @@ NATIVE_ENGINE = os.path.join(MAIN, "cpp/render/NextGenGpuCompositionEngine.cpp")
 NATIVE_HEADER = os.path.join(MAIN, "cpp/render/NextGenGpuCompositionEngine.h")
 NATIVE_BRIDGE = os.path.join(MAIN, "cpp/native_bridge.cpp")
 BRIDGE_KT = os.path.join(MAIN, "java/com/example/engine/composition/gpu/NativeRenderBridge.kt")
+TRANSITION = os.path.join(MAIN, "java/com/example/engine/composition/gpu/ShaderTransitionCompositor.kt")
 RENDERER = os.path.join(MAIN, "java/com/example/engine/composition/gpu/GpuCompositionRenderer.kt")
 GRAPH = os.path.join(MAIN, "java/com/example/engine/composition/CompositionRenderGraph.kt")
 EXPORT = os.path.join(MAIN, "java/com/example/engine/export/AsyncFramePipelineEngine.kt")
@@ -132,6 +133,12 @@ def main() -> int:
     check("val drewNothing: Boolean get() = layersDrawn <= 0 || compositedTexture <= 0" in renderer, "an empty frame is detectable by the caller")
     check("): RenderReport {" in slice_between(renderer, "  fun render(", "if (viewportWidth <= 0"), "render returns the report")
     check("var nativeCompositorEnabled: Boolean = true" in renderer, "the compositor can be switched off per render surface")
+    check("var shaderTransitionsEnabled: Boolean = true" in renderer, "the ES3 transition engine can be switched off per render surface")
+    check("if (!shaderTransitionsEnabled || !shaderTransitions.isAvailable()) return 0" in renderer,
+          "a disabled transition engine falls back to the legacy single-texture path")
+    transitions = read(TRANSITION)
+    check("val glError = GLES20.glGetError()" in transitions and "using legacy path" in transitions,
+          "a transition pass that left a GL error is reported as a failure, not success")
     check("): GpuCompositionRenderer.RenderReport = renderer.render(" in graph, "the shared render graph forwards the report")
 
     print("-- the export acts on it instead of muxing black frames --")

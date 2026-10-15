@@ -135,6 +135,17 @@ What changed:
   handing the user a dead end. One retry, then the failure is reported with the
   per-frame p99/stddev evidence in Logcat.
 
+A retry drops **both** GPU paths that can hand back an empty picture: the native
+compositor and the ES3 shader transition engine. The second one matters because
+`renderShaderTransition` output *replaces* the whole main picture
+(`main2dTexRaw = if (shaderTransitionTexId > 0) ... else processMainVideoTo2D(...)`),
+so a blank pass is a black frame that no layer check can see - this is the
+failure §5.1 of `POST_PATCH_VERIFICATION.md` documents
+(`shaderTransitionsStillRenderIntoTheFrameOnTheGpu`, still failing on the
+SwiftShader emulator and pre-existing). `ShaderTransitionCompositor.render` now
+also treats a pending GL error after the pass as a failure, so the caller takes
+the legacy single-texture path instead of blanking the frame.
+
 `ExportBlackFrameGuard` is pure Kotlin and unit-tested
 (`ExportBlackFrameGuardTest`, also compiled by `toolchain/verify/run_logic_tests.sh`).
 `toolchain/verify/verify_black_frame_recovery.py` is the drift guard for the

@@ -110,6 +110,15 @@ class ShaderTransitionCompositor {
         Log.w(TAG, "Shader transition render error: ${result.error}")
         return false
       }
+      // The engine can report success while nothing reached the FBO, and the caller replaces the
+      // whole main picture with that texture - a blank pass therefore becomes a black frame in the
+      // export. A pending GL error is cheap to check and is proof the pass did not complete, so fall
+      // back to the legacy single-texture path instead of blanking the frame.
+      val glError = GLES20.glGetError()
+      if (glError != GLES20.GL_NO_ERROR) {
+        Log.w(TAG, "Shader transition left GL error 0x${Integer.toHexString(glError)}; using legacy path")
+        return false
+      }
       true
     } catch (t: Throwable) {
       Log.w(TAG, "Shader transition failed, using legacy path", t)

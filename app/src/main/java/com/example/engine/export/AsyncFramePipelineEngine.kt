@@ -575,11 +575,15 @@ class AsyncFramePipelineEngine(private val context: Context) {
           winSurface.makeCurrent()
 
           val rend = GpuCompositionRenderer(context)
+          // A retry after a black output drops both GPU paths that can hand back an empty picture:
+          // the native compositor (unusable offscreen target) and the ES3 transition engine (a blank
+          // pass replaces the whole main picture). The legacy paths always draw the real frames.
           rend.nativeCompositorEnabled = useNativeCompositor
+          rend.shaderTransitionsEnabled = useNativeCompositor
           gpuRenderer = rend
           rend.initGl()
           if (!useNativeCompositor) {
-            Log.w(tag, "Attempt $attemptNo composites with the Kotlin renderer (native compositor disabled)")
+            Log.w(tag, "Attempt $attemptNo composites with the Kotlin renderer and legacy transitions (GPU fast paths disabled)")
           }
           for ((uri, bmp) in imageBitmaps) {
             imageTextures[uri] = rend.uploadImageTexture(uri, bmp)
