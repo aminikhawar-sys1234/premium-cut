@@ -13,8 +13,20 @@ static inline ah_engine::NextGenGpuCompositionEngine* getEngine(jlong handle) {
     return reinterpret_cast<ah_engine::NextGenGpuCompositionEngine*>(handle);
 }
 
+// Kotlin owns EGL. Never issue GL commands using an engine from another thread/context.
+static inline ah_engine::NextGenGpuCompositionEngine* getCurrentEngine(JNIEnv* env, jlong handle) {
+    auto* engine = getEngine(handle);
+    if (engine && !engine->hasCurrentContext()) {
+        LOGE("Native engine %p used without its owning EGL context/thread", engine);
+        jclass type = env->FindClass("java/lang/IllegalStateException");
+        if (type) env->ThrowNew(type, "Native renderer requires its owning EGL context on the render thread");
+        return nullptr;
+    }
+    return engine;
+}
+
 extern "C" JNIEXPORT jlong JNICALL
-Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeInit(JNIEnv*, jobject, jint width, jint height) {
+Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeInit(JNIEnv* env, jobject, jint width, jint height) {
     auto* engine = new ah_engine::NextGenGpuCompositionEngine();
     if (!engine->init()) {
         delete engine;
@@ -26,8 +38,8 @@ Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeInit(JNIEnv*, j
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeResize(JNIEnv*, jobject, jlong handle, jint width, jint height) {
-    auto* engine = getEngine(handle);
+Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeResize(JNIEnv* env, jobject, jlong handle, jint width, jint height) {
+    auto* engine = getCurrentEngine(env, handle);
     if (engine && engine->isInitialized()) {
         engine->resize(width, height);
     }
@@ -35,7 +47,7 @@ Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeResize(JNIEnv*,
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeRenderFrame(JNIEnv* env, jobject, jlong handle, jfloatArray data, jint count) {
-    auto* engine = getEngine(handle);
+    auto* engine = getCurrentEngine(env, handle);
     if (!engine || !engine->isInitialized() || !data || count <= 0) return;
     if (env->GetArrayLength(data) < count * LAYER_STRIDE) return;
     jfloat* p = env->GetFloatArrayElements(data, nullptr); if (!p) return;
@@ -56,7 +68,7 @@ Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeRenderFrame(JNI
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeRenderExternalTexture(JNIEnv* env, jobject, jlong handle, jint textureId, jfloatArray matrixArray) {
-    auto* engine = getEngine(handle);
+    auto* engine = getCurrentEngine(env, handle);
     if (!engine || !engine->isInitialized() || textureId <= 0) return;
     float matrix[16]; const float* ptr = nullptr;
     if (matrixArray && env->GetArrayLength(matrixArray) >= 16) {
@@ -71,21 +83,21 @@ Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeRenderExternalT
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeBeginOffscreen(JNIEnv*, jobject, jlong handle) {
-    auto* engine = getEngine(handle);
+Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeBeginOffscreen(JNIEnv* env, jobject, jlong handle) {
+    auto* engine = getCurrentEngine(env, handle);
     if (engine && engine->isInitialized()) engine->beginOffscreen();
 }
 
 extern "C" JNIEXPORT jint JNICALL
-Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeEndOffscreen(JNIEnv*, jobject, jlong handle) {
-    auto* engine = getEngine(handle);
+Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeEndOffscreen(JNIEnv* env, jobject, jlong handle) {
+    auto* engine = getCurrentEngine(env, handle);
     return (engine && engine->isInitialized()) ? static_cast<jint>(engine->endOffscreen()) : 0;
 }
 
 extern "C" JNIEXPORT void JNICALL
 Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeApplyEffect(
-    JNIEnv*, jobject, jlong handle, jint effectType, jfloat intensity, jfloat param1, jfloat param2, jfloat timeMs) {
-    auto* engine = getEngine(handle);
+    JNIEnv* env, jobject, jlong handle, jint effectType, jfloat intensity, jfloat param1, jfloat param2, jfloat timeMs) {
+    auto* engine = getCurrentEngine(env, handle);
     if (!engine || !engine->isInitialized()) return;
     ah_engine::NativeEffectPass pass;
     pass.type = static_cast<ah_engine::NativeEffectType>(effectType);
@@ -97,20 +109,21 @@ Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeApplyEffect(
 }
 
 extern "C" JNIEXPORT jfloat JNICALL
-Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeGetLastFrameMs(JNIEnv*, jobject, jlong handle) {
-    auto* engine = getEngine(handle);
+Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeGetLastFrameMs(JNIEnv* env, jobject, jlong handle) {
+    auto* engine = getCurrentEngine(env, handle);
     return (engine && engine->isInitialized()) ? engine->stats().lastFrameMs : 0.0f;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeOnContextLost(JNIEnv*, jobject, jlong handle) {
+Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeOnContextLost(JNIEnv* env, jobject, jlong handle) {
     auto* engine = getEngine(handle);
     if (engine) engine->onContextLost();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeRelease(JNIEnv*, jobject, jlong handle) {
+Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeRelease(JNIEnv* env, jobject, jlong handle) {
     auto* engine = getEngine(handle);
+    if (engine && engine->isInitialized() && !getCurrentEngine(env, handle)) return;
     if (engine) {
         engine->release();
         delete engine;

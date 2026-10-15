@@ -40,13 +40,13 @@ object NativeRenderBridge {
   }
 
   fun resize(handle: Long, width: Int, height: Int) {
-    if (handle != 0L) runCatching { nativeResize(handle, width, height) }.onFailure { Log.e(TAG, "nativeResize failed", it) }
+    if (handle != 0L) runCatching { nativeResize(handle, width, height) }.onFailure { Log.e(TAG, "nativeResize failed", it); throw it }
   }
 
   /** Direct decoder SurfaceTexture/OES path. No Bitmap or CPU pixel readback is performed. */
   fun renderExternalTexture(handle: Long, textureId: Int, texMatrix: FloatArray? = null) {
     if (handle == 0L || textureId <= 0) return
-    try { nativeRenderExternalTexture(handle, textureId, texMatrix) } catch (e: Throwable) { Log.e(TAG, "nativeRenderExternalTexture failed", e) }
+    try { nativeRenderExternalTexture(handle, textureId, texMatrix) } catch (e: Throwable) { Log.e(TAG, "nativeRenderExternalTexture failed", e); throw e }
   }
 
   fun renderFrame(handle: Long, layers: List<NativeLayer>) {
@@ -61,20 +61,20 @@ object NativeRenderBridge {
       buffer[o+35] = if (layer.isExternal) 1f else 0f
       o += LAYER_STRIDE
     }
-    try { nativeRenderFrame(handle, buffer, layers.size) } catch (e: Throwable) { Log.e(TAG, "nativeRenderFrame failed", e) }
+    try { nativeRenderFrame(handle, buffer, layers.size) } catch (e: Throwable) { Log.e(TAG, "nativeRenderFrame failed", e); throw e }
   }
 
   fun beginOffscreen(handle: Long) {
-    if (handle != 0L) runCatching { nativeBeginOffscreen(handle) }
+    if (handle != 0L) runCatching { nativeBeginOffscreen(handle) }.onFailure { Log.e(TAG, "nativeBeginOffscreen failed", it) }.getOrThrow()
   }
 
   fun endOffscreen(handle: Long): Int {
-    return if (handle != 0L) runCatching { nativeEndOffscreen(handle) }.getOrDefault(0) else 0
+    return if (handle != 0L) runCatching { nativeEndOffscreen(handle) }.onFailure { Log.e(TAG, "nativeEndOffscreen failed", it) }.getOrThrow() else 0
   }
 
   fun applyEffect(handle: Long, effectType: NativeEffectType, intensity: Float = 1.0f, param1: Float = 0f, param2: Float = 0f, timeMs: Float = 0f) {
     if (handle != 0L && effectType != NativeEffectType.NONE) {
-      runCatching { nativeApplyEffect(handle, effectType.id, intensity, param1, param2, timeMs) }.onFailure { Log.e(TAG, "nativeApplyEffect failed", it) }
+      runCatching { nativeApplyEffect(handle, effectType.id, intensity, param1, param2, timeMs) }.onFailure { Log.e(TAG, "nativeApplyEffect failed", it); throw it }
     }
   }
 

@@ -111,6 +111,7 @@ class MuxerCoordinator(
   private var lastVideoPtsUs: Long = -1L
   private var lastAudioPtsUs: Long = -1L
   private var pendingBytes: Long = 0L
+  private var finalizationSucceeded = false
 
   /** Samples actually handed to MediaMuxer (queued samples count once they are flushed). */
   var videoSamplesWritten: Long = 0L
@@ -399,7 +400,7 @@ class MuxerCoordinator(
    */
   @Synchronized
   fun stopAndRelease(): Boolean {
-    if (isStopped) return true
+    if (isStopped) return finalizationSucceeded
     var success = true
     try {
       if (!isStarted && !hasAudio && videoTrackIndex >= 0) {
@@ -420,13 +421,18 @@ class MuxerCoordinator(
       }
     } finally {
       isStopped = true
+      isStarted = false
+      pendingQueue.clear()
+      pendingBytes = 0L
       try {
         mediaMuxer.release()
         Log.d(tag, "MediaMuxer released.")
       } catch (e: Exception) {
         Log.w(tag, "MediaMuxer.release() warning", e)
+        success = false
       }
     }
+    finalizationSucceeded = success
     return success
   }
 }

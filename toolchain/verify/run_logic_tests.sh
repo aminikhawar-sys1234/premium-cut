@@ -41,7 +41,9 @@ SOURCES=(
   "$MAIN/com/example/engine/effects/media3/PreviewGraphDecision.kt"
   "$MAIN/com/example/engine/ai/cutout/MaskDecoding.kt"
   "$MAIN/com/example/engine/preview/PreviewCompositionPolicy.kt"
+  "$MAIN/com/example/engine/export/ExportSurfaceSize.kt"
   # tests
+  "$TEST/com/example/engine/export/ExportSurfaceSizeTest.kt"
   "$TEST/com/example/engine/composition/ChromaKeyMathTest.kt"
   "$TEST/com/example/engine/composition/ChromaKeyResolverTest.kt"
   "$TEST/com/example/engine/composition/CompositionLookResolverTest.kt"
@@ -70,4 +72,5 @@ echo "== running tests"
   com.example.engine.composition.CompositionLookResolverTest \
   com.example.engine.effects.media3.PreviewGraphDecisionTest \
   com.example.engine.ai.cutout.MaskDecodingTest \
-  com.example.engine.preview.PreviewCompositionPolicyTest
+  com.example.engine.preview.PreviewCompositionPolicyTest \
+  com.example.engine.export.ExportSurfaceSizeTest

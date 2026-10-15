@@ -4,6 +4,7 @@
 #include <GLES3/gl3.h>
 #include <GLES2/gl2ext.h>
 #include <cstdint>
+#include <thread>
 #include <vector>
 #include "GpuRenderEngine.h"
 
@@ -54,6 +55,10 @@ public:
     void onContextLost();
     void release();
 
+    bool hasCurrentContext() const {
+        return ownerThread_ == std::this_thread::get_id() &&
+               ownerContext_ != EGL_NO_CONTEXT && eglGetCurrentContext() == ownerContext_;
+    }
     bool isInitialized() const { return initialized_; }
     const GpuRenderStats& stats() const { return stats_; }
 
@@ -71,6 +76,8 @@ private:
     void blend(BlendMode mode);
     void bindTarget(GLuint fbo, int width, int height);
 
+    EGLContext ownerContext_ = EGL_NO_CONTEXT;
+    std::thread::id ownerThread_;
     bool initialized_ = false;
     bool offscreenActive_ = false;
     int width_ = 0, height_ = 0;

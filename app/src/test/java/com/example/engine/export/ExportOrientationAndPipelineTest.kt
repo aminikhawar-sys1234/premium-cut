@@ -169,18 +169,20 @@ class ExportOrientationAndPipelineTest {
     val config = ExportConfig(resolution = Resolution.RES_1080P, frameRate = FrameRate.FPS_30, codecProfile = CodecProfile.H264_AVC)
     val plan = ExportEncoderPlanner.plan(config, 1920, 1080, 30)
     assertEquals("1080p width must stay 1920", 1920, plan.width)
-    assertEquals("1080p height must stay 1080", 1080, plan.height)
+    assertEquals("1080p coded height must be 16-aligned", 1088, plan.height)
     assertEquals(1920, plan.requestedWidth)
     assertEquals(1080, plan.requestedHeight)
     assertTrue("1080p bitrate must stay in a real FHD range", plan.bitrateBps in 2_000_000..40_000_000)
 
     val portrait = ExportEncoderPlanner.plan(config, 1080, 1920, 30)
-    assertEquals(1080, portrait.width)
+    assertEquals(1088, portrait.width)
     assertEquals(1920, portrait.height)
+    assertEquals(1080, portrait.requestedWidth)
+    assertEquals(1920, portrait.requestedHeight)
   }
 
   @Test
-  fun test480p720p2k4kPlannerKeepsRequestedCanvas() {
+  fun test480p720p2k4kPlannerRetainsRequestedSizeAndAlignsCodedCanvas() {
     data class Case(val res: Resolution, val w: Int, val h: Int)
     val cases = listOf(
       Case(Resolution.RES_480P, 854, 480),
@@ -195,8 +197,11 @@ class ExportOrientationAndPipelineTest {
       )
       assertEquals("${c.res} requested width", c.w, plan.requestedWidth)
       assertEquals("${c.res} requested height", c.h, plan.requestedHeight)
+      assertEquals("${c.res} coded width alignment", 0, plan.width % 16)
+      assertEquals("${c.res} coded height alignment", 0, plan.height % 16)
       if (c.res == Resolution.RES_480P || c.res == Resolution.RES_720P) {
-        assertEquals("${c.res} encoded width", c.w, plan.width)
+        val expectedWidth = if (c.res == Resolution.RES_480P) 864 else 1280
+        assertEquals("${c.res} aligned encoded width", expectedWidth, plan.width)
         assertEquals("${c.res} encoded height", c.h, plan.height)
       }
     }
