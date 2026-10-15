@@ -820,8 +820,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
           renderSurface.makeCurrent()
           var lastEglPtsNs = -1L
           val probeFrames = linkedSetOf(0L, totalFrames / 4, totalFrames / 2, totalFrames * 3 / 4, totalFrames - 1)
+          // The back-buffer readback is a lightweight hint only. Some EGL encoder surfaces
+          // do not support glReadPixels reliably, and five tiny patches cannot represent a
+          // transformed/PiP frame; the decoded MP4 validator is the authoritative full-frame check.
           var probes = 0
           var blackProbes = 0
+          var unavailableProbes = 0
 
           for (frameIndex in 0 until totalFrames) {
             renderingFrame = frameIndex
@@ -961,12 +965,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
             // crawl after the encoder queue filled (typically around the midpoint).
             GLES20.glFlush()
 
-            // Black-frame guard: sample the real back buffer on a few frames (cheap, diagnostic + hard fail
-            // only if EVERY sampled frame of a video project is black). The readback in here synchronises
-            // the GPU on its own, so no glFinish() is needed for correctness.
+            // Advisory black-frame diagnostic: sample a few points in the real back buffer. The final
+            // decoded-MP4 validator is authoritative; this point sample must never reject transformed/PiP
+            // content or treat an unsupported GL readback as proof that the output is black.
             if (frameIndex in probeFrames && assembled.mainTextureId > 0) {
-              probes++
-              if (isBackBufferBlack(exportWidth, exportHeight)) blackProbes++
+              when (isBackBufferBlack(exportWidth, exportHeight)) {
+                true -> {
+                  probes++
+                  blackProbes++
+                }
+                false -> probes++
+                null -> unavailableProbes++
+              }
             }
 
             var targetPtsNs = ptsUs * 1000L
@@ -1012,9 +1022,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
           }
 
           if (!stop.get() && probes >= 3 && blackProbes == probes) {
-            throw ExportPipelineException(
-              "Every sampled frame rendered completely black ($probes of $probes). Export stopped instead of writing a black video."
+            Log.w(
+              tag,
+              "Encoder-surface point probes were black in every readable sample ($blackProbes/$probes; " +
+                "$unavailableProbes unavailable). Continuing to mux: this small back-buffer probe can miss " +
+                "transformed/PiP content, so ExportValidator will inspect decoded frames before success."
             )
+          } else if (unavailableProbes > 0) {
+            Log.w(tag, "Encoder-surface black-frame probe unavailable for $unavailableProbes sample(s); final MP4 validation remains authoritative")
           }
         } catch (t: Throwable) {
           Log.e(tag, "Render loop failed frame=$renderingFrame size=${exportWidth}x$exportHeight codec=${videoEncoder.name} mime=${plan.mime} thread=${Thread.currentThread().name} submitted=${metrics.gpuFrames.get()}", t)
@@ -1202,11 +1217,19 @@ class AsyncFramePipelineEngine(private val context: Context) {
     else ExportPipelineException("$prefix: ${t.message ?: t.javaClass.simpleName}", t)
 
   /**
-   * True only when the centre and all four quadrants of the back buffer are essentially black.
-   * A centre-only probe treated letterboxed / PiP frames (black canvas in the middle) as failed.
+   * A cheap, advisory probe of five 8x8 back-buffer regions. Returns null when the driver reports
+   * a GL error: glReadPixels can be unsupported/unreliable on some encoder window surfaces, and an
+   * untouched (zero-filled) ByteBuffer must not be mistaken for proof of a black frame.
    */
-  private fun isBackBufferBlack(width: Int, height: Int): Boolean {
+  private fun isBackBufferBlack(width: Int, height: Int): Boolean? {
+    if (width <= 0 || height <= 0) return null
     return try {
+      val pendingErrors = consumeGlErrors()
+      if (pendingErrors.isNotEmpty()) {
+        Log.w(tag, "Skipping black-frame probe after pending GL error(s): ${formatGlErrors(pendingErrors)}")
+        return null
+      }
+
       val size = 8
       val midX = ((width - size) / 2).coerceAtLeast(0)
       val midY = ((height - size) / 2).coerceAtLeast(0)
@@ -1221,16 +1244,26 @@ class AsyncFramePipelineEngine(private val context: Context) {
         qX to rY,
         rX to rY
       )
-      origins.all { (x, y) -> isBlockBlack(x, y, size) }
+      var allBlack = true
+      for ((x, y) in origins) {
+        val blockBlack = isBlockBlack(x, y, size) ?: return null
+        if (!blockBlack) allBlack = false
+      }
+      allBlack
     } catch (e: Exception) {
       Log.w(tag, "Black-frame probe unavailable: ${e.message}")
-      false
+      null
     }
   }
 
-  private fun isBlockBlack(x: Int, y: Int, size: Int): Boolean {
+  private fun isBlockBlack(x: Int, y: Int, size: Int): Boolean? {
     val px = ByteBuffer.allocateDirect(size * size * 4)
     GLES20.glReadPixels(x, y, size, size, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, px)
+    val errors = consumeGlErrors()
+    if (errors.isNotEmpty()) {
+      Log.w(tag, "glReadPixels failed during black-frame probe: ${formatGlErrors(errors)}")
+      return null
+    }
     var i = 0
     while (i < size * size) {
       val base = i * 4
@@ -1242,6 +1275,19 @@ class AsyncFramePipelineEngine(private val context: Context) {
     }
     return true
   }
+
+  private fun consumeGlErrors(): List<Int> {
+    val errors = ArrayList<Int>(2)
+    repeat(16) {
+      val error = GLES20.glGetError()
+      if (error == GLES20.GL_NO_ERROR) return errors
+      errors += error
+    }
+    return errors
+  }
+
+  private fun formatGlErrors(errors: List<Int>): String =
+    errors.joinToString(prefix = "[", postfix = "]") { "0x${Integer.toHexString(it)}" }
 
   private val fallbackRetrievers = mutableMapOf<String, MediaMetadataRetriever>()
 
