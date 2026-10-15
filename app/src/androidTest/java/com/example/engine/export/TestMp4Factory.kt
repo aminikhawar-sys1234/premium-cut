@@ -16,7 +16,7 @@ object TestMp4Factory {
   const val H = 240
   const val FPS = 15
 
-  enum class Picture { COLORFUL, BLACK, DARK_NIGHT }
+  enum class Picture { COLORFUL, BLACK, DARK_NIGHT, GREEN_SCREEN }
 
   private class Sample(val data: ByteArray, val info: MediaCodec.BufferInfo)
   private class Encoded(val format: MediaFormat, val samples: List<Sample>)
@@ -56,6 +56,16 @@ object TestMp4Factory {
     Picture.DARK_NIGHT ->
       if (x in 20..60 && y in 20..60) 210                // a street lamp, ~3% of the frame
       else 20 + rnd.nextInt(0, 22)                       // dark but noisy sensor
+    Picture.GREEN_SCREEN -> if (x < W / 2) 145 else 106  // chroma key subject on the left
+  }
+
+  /**
+   * BT.601 limited-range chroma for [picture] at (x, y). Every older picture keeps 128/128, so the
+   * grey sources the validator tests rely on are unchanged.
+   */
+  private fun chromaAt(picture: Picture, x: Int): Pair<Int, Int> = when (picture) {
+    Picture.GREEN_SCREEN -> if (x < W / 2) 54 to 34 else 202 to 222 // green left, magenta right
+    else -> 128 to 128
   }
 
   private fun encodeVideo(durationMs: Long, picture: Picture): Encoded {
@@ -87,8 +97,9 @@ object TestMp4Factory {
               yP.buffer.put(y * yP.rowStride + x * yP.pixelStride, lumaAt(picture, fed, x, y, rnd).toByte())
             }
             for (y in 0 until H / 2) for (x in 0 until W / 2) {
-              uP.buffer.put(y * uP.rowStride + x * uP.pixelStride, 128.toByte())
-              vP.buffer.put(y * vP.rowStride + x * vP.pixelStride, 128.toByte())
+              val (u, v) = chromaAt(picture, x * 2)
+              uP.buffer.put(y * uP.rowStride + x * uP.pixelStride, u.toByte())
+              vP.buffer.put(y * vP.rowStride + x * vP.pixelStride, v.toByte())
             }
             codec.queueInputBuffer(i, 0, W * H * 3 / 2, fed * 1_000_000L / FPS, 0)
           }
