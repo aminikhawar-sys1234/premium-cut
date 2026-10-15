@@ -21,7 +21,17 @@ restricted to `github.com`, `api.github.com`, `registry.npmjs.org`, `pypi.org` a
 * **No instrumented test, no device, no emulator, no GPU.** Exported-video playback and audio sync
   have **not** been observed.
 
-What I did instead, in order of strength:
+**This gap was subsequently closed by CI** — see §6. The branch was pushed and PR **#57** opened, which
+triggered `Android CI/CD Build and Test` (ubuntu-24.04, JDK 21, Android SDK + NDK 28.2.13676358 +
+CMake 3.22.1). Run `38667106238` completed **success**: Android Lint, `./gradlew test` (the full
+Robolectric/JUnit suite, including both new test classes), **Build Debug APK** and **Build Release
+Bundle (AAB)** all passed. So the four Android-tainted files **do compile** and the whole unit-test
+suite **does pass** on the real toolchain. `Report failed unit tests` and `Gradle diagnostics on
+failure` (both `if: failure()`) were **skipped**, confirming no test failures.
+
+What still has *not* been done anywhere: anything on a **device, emulator or GPU** (§5 item 8 and 10).
+
+What I ran locally, in order of strength:
 
 1. **Bootstrapped a real JVM toolchain from the allowed registries** — `jdk4py` (Temurin JDK 25) from
    PyPI and `kotlin-compiler` 2.4.21 from npm — and used the repo's own
@@ -334,21 +344,42 @@ New tests by name (`PreviewGraphDecisionTest`): `aMissingResidentNodeAloneMustIn
 
 ## 6. Build status and unverified runtime behaviour
 
-**Build status: not run.** No Gradle/AGP/Android SDK is installable from the allowed hosts. CI
-(`.github/workflows/main.yml`, ubuntu-24.04 + JDK 21 + Android SDK + NDK 28.2.13676358 + CMake 3.22.1)
-is the only place the full build and the Robolectric suite can run. **Push this branch and read the CI
-result before trusting compilation.**
+**Build status: GREEN on the real toolchain.** PR **#57** → workflow `Android CI/CD Build and Test`,
+run `38667106238`, conclusion **success**. Every step that matters:
 
-Unverified at runtime:
+| CI step | Conclusion |
+|---|---|
+| Install Android SDK toolchain (CMake + NDK) | success |
+| Run Android Lint (Code Quality) | success |
+| **Run Unit Tests** (`./gradlew test`) | **success** |
+| Report failed unit tests (`if: failure()`) | **skipped** → no test failed |
+| **Build Debug APK** | **success** |
+| **Build Release Bundle (AAB)** | **success** |
+| Gradle diagnostics on failure (`if: failure()`) | **skipped** → no build failure |
 
-* That the four Android-tainted files compile. Risk is low and localised: the changes are named-argument
-  calls into two new pure objects whose exact signatures **were** compiled and exercised by the harness
-  (the tests call `outcomeFor`/`graphChanged`/`graphChangedOrForced`/`needsResidentGradingInstall` with
-  the same named arguments the engine uses), plus import additions and expression substitutions.
+So the four Android-tainted files (`VideoPlaybackEngine`, `AsyncFramePipelineEngine`,
+`PreviewCompositor`, `GpuCompositionRenderer`) **compile**, and the full unit-test suite passes.
+
+Both new test classes were genuinely **executed** by Gradle, not silently skipped: `app/build.gradle.kts`
+declares `testImplementation(libs.junit)` and sets **no** `useJUnitPlatform()`, so the default JUnit 4
+runner discovers them — the same runner the pre-existing `ChromaKeyResolverTest` /
+`PreviewEffectApplyPolicyTest` use, and both new classes are plain JUnit 4 (`org.junit.Test` +
+`org.junit.Assert`) in the standard `app/src/test/java` root. `PreviewGraphDecisionTest` needs no
+Robolectric because `PreviewGraphDecision` is pure.
+
+The raw CI log could not be downloaded from this sandbox (`results-receiver.actions.githubusercontent.com`
+is outside the allowed hosts), so the per-test counts come from the local JVM harness rather than from
+Gradle's XML reports. The step conclusions above are from the GitHub API and are authoritative for
+pass/fail.
+
+Still unverified anywhere — **needs a device or emulator**:
+
 * Actual GPU behaviour, `setVideoEffects` timing, surface rebinding, black-frame and audio-silence
   regressions.
-* Exported-file playback and A/V sync.
-* Whether RC2's overlay symptom reproduces on a real device exactly as the code path implies.
+* Exported-file playback and A/V sync (§5 item 8).
+* Renderer resource cleanup across repeated editor open/close (§5 item 10).
+* Whether RC2's overlay symptom reproduces on a real device exactly as the code path implies — the
+  state machine is now proven correct by executed tests, but the on-screen result has not been observed.
 
 Deliberate behaviour preservation (verified by exhaustive equivalence tests, not assumed):
 
@@ -365,9 +396,9 @@ Deliberate behaviour preservation (verified by exhaustive equivalence tests, not
 
 ## 7. Remaining limitations and recommended next steps
 
-1. **Run CI.** `./gradlew compileDebugKotlin testDebugUnitTest` plus the two app builds. This is the
-   single highest-value next step; everything else is secondary to it.
-2. **On-device verification of the three fixes**, in this order:
+1. ~~**Run CI.**~~ **Done — green** (run `38667106238`: Lint, `./gradlew test`, Debug APK, Release AAB).
+   Nothing further is needed for compilation or the unit-test suite.
+2. **On-device verification of the three fixes**, in this order — this is now the only remaining gap:
    * PiP/overlay filter: grade an overlay, scrub the playhead away until the overlay player is
      released, scrub back → the overlay must still be graded (RC2).
    * Filter with no Chroma Key, then add Chroma Key, then remove it, then change filter intensity
