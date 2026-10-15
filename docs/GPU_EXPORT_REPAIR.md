@@ -139,14 +139,15 @@ A retry drops **both** GPU paths that can hand back an empty picture: the native
 compositor and the ES3 shader transition engine. The second one matters because
 `renderShaderTransition` output *replaces* the whole main picture
 (`main2dTexRaw = if (shaderTransitionTexId > 0) ... else processMainVideoTo2D(...)`),
-so a blank pass is a black frame that no layer check can see - this is the
-failure §5.1 of `POST_PATCH_VERIFICATION.md` documents
-(`shaderTransitionsStillRenderIntoTheFrameOnTheGpu`, still failing on the
-SwiftShader emulator and pre-existing). `ShaderTransitionCompositor.render` now
-also treats a pending GL error after the pass as a failure, so the caller takes
-the legacy single-texture path instead of blanking the frame.
+so a blank pass is a black frame that no layer check can see. Note that the ES3
+`FADE` legitimately dips **through** black at 50% (see `POST_PATCH_VERIFICATION.md`
+§5.1) - that is the shader being correct, not an engine failure, which is why the
+instrumented case now samples 25%/75% for the never-blank contract and pins the 50%
+dip separately. `ShaderTransitionCompositor.render` additionally drains pending GL
+errors before the pass and treats an error raised by the pass itself as a failure,
+so the caller takes the legacy single-texture path instead of blanking the frame.
 
 `ExportBlackFrameGuard` is pure Kotlin and unit-tested
 (`ExportBlackFrameGuardTest`, also compiled by `toolchain/verify/run_logic_tests.sh`).
 `toolchain/verify/verify_black_frame_recovery.py` is the drift guard for the
-Kotlin/C++ contract above (51 checks) for sandboxes without Gradle/NDK.
+Kotlin/C++ contract above (58 checks) for sandboxes without Gradle/NDK.

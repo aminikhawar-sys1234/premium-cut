@@ -50,6 +50,8 @@ EXPORT = os.path.join(MAIN, "java/com/example/engine/export/AsyncFramePipelineEn
 GUARD = os.path.join(MAIN, "java/com/example/engine/export/ExportBlackFrameGuard.kt")
 VALIDATOR = os.path.join(MAIN, "java/com/example/engine/export/ProfessionalExportEngine.kt")
 GUARD_TEST = os.path.join(REPO, "app", "src", "test", "java", "com/example/engine/export/ExportBlackFrameGuardTest.kt")
+GPU_TEST = os.path.join(REPO, "app", "src", "androidTest", "java",
+                        "com/example/engine/effects/ColorPipelineGpuInstrumentedTest.kt")
 LOGIC_TESTS = os.path.join(REPO, "toolchain", "verify", "run_logic_tests.sh")
 
 RESULTS: list[tuple[bool, str]] = []
@@ -154,6 +156,17 @@ def main() -> int:
     check("rend.nativeCompositorEnabled = useNativeCompositor" in export, "the retry's renderer really uses the fallback compositor")
     check("fun checkDecodedFrames(file: File): FrameCheckResult" in validator, "the validator exposes a frames-only check")
     check("if (black == stats.size) ExportFailure.ALL_FRAMES_BLACK else null" in validator, "the frames-only check reports all-black output")
+
+    print("-- the GPU case samples the fade where a correct fade is not black --")
+    gpu_test = read(GPU_TEST)
+    check("renderFade(0.25f)" in gpu_test and "renderFade(0.75f)" in gpu_test,
+          "the never-blank assertion samples 25% and 75%, not the black midpoint")
+    check("renderFade(0.5f)" in gpu_test and "behaves like a dissolve again" in gpu_test,
+          "the 50% dip through black is pinned as intended behaviour")
+    check("did not render at progress" in gpu_test, "a failed pass is asserted, not just logged")
+    trans = read(TRANSITION)
+    check("while (GLES20.glGetError() != GLES20.GL_NO_ERROR) {}" in trans,
+          "pending GL errors are drained before the pass so the check is attributable to it")
 
     print("-- the policy itself is pure Kotlin and executable on a plain JVM --")
     check("import android" not in guard and "import androidx" not in guard, "ExportBlackFrameGuard has no android/androidx import")

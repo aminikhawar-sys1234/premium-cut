@@ -72,6 +72,8 @@ class ShaderTransitionCompositor {
   ): Boolean {
     if (type == TransitionType.NONE || texA <= 0 || texB <= 0 || outputFbo == 0) return false
     if (!isAvailable()) return false
+    // Clear any error the caller left behind so the check after the pass is attributable to it.
+    while (GLES20.glGetError() != GLES20.GL_NO_ERROR) {}
     return try {
       val eng = engine ?: TransitionAppBridge.createEngine().also { engine = it }
       val definition = TransitionAppBridge.getDefinitionForType(type)
