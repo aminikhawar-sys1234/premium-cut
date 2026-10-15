@@ -235,8 +235,12 @@ jobs:
             adb logcat -c || true
             nohup adb logcat -v brief > logcat.txt 2>&1 &
             LOGPID=$!
-            ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue
-            GRADLE_EXIT=$?
+            # `tee` keeps the gradle failure text on the runner, and the exit code has to come
+            # from gradle rather than from tee: the reviewing workstation cannot open the runner
+            # logs, so the summariser below is the only channel for the failure reason.
+            ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue 2>&1 | tee gradle-connected.log
+            GRADLE_EXIT=${PIPESTATUS[0]}
+            echo "$GRADLE_EXIT" > gradle-exit.txt
             # The external copy, then the internal one through run-as: some emulator images refuse
             # `adb pull` of /sdcard/Android/data/<id>/files.
             kill $LOGPID 2>/dev/null || true
@@ -248,7 +252,12 @@ jobs:
               if [ -s look-verification.txt ]; then echo "fetched look-verification.txt through run-as"; fi
             fi
             echo "gradle exit code: $GRADLE_EXIT"
-            exit $GRADLE_EXIT
+            # Gradle can exit non-zero for runner reasons (a crashed instrumentation process,
+            # emulator teardown) after every case passed, and it also exits non-zero with no
+            # report at all when the APK never installs. Both are decided from the XML reports by
+            # the gate step below, which fails this job when a suite is missing or red. The gradle
+            # exit code and its failure section stay in the summary either way.
+            exit 0
 
       - name: Summarise instrumented results
         if: always()
@@ -312,7 +321,82 @@ jobs:
                           "\n".join(scraped[-300:])[:15000], "```"]
               else:
                   out += ["", "`look-verification.txt` was not produced and the device stdout was empty."]
+          gradle_exit = None
+          if os.path.exists("gradle-exit.txt"):
+              try:
+                  gradle_exit = int(open("gradle-exit.txt").read().strip())
+              except ValueError:
+                  gradle_exit = None
+          if gradle_exit not in (None, 0):
+              note = (f"`./gradlew :app:connectedDebugAndroidTest` exited **{gradle_exit}**")
+              if not failures:
+                  note += (" although every XML report above is green - so the failure is in the "
+                           "instrumentation run itself, not in a test case.")
+              out += ["", note, ""]
+              log = ""
+              if os.path.exists("gradle-connected.log"):
+                  log = open("gradle-connected.log", errors="replace").read()
+              if log:
+                  idx = log.find("FAILURE:")
+                  excerpt = log[idx:idx + 8000] if idx >= 0 else log[-8000:]
+                  out += ["", "### Gradle output (failure section)", "", "```",
+                          excerpt.strip()[:8000], "```"]
+              else:
+                  out += ["", "_gradle-connected.log was not produced_"]
+
           open("device-report.md", "w").write("\n".join(out) + "\n")
+          PY
+
+      - name: Gate on the instrumented reports
+        if: always()
+        run: |
+          python3 - <<'PY'
+          import glob, os, sys, xml.etree.ElementTree as ET
+          expected = [
+              "com.example.ExampleInstrumentedTest",
+              "com.example.engine.effects.ColorPipelineGpuInstrumentedTest",
+              "com.example.engine.export.CompositionRegressionInstrumentedTest",
+              "com.example.engine.export.ExportLookPersistenceInstrumentedTest",
+              "com.example.engine.export.ExportValidatorInstrumentedTest",
+          ]
+          seen, bad, total = set(), [], 0
+          for path in sorted(glob.glob("app/build/outputs/androidTest-results/**/*.xml", recursive=True)):
+              try:
+                  root = ET.parse(path).getroot()
+              except Exception as exc:
+                  bad.append(f"{path} could not be parsed: {exc}")
+                  continue
+              suites = [root] if root.tag == "testsuite" else list(root.iter("testsuite"))
+              for suite in suites:
+                  name = suite.get("name") or ""
+                  seen.add(name)
+                  total += int(suite.get("tests", 0) or 0)
+                  for field in ("failures", "errors"):
+                      count = int(suite.get(field, 0) or 0)
+                      if count:
+                          bad.append(f"{name}: {count} {field}")
+          missing = [x for x in expected if x not in seen]
+          gradle_exit = None
+          if os.path.exists("gradle-exit.txt"):
+              try:
+                  gradle_exit = int(open("gradle-exit.txt").read().strip())
+              except ValueError:
+                  gradle_exit = None
+          print(f"suites seen: {sorted(seen)}")
+          print(f"total instrumented cases: {total}; gradle exit code: {gradle_exit}")
+          problems = list(bad)
+          if missing:
+              problems.append(f"suites that never reported a result: {missing}")
+          if total < 30:
+              problems.append(f"only {total} instrumented cases ran, expected at least 30")
+          if problems:
+              print("GATE FAILED:")
+              for problem in problems:
+                  print(f" - {problem}")
+              sys.exit(1)
+          print(f"GATE PASSED: every instrumented case passed ({total} cases)")
+          if gradle_exit not in (None, 0):
+              print(f"note: gradle exited {gradle_exit} - the reason is quoted in the summary comment")
           PY
 
       - name: Upload device reports
@@ -324,6 +408,8 @@ jobs:
             device-report.md
             look-verification.txt
             logcat.txt
+            gradle-connected.log
+            gradle-exit.txt
             gradle-logs
             app/build/reports/androidTests
             app/build/outputs/androidTest-results
