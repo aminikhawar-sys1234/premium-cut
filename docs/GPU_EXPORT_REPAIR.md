@@ -76,3 +76,12 @@ adb logcat -v threadtime AsyncFramePipeline:V ExportDiagnostics:V \
 New diagnostics include codec name, full requested configure format, relaxed
 attempt state, device model/API level, codec diagnostic/recoverable/transient
 fields, render thread, frame index, submitted-frame count, and EGL error code.
+
+## PR CI follow-up
+
+The first GitHub Actions run for PR #59 passed Android Lint but failed unit tests
+because two existing planner tests still asserted the previous unaligned coded
+sizes (1920x1080 and 854x480). Those assertions now expect 1920x1088 and 864x480,
+including portrait coverage and alignment assertions for every tested resolution.
+Requested/UI dimensions remain unchanged. A new CI run is required to confirm
+the corrected suite and complete APK/AAB builds.
