@@ -23,11 +23,14 @@ class ColorShaderManager {
         val hdrOutput: Boolean
     )
 
-    class Program(val id: Int, val key: VariantKey) {
+    class Program(val id: Int, val key: VariantKey) : ColorTextureUnits.ShaderProgramView {
         val uniforms = HashMap<String, Int>()
         fun loc(name: String): Int = uniforms.getOrPut(name) {
             GLES30.glGetUniformLocation(id, name)
         }
+
+        override val programId: Int get() = id
+        override fun uniformLocation(name: String): Int = loc(name)
     }
 
     private val cache = HashMap<VariantKey, Program>()
