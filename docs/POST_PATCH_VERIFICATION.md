@@ -101,10 +101,10 @@ Measured on API 30 x86_64, `OpenGL ES 3.0 SwiftShader 4.0.0.1`:
 
 ## 5. Failures, root causes, and what is *not* verified
 
-### 5.1 Shader transitions blank the frame (pre-existing, not from this patch)
+### 5.1 "Shader transitions blank the frame" was a wrong test sample point (fixed)
 
-The ES3 transition compositor reports success but leaves a black frame, so an exported FADE is a
-hard cut:
+The instrumented case sampled `FADE` at exactly `progress = 0.5` and asserted the frame was not
+black:
 
 ```
 shader transition compositor: available=true (OpenGL ES 3.0 SwiftShader 4.0.0.1)
@@ -112,14 +112,20 @@ transition FADE@50%: rendered=true meanRgb=0.0000/0.0000/0.0000
 transition fades: before(600ms)=0.5328 mid(1000ms)=0.0000 after(1450ms)=0.0000
 ```
 
-`ShaderTransitionCompositor` documents "a broken transition must never blank a frame", and
-`render()` returning `true` while the FBO is black violates that. The transition engine
-(`com/ahstudio/transition/**`), `ShaderTransitionCompositor` and the caller
-(`GpuCompositionRenderer.renderShaderTransition`) are **not in PR #52's changed-file list** — the
-patch only touched the overlay look fallback, `grainSeed` and `bindCommonUniforms` in that file — so
-this is not a regression from the look patch. It is reproducible on this emulator (SwiftShader) and
-needs a real device to decide whether it is driver-specific. Until then the FADE assertion is
-deliberately still failing rather than skipped.
+That is not an engine failure - it is the shader being correct. `FADE_FRAG` is a dip *through*
+black (`p < 0.5` fades clip A down to zero, `p >= 0.5` fades clip B up from zero), which is exactly
+what `docs/transition-tools-audit.md` bug 1 changed on purpose ("Fade now uses the fade shader"
+because it had behaved like a dissolve). At `p = 0.5` the multiplier is `(0.5 - 0.5) * 2 = 0`, so a
+working engine returns pure black - the reported `meanRgb=0.0000/0.0000/0.0000` with
+`deltaA=1.0 / deltaB=1.5` is the arithmetic of the two test colours, not a blanked framebuffer.
+
+`shaderTransitionsStillRenderIntoTheFrameOnTheGpu` now samples 25% and 75% (where a correct fade
+still shows half-brightness clip A / clip B) for the "never blank a frame" contract, and pins the
+50% dip explicitly so a Fade that quietly becomes a dissolve again is caught here.
+
+`ShaderTransitionCompositor.render` additionally drains pending GL errors before the pass and
+reports failure when the pass itself raised one, so a genuinely blanked pass falls back to the
+legacy single-texture path instead of handing the export a black texture.
 
 ### 5.2 Bugs found in the *verification* code (fixed)
 

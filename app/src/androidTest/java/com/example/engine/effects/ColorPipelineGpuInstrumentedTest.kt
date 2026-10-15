@@ -552,34 +552,54 @@ class ColorPipelineGpuInstrumentedTest {
     try {
       val texA = gl().uploadSolidRgb(0.10f, 0.70f, 0.20f)
       val texB = gl().uploadSolidRgb(0.80f, 0.10f, 0.60f)
-      gl().bindFbo()
-      val rendered = compositor.render(
-        TransitionType.FADE, 0.5f, texA, texB, gl().size, gl().size, gl().fboId
-      )
-      gl().bindFbo()
-      val frame = gl().readBackRgb()
-      val mean = meanRgb(frame)
-      LookVerificationReport.line(
-        "transition FADE@50%%: rendered=$rendered meanRgb=%.4f/%.4f/%.4f".format(
-          mean[0], mean[1], mean[2]
+
+      fun renderFade(progress: Float): FloatArray {
+        gl().bindFbo()
+        val rendered = compositor.render(
+          TransitionType.FADE, progress, texA, texB, gl().size, gl().size, gl().fboId
         )
-      )
-      assertTrue("the shader transition did not render", rendered)
-      val deltaA = abs(mean[0] - 0.10f) + abs(mean[1] - 0.70f) + abs(mean[2] - 0.20f)
-      val deltaB = abs(mean[0] - 0.80f) + abs(mean[1] - 0.10f) + abs(mean[2] - 0.60f)
-      LookVerificationReport.line(
-        "transition output vs clip A = %.4f, vs clip B = %.4f (a hard cut would be 0)".format(deltaA, deltaB)
-      )
+        gl().bindFbo()
+        val mean = meanRgb(gl().readBackRgb())
+        LookVerificationReport.line(
+          "transition FADE@%.0f%%: rendered=%s meanRgb=%.4f/%.4f/%.4f"
+            .format(progress * 100f, rendered, mean[0], mean[1], mean[2])
+        )
+        assertTrue("the shader transition did not render at progress $progress", rendered)
+        return mean
+      }
+
+      // Fade DIPS THROUGH BLACK (transition-tools-audit bug 1: Fade must not behave like a
+      // dissolve), so 50% is the one progress where a correct engine is black. "Is the engine
+      // drawing anything?" therefore has to be sampled off the midpoint: at 25% clip A is still on
+      // screen at half brightness, at 75% clip B is.
+      for ((label, mean) in listOf("25%" to renderFade(0.25f), "75%" to renderFade(0.75f))) {
+        assertTrue(
+          "the ES3 transition compositor reported success but left a black frame at $label " +
+            "(its own contract is 'a broken transition must never blank a frame'): " +
+            "meanRgb=%.4f/%.4f/%.4f".format(mean[0], mean[1], mean[2]),
+          mean[0] + mean[1] + mean[2] > 0.05f
+        )
+        val deltaA = abs(mean[0] - 0.10f) + abs(mean[1] - 0.70f) + abs(mean[2] - 0.20f)
+        val deltaB = abs(mean[0] - 0.80f) + abs(mean[1] - 0.10f) + abs(mean[2] - 0.60f)
+        // label carries a '%' - pass it as an argument, never into the format string.
+        LookVerificationReport.line(
+          "transition@%s output vs clip A = %.4f, vs clip B = %.4f (a hard cut would be 0)"
+            .format(label, deltaA, deltaB)
+        )
+        assertTrue(
+          "the FADE@$label rendered exactly one of the two clips instead of dimming the visible one " +
+            "(delta A=$deltaA, delta B=$deltaB)",
+          deltaA > 0.05f && deltaB > 0.05f
+        )
+      }
+
+      // Pin the dip itself: a Fade that is bright at 50% has silently become a dissolve again,
+      // which is the bug this shader exists to fix.
+      val midpoint = renderFade(0.5f)
       assertTrue(
-        "the ES3 transition compositor reported success but left a black frame " +
-          "(its own contract is 'a broken transition must never blank a frame'): " +
-          "meanRgb=%.4f/%.4f/%.4f".format(mean[0], mean[1], mean[2]),
-        mean[0] + mean[1] + mean[2] > 0.05f
-      )
-      assertTrue(
-        "the FADE rendered exactly one of the two clips instead of blending them " +
-          "(delta A=$deltaA, delta B=$deltaB)",
-        deltaA > 0.05f && deltaB > 0.05f
+        "Fade no longer dips through black at 50% - it behaves like a dissolve again: " +
+          "meanRgb=%.4f/%.4f/%.4f".format(midpoint[0], midpoint[1], midpoint[2]),
+        midpoint[0] + midpoint[1] + midpoint[2] < 0.05f
       )
     } finally {
       runCatching { compositor.release() }

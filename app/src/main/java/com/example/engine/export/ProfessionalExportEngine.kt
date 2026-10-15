@@ -155,6 +155,40 @@ object ExportValidator {
     }
   }
 
+  /** Decoded-frame statistics of one file, for the black-frame check the export pipeline runs itself. */
+  data class FrameCheckResult(
+    val failure: ExportFailure?,
+    val decodedFrames: Int,
+    val blackFrames: Int,
+    val detail: String
+  )
+
+  /**
+   * Decodes the sampled frames of a finished MP4 and reports whether every one of them is black.
+   * Used by [AsyncFramePipelineEngine] right after muxing: a black output is the one failure no
+   * container statistic reveals, and catching it inside the pipeline lets the attempt ladder retry
+   * with the fallback compositor instead of rejecting the whole export at the end.
+   *
+   * Returns no failure when nothing could be decoded - an unreadable file is a different failure,
+   * reported by [validate], and must not be misreported as black frames.
+   */
+  fun checkDecodedFrames(file: File): FrameCheckResult {
+    val probe = try {
+      probe(file, sampleFrames = true, pipelineFailure = null)
+    } catch (t: Throwable) {
+      Log.w(TAG, "Decoded-frame check skipped: ${t.javaClass.simpleName}: ${t.message}")
+      return FrameCheckResult(null, 0, 0, "frames could not be probed")
+    }
+    val stats = probe.frames.mapNotNull { it.stats }
+    if (stats.isEmpty()) return FrameCheckResult(null, 0, 0, "no sampled frame could be decoded")
+    val black = stats.count { it.isBlack }
+    val detail = stats.joinToString(prefix = "${stats.size} frame(s), $black black: ", separator = " | ") {
+      "p99=${it.p99Luma} stddev=${"%.1f".format(it.stdDevLuma)} mean=${"%.1f".format(it.meanLuma)}"
+    }
+    val failure = if (black == stats.size) ExportFailure.ALL_FRAMES_BLACK else null
+    return FrameCheckResult(failure, stats.size, black, detail)
+  }
+
   private fun probe(file: File, sampleFrames: Boolean, pipelineFailure: String?): ExportContentProbe {
     if (!file.exists()) return ExportContentProbe(fileExists = false, pipelineFailure = pipelineFailure)
     val fileBytes = file.length()
@@ -405,7 +439,13 @@ class ProfessionalExportEngine(private val context: Context) {
       Log.i(tag, "[EXPORT_TIMING] render=${System.currentTimeMillis() - renderStartMs}ms validation=${System.currentTimeMillis() - validateStartMs}ms")
       if (!validation.valid) {
         // Never hand a broken file to the user as a successful export. The project is untouched, so the user can retry.
-        Log.e(tag, "Export validation FAILED: ${validation.message} (${rendered.length()} bytes). Rejecting output.")
+        // Keep the pixel evidence with the failure: "black" is otherwise impossible to debug from a file.
+        val evidence = if (validation.failure == ExportFailure.ALL_FRAMES_BLACK) {
+          ExportValidator.checkDecodedFrames(rendered).detail
+        } else {
+          "not sampled"
+        }
+        Log.e(tag, "Export validation FAILED [${validation.failure}]: ${validation.message} (${rendered.length()} bytes). Frames: $evidence. Rejecting output.")
         try { rendered.delete() } catch (_: Exception) {}
         _progress.value = ProfessionalExportProgress(
           ProfessionalExportStage.FAILED, 0f, plan.durationMs,

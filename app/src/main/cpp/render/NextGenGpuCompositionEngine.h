@@ -46,11 +46,17 @@ public:
     void resize(int width, int height);
     void renderFrame(const std::vector<RenderLayer>& layers);
     void renderExternalTexture(GLuint textureId, const float* texMatrix);
-    
+
     // Multi-pass native GPU effect chain on active target
     void applyEffectPass(const NativeEffectPass& pass);
 
-    void beginOffscreen();
+    /**
+     * Binds the offscreen composition target. Returns false when the target could not be prepared
+     * (driver refused the textures / framebuffer incomplete), so the caller draws with another path
+     * instead of reading back an empty - i.e. black - texture.
+     */
+    bool beginOffscreen();
+    /** The composed texture, or 0 when nothing was ever drawn into a valid target. */
     GLuint endOffscreen();
     void onContextLost();
     void release();
@@ -66,7 +72,8 @@ private:
     bool buildPrograms();
     GLuint compile(GLenum type, const char* source);
     void destroyPrograms();
-    void ensureTargets(int width, int height);
+    /** (Re)allocates the ping-pong targets. False when the driver refused them (would be black output). */
+    bool ensureTargets(int width, int height);
     void destroyTargets();
 
     void drawTexture(GLuint texture, const float* mvp, const float* st, float opacity, BlendMode mode, bool external, bool premultiply);
@@ -94,6 +101,8 @@ private:
     GLuint target_[3] = {0, 0, 0};
     int targetWidth_ = 0, targetHeight_ = 0;
     int activeTarget_ = 0;
+    /** True only while every ping-pong target exists AND its framebuffer is complete. */
+    bool targetsValid_ = false;
 
     GpuRenderStats stats_;
     float projection_[16]{};
