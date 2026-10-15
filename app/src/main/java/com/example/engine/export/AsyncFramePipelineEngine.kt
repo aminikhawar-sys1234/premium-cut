@@ -19,6 +19,7 @@ import android.util.Log
 import android.view.Surface
 import com.example.domain.model.*
 import com.example.engine.composition.ChromaKeyResolver
+import com.example.engine.composition.CompositionLookResolver
 import com.example.engine.composition.CompositionRenderGraph
 import com.example.engine.composition.VideoCompositionEngine
 import com.example.engine.composition.graph.SharedCompositionGraph
@@ -897,19 +898,29 @@ class AsyncFramePipelineEngine(private val context: Context) {
             )
             val composeStart = System.nanoTime()
             val rend = gpuRenderer ?: throw IllegalStateException("GPU renderer is not initialised")
+            val lookFallback = CompositionLookResolver.timelineFallback(timeline)
             CompositionRenderGraph.present(
               renderer = rend,
               assembled = assembled,
               viewportWidth = exportWidth,
               viewportHeight = exportHeight,
-              // The effective look of the clip this frame shows, resolved exactly the way the
-              // preview resolves it (`clip.adjustments ?: timeline.adjustments` /
-              // `clip.filter ?: timeline.filter`). The Filters / Adjust / Video Quality panel
-              // always writes clip-local looks (TimelineEngine.updateFilter clears
-              // Timeline.filter), so passing the bare timeline values here exported a project
-              // with none of the looks the editor was showing.
-              adjustments = frame.activeClip?.adjustments ?: timeline.adjustments,
-              filter = frame.activeClip?.filter ?: timeline.filter,
+              // These two arguments are the PROJECT-LEVEL FALLBACK, not "the look of this frame".
+              // GpuCompositionRenderer resolves every layer against them, per layer: the main
+              // picture with `activeClip.adjustments ?: fallback`, each transition side with its own
+              // clip, each PIP / overlay with `overlay.clip.adjustments ?: fallback`
+              // (CompositionLookResolver). Passing the timeline values is therefore what gives the
+              // main clip its own look - and it is what PreviewCompositor passes, so preview and
+              // export now hand the renderer identical arguments.
+              //
+              // This used to pre-resolve the main clip (`frame.activeClip?.adjustments ?:
+              // timeline.adjustments`). For the main layer that is idempotent, so the exported look
+              // matched the panel. For EVERY OTHER layer it was wrong: an overlay or transition side
+              // with no clip-local look inherited the *main clip's* grade in the export while the
+              // preview fell back to the timeline's. Since the Filters panel writes clip-local looks
+              // and clears Timeline.filter to NONE, exported PIPs carried a grade the preview never
+              // showed.
+              adjustments = lookFallback.adjustments,
+              filter = lookFallback.filter,
               chromaKey = timeline.chromaKey,
               presentation = CompositionRenderGraph.FramePresentation.export(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER),
               chromaBackgroundFrame = chromaBackgroundFrame

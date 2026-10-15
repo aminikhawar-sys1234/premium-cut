@@ -11,6 +11,7 @@ import com.example.domain.model.*
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
 import com.example.engine.composition.ChromaKeyResolver
+import com.example.engine.composition.CompositionLookResolver
 import com.example.engine.composition.ComposedFrame
 import com.example.engine.composition.TransitionPreviewMotion
 import com.example.engine.composition.ComposedOverlay
@@ -1119,7 +1120,9 @@ class GpuCompositionRenderer(private val context: Context) {
     var keyframeBlur = 0f
     var keyframeEffectParam = 0f
     // Per-clip Adjust / Video Quality override; project-wide values are the fallback.
-    val baseAdjustments = frame.activeClip?.adjustments ?: adjustments
+    // CompositionLookResolver is the single implementation of that rule, shared with the overlays,
+    // the transition sides and the export caller.
+    val baseAdjustments = CompositionLookResolver.adjustmentsFor(frame.activeClip, adjustments)
     var finalAdjustments = baseAdjustments
     var finalOpacity = 1.0f
 
@@ -1237,7 +1240,7 @@ class GpuCompositionRenderer(private val context: Context) {
       }
     }
 
-    val effectiveFilter = clip?.filter ?: filter
+    val effectiveFilter = CompositionLookResolver.filterFor(clip, filter)
     bindCommonUniforms(
       program = program,
       textureId = textureId,
@@ -1449,7 +1452,7 @@ class GpuCompositionRenderer(private val context: Context) {
 
     // Preview resolves an overlay's look as `clip.adjustments ?: timeline.adjustments`, so the
     // export must use the same fallback instead of a bare neutral VideoAdjustments.
-    val overlayBase = overlay.clip.adjustments ?: fallbackAdjustments
+    val overlayBase = CompositionLookResolver.adjustmentsFor(overlay.clip, fallbackAdjustments)
     val overlayAdj = overlayBase.copy(
       brightness = (overlayBase.brightness + overlay.brightness).coerceIn(-1f, 1f),
       contrast = (overlayBase.contrast * overlay.contrast).coerceAtLeast(0f),
@@ -1462,7 +1465,7 @@ class GpuCompositionRenderer(private val context: Context) {
       isOes = isOes,
       opacity = 1.0f,
       adjustments = overlayAdj,
-      filter = overlay.clip.filter ?: fallbackFilter,
+      filter = CompositionLookResolver.filterFor(overlay.clip, fallbackFilter),
       chromaKey = chromaKey,
       viewportWidth = viewportWidth,
       viewportHeight = viewportHeight,

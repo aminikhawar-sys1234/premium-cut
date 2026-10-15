@@ -51,26 +51,33 @@ object PreviewEffectApplyPolicy {
     }
   }
 
-  fun shouldRebuildGraph(previousGraphSignature: String?, nextGraphSignature: String, force: Boolean): Boolean {
-    if (force && previousGraphSignature == null) return true
-    return previousGraphSignature != nextGraphSignature
-  }
+  /** Delegates to [PreviewGraphDecision] so there is exactly one definition of "the graph changed". */
+  fun shouldRebuildGraph(previousGraphSignature: String?, nextGraphSignature: String, force: Boolean): Boolean =
+    PreviewGraphDecision.shouldRebuildGraph(previousGraphSignature, nextGraphSignature, force)
 
   /**
    * Never enable Media3's effects renderer with an empty list just to "apply nothing".
    * That swap is what invalidated the decoder surface and silenced source audio.
    * Clearing a previously applied graph is required when the look is reset.
+   *
+   * Delegates to [PreviewGraphDecision]. Callers that also track whether a grading node is resident
+   * must use [PreviewGraphDecision.graphChanged] for `graphChanged` — passing a value recalculated
+   * from the signature alone is what let a missing resident node be ignored here.
    */
   fun shouldCallSetVideoEffects(
     newEffectCount: Int,
     previousHadEffects: Boolean,
     graphChanged: Boolean,
     force: Boolean
-  ): Boolean {
-    if (newEffectCount == 0 && !previousHadEffects) return false
-    if (!graphChanged && !force) return false
-    return graphChanged || force
-  }
+  ): Boolean =
+    PreviewGraphDecision.outcomeFor(
+      graphChanged = graphChanged,
+      signatureChanged = graphChanged,
+      residentGradingNode = true,
+      newEffectCount = newEffectCount,
+      previousHadEffects = previousHadEffects,
+      force = force
+    ).callSetVideoEffects
 
   /**
    * `setVideoEffects` on a freshly recreated player with no TextureView builds a dead
