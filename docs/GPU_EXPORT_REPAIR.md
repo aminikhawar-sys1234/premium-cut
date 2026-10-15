@@ -85,3 +85,57 @@ sizes (1920x1080 and 854x480). Those assertions now expect 1920x1088 and 864x480
 including portrait coverage and alignment assertions for every tested resolution.
 Requested/UI dimensions remain unchanged. A new CI run is required to confirm
 the corrected suite and complete APK/AAB builds.
+
+## Black-frame repair (export failed verification: every sampled frame is black)
+
+Symptom: the export ran to the end, the MP4 was muxed and finalised, and only the
+acceptance gate rejected it -
+`Exported video failed verification: Every sampled frame of the exported video is
+black (p99 luma <= 16, stddev <= 2.0)`. Every other statistic was correct: right
+duration, right size, no rotation, key frames present, strictly increasing
+timestamps, samples with real payload. That combination is the signature of a
+compositor that produced no pixels, not of a broken container.
+
+Two silent paths could produce exactly that (export-pipeline-audit R-1/R-2):
+
+- **The native compositor's targets were never validated.**
+  `NextGenGpuCompositionEngine::ensureTargets` allocated three ping-pong
+  textures/FBOs at the export size (1088x1920 for 1080p portrait: 8.4 MB each)
+  and, when a framebuffer came back incomplete or the allocation ran out of
+  memory, logged `FBO %d incomplete` and **continued**. Drawing into an
+  incomplete framebuffer is a no-op, so the texture kept its initial zero
+  content and `endOffscreen()` returned a texture id that was never written -
+  indistinguishable from a real picture by its id alone.
+- **Kotlin trusted any texture id.**
+  `currentInputTex = endOffscreen(...)`; when that returned 0 the code fell back
+  to `fboA.getTextureId()` - a buffer that had only been *cleared*. Either way
+  the encoder received a black frame and the pipeline reported success.
+
+What changed:
+
+- `ensureTargets` now checks the allocation error and the framebuffer status of
+  every target, releases them and returns `false` on failure. `beginOffscreen()`
+  returns that result across JNI (`jboolean`), `renderFrame` refuses to draw into
+  a dead target, and `endOffscreen()` returns 0 instead of an empty texture.
+- `GpuCompositionRenderer.render()` composes through one `composeOnce()` helper
+  and, when the native path yields no picture, re-draws the same layers with the
+  Kotlin compositor and keeps using it for the rest of that render surface. It
+  returns a `RenderReport` (`layersDrawn`, `compositedTexture`,
+  `usedNativeCompositor`, `failure`, `glErrors`); `drewNothing` is true only when
+  the frame carries no picture at all.
+- The export consumes that report: frames that drew nothing are counted, not
+  probed; a clip that never drew anything is refused instead of muxed; and the
+  back-buffer probes abort an attempt early via `ExportBlackFrameGuard`
+  (4 readable black probes spanning at least half the clip). An unavailable
+  `glReadPixels` still proves nothing and cannot fail an export.
+- After muxing, the pipeline decodes sampled frames of its own output
+  (`ExportValidator.checkDecodedFrames`). An all-black file is now a *retryable*
+  attempt failure tagged `ExportFailure.ALL_FRAMES_BLACK`, so the attempt ladder
+  runs again with the Kotlin compositor and the next encoder plan instead of
+  handing the user a dead end. One retry, then the failure is reported with the
+  per-frame p99/stddev evidence in Logcat.
+
+`ExportBlackFrameGuard` is pure Kotlin and unit-tested
+(`ExportBlackFrameGuardTest`, also compiled by `toolchain/verify/run_logic_tests.sh`).
+`toolchain/verify/verify_black_frame_recovery.py` is the drift guard for the
+Kotlin/C++ contract above (51 checks) for sandboxes without Gradle/NDK.

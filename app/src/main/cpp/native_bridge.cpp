@@ -82,10 +82,11 @@ Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeRenderExternalT
     engine->renderExternalTexture(static_cast<GLuint>(textureId), ptr);
 }
 
-extern "C" JNIEXPORT void JNICALL
+extern "C" JNIEXPORT jboolean JNICALL
 Java_com_example_engine_composition_gpu_NativeRenderBridge_nativeBeginOffscreen(JNIEnv* env, jobject, jlong handle) {
     auto* engine = getCurrentEngine(env, handle);
-    if (engine && engine->isInitialized()) engine->beginOffscreen();
+    if (!engine || !engine->isInitialized()) return JNI_FALSE;
+    return engine->beginOffscreen() ? JNI_TRUE : JNI_FALSE;
 }
 
 extern "C" JNIEXPORT jint JNICALL

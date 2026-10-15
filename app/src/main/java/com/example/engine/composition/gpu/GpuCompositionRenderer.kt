@@ -263,6 +263,35 @@ class GpuCompositionRenderer(private val context: Context) {
   private var currentViewportWidth = 0
   private var currentViewportHeight = 0
 
+  /**
+   * Set false to composite every frame with the Kotlin OpenGL path instead of the native C++ engine.
+   * The export turns this off for a retry attempt after a black output, and it is turned off
+   * automatically for the rest of the surface's life as soon as the native path fails to produce a
+   * picture (see [disableNativeCompositor]).
+   */
+  var nativeCompositorEnabled: Boolean = true
+  private var nativeCompositorFailure: String? = null
+
+  /** Sticky: once the native compositor failed to produce a picture it is not trusted again here. */
+  private fun disableNativeCompositor(reason: String) {
+    if (nativeCompositorFailure == null) {
+      nativeCompositorFailure = reason
+      Log.e(TAG, "Native compositor disabled for this render surface: $reason; using the Kotlin compositor")
+    }
+    nativeCompositorEnabled = false
+  }
+
+  /** GL errors pending right now, drained so the next frame starts clean. Diagnostics only. */
+  private fun drainGlErrors(): List<Int> {
+    val errors = ArrayList<Int>(2)
+    repeat(16) {
+      val error = GLES20.glGetError()
+      if (error == GLES20.GL_NO_ERROR) return errors
+      errors += error
+    }
+    return errors
+  }
+
   fun initGl() {
     if (isInitialized) return
 
@@ -285,6 +314,9 @@ class GpuCompositionRenderer(private val context: Context) {
    * Main GPU composition entry point:
    * Converts OES video frames, prepares text/sticker/overlay textures, converts layer models into
    * native C++ layer representations, and renders the composed frame via NativeRenderBridge.
+   *
+   * @return what actually reached the destination surface; [RenderReport.drewNothing] means the frame
+   *   is black and must not be handed to an encoder as if it were a real picture.
    */
   fun render(
     frame: ComposedFrame,
@@ -309,8 +341,10 @@ class GpuCompositionRenderer(private val context: Context) {
     transitionAfter: TransitionSourceTexture? = null,
     /** Export: background-removal masks are computed synchronously per frame so output is deterministic. */
     deterministicMasks: Boolean = false
-  ) {
-    if (viewportWidth <= 0 || viewportHeight <= 0) return
+  ): RenderReport {
+    if (viewportWidth <= 0 || viewportHeight <= 0) {
+      return RenderReport(layersDrawn = 0, compositedTexture = 0, usedNativeCompositor = false, failure = "invalid viewport ${viewportWidth}x$viewportHeight")
+    }
 
     if (!isInitialized) {
       initGl()
@@ -728,31 +762,63 @@ class GpuCompositionRenderer(private val context: Context) {
     // 6. Render via Native C++ OpenGL ES 3.0 Engine or Kotlin OpenGL ES Fallback Compositor
     val postProcessEffects = frame.activeEffects.filter { isPostProcessShaderEffect(it.effectType) }
     val hasPostProcess = postProcessEffects.isNotEmpty()
-    val isNativeActive = (nativeHandle != 0L)
+    val drawableLayers = nativeLayers.count { it.isVisible && it.textureId > 0 }
 
-    fboA.setup(viewportWidth, viewportHeight)
-    fboA.bind()
-    GLES20.glViewport(0, 0, viewportWidth, viewportHeight)
-    if (chromaKey.enabled && chromaKey.backgroundType == "Transparent") {
-      GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f)
-    } else {
-      GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
-    }
-    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+    // One composition attempt. The native compositor draws into its own offscreen target and hands
+    // back a texture; the Kotlin compositor draws straight into [fboA]. Both paths must leave a real
+    // picture behind - a black frame that reaches the encoder is the failure this avoids.
+    var usedNativeCompositor = false
+    var nativeAttempted = false
+    fun composeOnce(): Pair<Int, String?> {
+      fboA.setup(viewportWidth, viewportHeight)
+      fboA.bind()
+      GLES20.glViewport(0, 0, viewportWidth, viewportHeight)
+      // Re-applied on every attempt: the native target clears itself transparent, and a retry must
+      // start from the clear colour this frame actually wants.
+      if (chromaKey.enabled && chromaKey.backgroundType == "Transparent") {
+        GLES20.glClearColor(0.0f, 0.0f, 0.0f, 0.0f)
+      } else {
+        GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+      }
+      GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-    if (isNativeActive) {
       // The native compositor only draws into its own offscreen target between begin/end; without
       // beginOffscreen it paints framebuffer 0 and endOffscreen() returns an empty texture (black output).
-      NativeRenderBridge.beginOffscreen(nativeHandle)
-      NativeRenderBridge.renderFrame(nativeHandle, nativeLayers)
-    } else {
-      renderNativeLayersKotlin(nativeLayers, viewportWidth, viewportHeight)
-    }
-    fboA.unbind()
+      if (nativeHandle != 0L && nativeCompositorEnabled) {
+        nativeAttempted = true
+        if (NativeRenderBridge.beginOffscreen(nativeHandle)) {
+          NativeRenderBridge.renderFrame(nativeHandle, nativeLayers)
+          fboA.unbind()
+          val nativeTexture = NativeRenderBridge.endOffscreen(nativeHandle)
+          if (nativeTexture > 0) {
+            usedNativeCompositor = true
+            return nativeTexture to null
+          }
+          return fboA.getTextureId() to "the native compositor returned no texture"
+        }
+        fboA.unbind()
+        return fboA.getTextureId() to "the native offscreen target could not be prepared"
+      }
 
-    // 7. Apply Active Visual Effects (Multi-pass ping-ponging)
-    var currentInputTex = if (isNativeActive) NativeRenderBridge.endOffscreen(nativeHandle) else fboA.getTextureId()
-    if (currentInputTex <= 0) currentInputTex = fboA.getTextureId()
+      val drew = renderNativeLayersKotlin(nativeLayers, viewportWidth, viewportHeight)
+      fboA.unbind()
+      // 0 (not the cleared fboA texture) when nothing was drawn, so the caller reports the frame as
+      // empty instead of encoding a black picture that looks valid everywhere else.
+      return if (drew) fboA.getTextureId() to null
+      else 0 to "the Kotlin compositor drew nothing (program2D=${program2D > 0})"
+    }
+
+    var (currentInputTex, composeFailure) = composeOnce()
+    val nativeFailure: String? = composeFailure
+    if (nativeFailure != null && nativeAttempted) {
+      // The native path left nothing drawable. Blitting its cleared target is what produced a fully
+      // black export with no error (export-pipeline-audit R-2), so re-draw the very same layers with
+      // the Kotlin compositor and keep using it for the rest of this render surface.
+      disableNativeCompositor(nativeFailure)
+      val (retryTex, retryFailure) = composeOnce()
+      currentInputTex = retryTex
+      composeFailure = retryFailure
+    }
 
     if (hasPostProcess && currentInputTex > 0) {
       GLES20.glDisable(GLES20.GL_BLEND)
@@ -786,6 +852,45 @@ class GpuCompositionRenderer(private val context: Context) {
     GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
     GLES20.glDisable(GLES20.GL_BLEND)
     blitToSurface(currentInputTex, flipY = flipYForEncoder, flipX = flipXForEncoder)
+
+    return RenderReport(
+      layersDrawn = drawableLayers,
+      compositedTexture = currentInputTex,
+      usedNativeCompositor = usedNativeCompositor,
+      failure = composeFailure,
+      glErrors = drainGlErrors()
+    )
+  }
+
+  /**
+   * What one [render] call actually put on the destination surface. The exporter needs this: a frame
+   * with no picture at all is *black*, and every encoder-side statistic (timestamps, sample sizes,
+   * EOS) still looks perfect, so black output is invisible without it.
+   *
+   * @property layersDrawn how many layers carried a real texture into the composition
+   * @property compositedTexture the texture that was blitted to the surface; <= 0 means nothing was
+   * @property usedNativeCompositor whether the native C++ compositor produced this frame
+   * @property failure why the first composition attempt had to be redone, if it did
+   * @property glErrors GL errors raised during this frame (diagnostics; empty when clean)
+   */
+  data class RenderReport(
+    val layersDrawn: Int,
+    val compositedTexture: Int,
+    val usedNativeCompositor: Boolean,
+    val failure: String? = null,
+    val glErrors: List<Int> = emptyList()
+  ) {
+    /** True when the frame carries no picture: the destination keeps its cleared (black) content. */
+    val drewNothing: Boolean get() = layersDrawn <= 0 || compositedTexture <= 0
+
+    fun describe(): String = buildString {
+      append("layers=$layersDrawn texture=$compositedTexture compositor=")
+      append(if (usedNativeCompositor) "native" else "kotlin")
+      failure?.let { append(" failure=\"").append(it).append('"') }
+      if (glErrors.isNotEmpty()) {
+        append(" glErrors=").append(glErrors.joinToString(prefix = "[", postfix = "]") { "0x${Integer.toHexString(it)}" })
+      }
+    }
   }
 
   /**
@@ -940,12 +1045,17 @@ class GpuCompositionRenderer(private val context: Context) {
     return fboChromaBackground.getTextureId()
   }
 
+  /**
+   * Kotlin/OpenGL compositor for [layers]. @return false when nothing could be drawn (no shader
+   * program, or no drawable layer), so the caller does not present the cleared - black - buffer as
+   * if it were a composed frame.
+   */
   private fun renderNativeLayersKotlin(
     layers: List<NativeLayer>,
     viewportWidth: Int,
     viewportHeight: Int
-  ) {
-    if (layers.isEmpty() || program2D == 0) return
+  ): Boolean {
+    if (layers.isEmpty() || program2D == 0) return false
     GLES20.glUseProgram(program2D)
 
     val uMVPMatrixHandle = GLES20.glGetUniformLocation(program2D, "uMVPMatrix")
@@ -1045,6 +1155,7 @@ class GpuCompositionRenderer(private val context: Context) {
     }
 
     GLES20.glDisable(GLES20.GL_BLEND)
+    return sortedLayers.isNotEmpty()
   }
 
   /**

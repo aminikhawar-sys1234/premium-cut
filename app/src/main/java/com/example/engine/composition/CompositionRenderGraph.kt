@@ -153,6 +153,9 @@ object CompositionRenderGraph {
    * ([com.example.engine.composition.ChromaKeyResolver]). [chromaBackgroundFrame] is the decoded background
    * video frame for a keyed main clip that keys over a video - the preview and the export each decode it with
    * their own decoder at the same source time, so both draw the same background.
+   *
+   * @return what the renderer actually drew. The export inspects it: a frame that carries no picture
+   *   must never be encoded as if it were one (that is how an all-black export happens).
    */
   fun present(
     renderer: GpuCompositionRenderer,
@@ -164,26 +167,24 @@ object CompositionRenderGraph {
     chromaKey: ChromaKeySettings,
     presentation: FramePresentation,
     chromaBackgroundFrame: ChromaBackgroundFrame? = null
-  ) {
-    renderer.render(
-      frame = assembled.frame,
-      mainTextureId = assembled.mainTextureId,
-      isMainOes = assembled.isMainOes,
-      mainTexMatrix = assembled.mainTexMatrix,
-      overlayTextures = assembled.overlayTextures,
-      overlayTexMatrices = assembled.overlayTexMatrices,
-      overlayIsOes = assembled.overlayIsOes,
-      viewportWidth = viewportWidth,
-      viewportHeight = viewportHeight,
-      timelineAdjustments = adjustments,
-      timelineFilter = filter,
-      chromaKey = chromaKey,
-      chromaBackgroundFrame = chromaBackgroundFrame,
-      flipYForEncoder = presentation.flipY,
-      flipXForEncoder = presentation.flipX,
-      transitionBefore = assembled.transitionBefore,
-      transitionAfter = assembled.transitionAfter,
-      deterministicMasks = presentation.deterministicMasks
-    )
-  }
+  ): GpuCompositionRenderer.RenderReport = renderer.render(
+    frame = assembled.frame,
+    mainTextureId = assembled.mainTextureId,
+    isMainOes = assembled.isMainOes,
+    mainTexMatrix = assembled.mainTexMatrix,
+    overlayTextures = assembled.overlayTextures,
+    overlayTexMatrices = assembled.overlayTexMatrices,
+    overlayIsOes = assembled.overlayIsOes,
+    viewportWidth = viewportWidth,
+    viewportHeight = viewportHeight,
+    timelineAdjustments = adjustments,
+    timelineFilter = filter,
+    chromaKey = chromaKey,
+    chromaBackgroundFrame = chromaBackgroundFrame,
+    flipYForEncoder = presentation.flipY,
+    flipXForEncoder = presentation.flipX,
+    transitionBefore = assembled.transitionBefore,
+    transitionAfter = assembled.transitionAfter,
+    deterministicMasks = presentation.deterministicMasks
+  )
 }

@@ -110,11 +110,14 @@ class AsyncFramePipelineMetrics {
  * Thrown by the export pipeline for any failure that must surface to the user as a clear error
  * (instead of a partial / audio-only / black file). [retryable] tells the retry ladder whether a different
  * encoder configuration could plausibly succeed (false for e.g. an undecodable source clip).
+ * [failure] names the rule that was violated when the failure came from inspecting the output, so the
+ * caller can apply a policy (a black output retries with the fallback compositor; nothing else does).
  */
 class ExportPipelineException(
   message: String,
   cause: Throwable? = null,
-  val retryable: Boolean = true
+  val retryable: Boolean = true,
+  val failure: ExportFailure? = null
 ) : RuntimeException(message, cause)
 
 /**
@@ -300,12 +303,21 @@ class AsyncFramePipelineEngine(private val context: Context) {
       val audioChannels = 2
 
       var lastError: Throwable? = null
+      var blackOutputAttempts = 0
       for ((index, plan) in attempts.withIndex()) {
         checkUserCancelled()
-        Log.i(tag, "Export attempt ${index + 1}/${attempts.size}: ${plan.describe()} duration=${durationMs}ms audio=$hasAudio")
+        val attemptNo = index + 1
+        // A black output is retried with the Kotlin compositor: the native C++ one is the component
+        // that can hand back an empty texture while every codec statistic still looks correct.
+        val useNativeCompositor = ExportBlackFrameGuard.useNativeCompositor(attemptNo)
+        Log.i(
+          tag,
+          "Export attempt $attemptNo/${attempts.size}: ${plan.describe()} duration=${durationMs}ms " +
+            "audio=$hasAudio compositor=${if (useNativeCompositor) "native" else "kotlin (fallback)"}"
+        )
         try {
           return@withContext runAttempt(
-            attemptNo = index + 1,
+            attemptNo = attemptNo,
             timeline = timeline,
             outputFile = outputFile,
             plan = plan,
@@ -316,6 +328,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             mixError = mixError,
             audioSampleRate = audioSampleRate,
             audioChannels = audioChannels,
+            useNativeCompositor = useNativeCompositor,
             isPaused = isPaused
           )
         } catch (e: CancellationException) {
@@ -325,7 +338,16 @@ class AsyncFramePipelineEngine(private val context: Context) {
           runCatching { outputFile.delete() }
           if (userCancelled.get()) throw CancellationException("Export cancelled")
           lastError = t
-          Log.e(tag, "Export attempt ${index + 1} failed: ${t.message}", t)
+          Log.e(tag, "Export attempt $attemptNo failed: ${t.message}", t)
+          if ((t as? ExportPipelineException)?.failure == ExportFailure.ALL_FRAMES_BLACK) {
+            blackOutputAttempts++
+            if (!ExportBlackFrameGuard.mayRetryBlackOutput(blackOutputAttempts)) {
+              Log.e(tag, "Every attempt produced black frames ($blackOutputAttempts attempts); giving up")
+              throw t
+            }
+            Log.w(tag, "Black output on attempt $attemptNo; retrying with the fallback compositor")
+            continue
+          }
           val retryable = (t as? ExportPipelineException)?.retryable ?: true
           if (!retryable) break
         }
@@ -453,7 +475,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
     mixError: AtomicReference<Throwable?>,
     audioSampleRate: Int,
     audioChannels: Int,
-    isPaused: () -> Boolean
+    /** False on a retry after a black output: composite with Kotlin instead of the native C++ engine. */
+    useNativeCompositor: Boolean = true,
+    isPaused: () -> Boolean = { false }
   ): File {
     metrics.reset()
     activePlan = plan
@@ -551,8 +575,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
           winSurface.makeCurrent()
 
           val rend = GpuCompositionRenderer(context)
+          rend.nativeCompositorEnabled = useNativeCompositor
           gpuRenderer = rend
           rend.initGl()
+          if (!useNativeCompositor) {
+            Log.w(tag, "Attempt $attemptNo composites with the Kotlin renderer (native compositor disabled)")
+          }
           for ((uri, bmp) in imageBitmaps) {
             imageTextures[uri] = rend.uploadImageTexture(uri, bmp)
           }
@@ -819,13 +847,16 @@ class AsyncFramePipelineEngine(private val context: Context) {
           val renderSurface = windowSurface ?: error("Encoder surface missing")
           renderSurface.makeCurrent()
           var lastEglPtsNs = -1L
-          val probeFrames = linkedSetOf(0L, totalFrames / 4, totalFrames / 2, totalFrames * 3 / 4, totalFrames - 1)
-          // The back-buffer readback is a lightweight hint only. Some EGL encoder surfaces
-          // do not support glReadPixels reliably, and five tiny patches cannot represent a
-          // transformed/PiP frame; the decoded MP4 validator is the authoritative full-frame check.
+          val probeFrames = ExportBlackFrameGuard.probeFrames(totalFrames)
+          // Cheap black-frame probes of the real back buffer. A probe whose glReadPixels readback is
+          // unavailable proves nothing and is not counted; the decoded-MP4 check after muxing is the
+          // authoritative full-frame verdict (see ExportValidator.checkDecodedFrames).
           var probes = 0
           var blackProbes = 0
           var unavailableProbes = 0
+          var lastProbeFrame = -1L
+          var emptyFrames = 0L
+          var composedFrames = 0L
 
           for (frameIndex in 0 until totalFrames) {
             renderingFrame = frameIndex
@@ -934,7 +965,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             val composeStart = System.nanoTime()
             val rend = gpuRenderer ?: throw IllegalStateException("GPU renderer is not initialised")
             val lookFallback = CompositionLookResolver.timelineFallback(timeline)
-            CompositionRenderGraph.present(
+            val composed = CompositionRenderGraph.present(
               renderer = rend,
               assembled = assembled,
               viewportWidth = exportWidth,
@@ -960,22 +991,34 @@ class AsyncFramePipelineEngine(private val context: Context) {
               presentation = CompositionRenderGraph.FramePresentation.export(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER),
               chromaBackgroundFrame = chromaBackgroundFrame
             )
+            if (composed.failure != null && frameIndex < 8L) {
+              Log.w(tag, "Frame $frameIndex composition: ${composed.describe()}")
+            }
+            if (composed.drewNothing) emptyFrames++ else composedFrames++
             // Submit GPU work without a full GPU/CPU stall. eglSwapBuffers already publishes
             // the frame to the encoder; glFinish serialized every frame and made long exports
             // crawl after the encoder queue filled (typically around the midpoint).
             GLES20.glFlush()
 
-            // Advisory black-frame diagnostic: sample a few points in the real back buffer. The final
-            // decoded-MP4 validator is authoritative; this point sample must never reject transformed/PiP
-            // content or treat an unsupported GL readback as proof that the output is black.
-            if (frameIndex in probeFrames && assembled.mainTextureId > 0) {
-              when (isBackBufferBlack(exportWidth, exportHeight)) {
-                true -> {
-                  probes++
-                  blackProbes++
-                }
-                false -> probes++
-                null -> unavailableProbes++
+            // Black-frame probe on the real back buffer. Frames that legitimately carry no picture
+            // (a timeline gap) are not probed, and an unavailable readback proves nothing - only
+            // readable probes count, so a driver that refuses glReadPixels cannot fail an export.
+            if (frameIndex in probeFrames && !composed.drewNothing) {
+              val probeBlack = isBackBufferBlack(exportWidth, exportHeight)
+              if (probeBlack == null) {
+                unavailableProbes++
+              } else {
+                probes++
+                if (probeBlack) blackProbes++
+                lastProbeFrame = frameIndex
+              }
+              if (ExportBlackFrameGuard.shouldAbortAttempt(blackProbes, probes, lastProbeFrame, totalFrames)) {
+                throw ExportPipelineException(
+                  "Every sampled frame of the export came out black ($blackProbes/$probes readable probes " +
+                    "up to frame $lastProbeFrame of $totalFrames; ${composed.describe()}). Export stopped " +
+                    "instead of muxing a black video.",
+                  failure = ExportFailure.ALL_FRAMES_BLACK
+                )
               }
             }
 
@@ -1021,15 +1064,25 @@ class AsyncFramePipelineEngine(private val context: Context) {
             }
           }
 
-          if (!stop.get() && probes >= 3 && blackProbes == probes) {
-            Log.w(
+          if (!stop.get()) {
+            Log.i(
               tag,
-              "Encoder-surface point probes were black in every readable sample ($blackProbes/$probes; " +
-                "$unavailableProbes unavailable). Continuing to mux: this small back-buffer probe can miss " +
-                "transformed/PiP content, so ExportValidator will inspect decoded frames before success."
+              "Composition summary: frames=$totalFrames composed=$composedFrames empty=$emptyFrames " +
+                "probes=$probes black=$blackProbes unavailable=$unavailableProbes " +
+                "compositor=${if (gpuRenderer?.nativeCompositorEnabled == true) "native" else "kotlin"}"
             )
-          } else if (unavailableProbes > 0) {
-            Log.w(tag, "Encoder-surface black-frame probe unavailable for $unavailableProbes sample(s); final MP4 validation remains authoritative")
+            if (composedFrames == 0L && emptyFrames > 0L) {
+              // Nothing at all was drawable for the whole clip. Muxing it would produce a valid,
+              // decodable, perfectly timed black video - exactly what the validator rejects later.
+              throw ExportPipelineException(
+                "No frame of the timeline could be drawn ($emptyFrames of $totalFrames frames had no picture). " +
+                  "Export stopped instead of muxing a black video.",
+                failure = ExportFailure.ALL_FRAMES_BLACK
+              )
+            }
+            if (unavailableProbes > 0) {
+              Log.w(tag, "Encoder-surface black-frame probe unavailable for $unavailableProbes sample(s); final MP4 validation remains authoritative")
+            }
           }
         } catch (t: Throwable) {
           Log.e(tag, "Render loop failed frame=$renderingFrame size=${exportWidth}x$exportHeight codec=${videoEncoder.name} mime=${plan.mime} thread=${Thread.currentThread().name} submitted=${metrics.gpuFrames.get()}", t)
@@ -1132,6 +1185,17 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
       if (coordinator.timestampCorrections > 0L) {
         Log.w(tag, "Muxer corrected ${coordinator.timestampCorrections} non-monotonic timestamp(s)")
+      }
+      // Decode a few frames of the finished file. The in-loop back-buffer probe can be unavailable
+      // (some encoder surfaces refuse glReadPixels), and a black output is invisible to every
+      // container statistic above - this is what lets the attempt ladder retry it.
+      val frameCheck = ExportValidator.checkDecodedFrames(outputFile)
+      Log.i(tag, "Decoded-frame check: ${frameCheck.detail}")
+      if (frameCheck.failure == ExportFailure.ALL_FRAMES_BLACK) {
+        throw ExportPipelineException(
+          "Every decoded frame of the exported video is black (${frameCheck.detail}).",
+          failure = ExportFailure.ALL_FRAMES_BLACK
+        )
       }
       val wallMs = (System.nanoTime() - attemptStartNs) / 1_000_000
       val realtimeSpeed = if (wallMs > 0) (durationMs.toDouble() / wallMs) else 0.0

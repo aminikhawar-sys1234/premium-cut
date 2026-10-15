@@ -64,8 +64,16 @@ object NativeRenderBridge {
     try { nativeRenderFrame(handle, buffer, layers.size) } catch (e: Throwable) { Log.e(TAG, "nativeRenderFrame failed", e); throw e }
   }
 
-  fun beginOffscreen(handle: Long) {
-    if (handle != 0L) runCatching { nativeBeginOffscreen(handle) }.onFailure { Log.e(TAG, "nativeBeginOffscreen failed", it) }.getOrThrow()
+  /**
+   * Binds the compositor's offscreen target. `false` means the target could not be prepared (the
+   * driver refused the textures, or the framebuffer is incomplete) - the caller must composite
+   * through another path, because reading this target back would give an empty, black picture.
+   */
+  fun beginOffscreen(handle: Long): Boolean {
+    if (handle == 0L) return false
+    return runCatching { nativeBeginOffscreen(handle) }
+      .onFailure { Log.e(TAG, "nativeBeginOffscreen failed", it) }
+      .getOrDefault(false)
   }
 
   fun endOffscreen(handle: Long): Int {
@@ -94,7 +102,7 @@ object NativeRenderBridge {
   private external fun nativeResize(handle: Long, width: Int, height: Int)
   private external fun nativeRenderFrame(handle: Long, layerData: FloatArray, layerCount: Int)
   private external fun nativeRenderExternalTexture(handle: Long, textureId: Int, texMatrix: FloatArray?)
-  private external fun nativeBeginOffscreen(handle: Long)
+  private external fun nativeBeginOffscreen(handle: Long): Boolean
   private external fun nativeEndOffscreen(handle: Long): Int
   private external fun nativeApplyEffect(handle: Long, effectType: Int, intensity: Float, param1: Float, param2: Float, timeMs: Float)
   private external fun nativeGetLastFrameMs(handle: Long): Float

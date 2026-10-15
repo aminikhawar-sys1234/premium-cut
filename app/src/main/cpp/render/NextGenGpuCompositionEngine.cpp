@@ -229,31 +229,47 @@ void NextGenGpuCompositionEngine::resize(int w, int h) {
     height_ = h;
     glViewport(0, 0, w, h);
     identity(projection_);
-    ensureTargets(w, h);
+    if (!ensureTargets(w, h)) {
+        __android_log_print(ANDROID_LOG_ERROR, TAG,
+                            "resize(%dx%d) could not allocate composition targets; the Kotlin compositor takes over", w, h);
+    }
 }
 
-void NextGenGpuCompositionEngine::ensureTargets(int w, int h) {
-    if (targetWidth_ == w && targetHeight_ == h && target_[0] && target_[1] && target_[2]) return;
+bool NextGenGpuCompositionEngine::ensureTargets(int w, int h) {
+    if (targetsValid_ && targetWidth_ == w && targetHeight_ == h && target_[0] && target_[1] && target_[2]) return true;
     destroyTargets();
     targetWidth_ = w;
     targetHeight_ = h;
     glGenFramebuffers(3, fbo_);
     glGenTextures(3, target_);
+    // Drop stale errors first so the checks below report only what these allocations produced.
+    while (glGetError() != GL_NO_ERROR) {}
     for (int i = 0; i < 3; i++) {
         glBindTexture(GL_TEXTURE_2D, target_[i]);
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        GLenum allocError = glGetError();
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
         glBindFramebuffer(GL_FRAMEBUFFER, fbo_[i]);
         glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target_[i], 0);
-        if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE) {
-            __android_log_print(ANDROID_LOG_ERROR, TAG, "FBO %d incomplete", i);
+        GLenum status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        glBindFramebuffer(GL_FRAMEBUFFER, 0);
+        glBindTexture(GL_TEXTURE_2D, 0);
+        // An incomplete (or out-of-memory) target swallows every draw call: the texture keeps its
+        // initial zero content and the export encodes a black video that looks perfectly healthy
+        // otherwise. Refuse it here so the caller can composite through another path.
+        if (allocError != GL_NO_ERROR || status != GL_FRAMEBUFFER_COMPLETE) {
+            __android_log_print(ANDROID_LOG_ERROR, TAG,
+                                "Composition target %d unusable at %dx%d (glError=0x%04X, status=0x%04X)",
+                                i, w, h, allocError, status);
+            destroyTargets();
+            return false;
         }
     }
-    glBindFramebuffer(GL_FRAMEBUFFER, 0);
-    glBindTexture(GL_TEXTURE_2D, 0);
+    targetsValid_ = true;
+    return true;
 }
 
 void NextGenGpuCompositionEngine::destroyTargets() {
@@ -264,6 +280,7 @@ void NextGenGpuCompositionEngine::destroyTargets() {
         std::fill(std::begin(target_), std::end(target_), 0);
     }
     targetWidth_ = targetHeight_ = 0;
+    targetsValid_ = false;
 }
 
 void NextGenGpuCompositionEngine::destroyPrograms() {
@@ -367,6 +384,12 @@ void NextGenGpuCompositionEngine::drawTexture(GLuint tex, const float* mvp, cons
 
 void NextGenGpuCompositionEngine::renderFrame(const std::vector<RenderLayer>& in) {
     if (!initialized_ || !width_ || !height_) return;
+    if (offscreenActive_ && !targetsValid_) {
+        // beginOffscreen() already reported the unusable target; drawing into it would only add
+        // GL_INVALID_FRAMEBUFFER_OPERATION noise on every layer.
+        stats_.skippedLayers += in.size();
+        return;
+    }
     auto start = std::chrono::steady_clock::now();
     stats_.frames++;
 
@@ -471,14 +494,15 @@ void NextGenGpuCompositionEngine::renderExternalTexture(GLuint tex, const float*
     lastProgram_ = 0;
 }
 
-void NextGenGpuCompositionEngine::beginOffscreen() {
-    if (!initialized_) return;
-    ensureTargets(width_, height_);
+bool NextGenGpuCompositionEngine::beginOffscreen() {
+    if (!initialized_) return false;
+    if (!ensureTargets(width_, height_)) return false;
     activeTarget_ = 0;
     offscreenActive_ = true;
     bindTarget(fbo_[activeTarget_], width_, height_);
     glClearColor(0.0f, 0.0f, 0.0f, 0.0f);
     glClear(GL_COLOR_BUFFER_BIT);
+    return true;
 }
 
 GLuint NextGenGpuCompositionEngine::endOffscreen() {
@@ -486,6 +510,9 @@ GLuint NextGenGpuCompositionEngine::endOffscreen() {
     offscreenActive_ = false;
     glBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, width_, height_);
+    // Never hand back a target nothing was drawn into: its content is zero (black), and the caller
+    // cannot tell that from a legitimately dark frame.
+    if (!targetsValid_) return 0;
     return target_[activeTarget_];
 }
 
@@ -495,6 +522,7 @@ void NextGenGpuCompositionEngine::onContextLost() {
     std::fill(std::begin(fbo_), std::end(fbo_), 0);
     std::fill(std::begin(target_), std::end(target_), 0);
     offscreenActive_ = false;
+    targetsValid_ = false;
     lastProgram_ = lastTexture_ = 0;
 }
 
