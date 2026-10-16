@@ -41,4 +41,46 @@ class DecoderBudgetTest {
     assertTrue(DecoderBudget.canFree(listOf("a", "b"), emptySet()))
     assertEquals(listOf("a", "b"), DecoderBudget.evictions(listOf("a", "b"), emptySet()))
   }
+
+  @Test
+  fun aDecoderThatIsOnlyKeptWarmIsReleasedBeforeALayerWouldBe() {
+    // "b" is the before-side of a NONE transition: nothing of it is drawn this frame, it is only
+    // held so a following real transition does not have to reopen it. "c" is not needed at all.
+    // Both may go; the one that was held as an optimisation goes last, and the layer is never the
+    // one that pays.
+    assertEquals(
+      listOf("c", "b"),
+      DecoderBudget.evictions(open = listOf("a", "b", "c"), needed = setOf("a"), pinned = setOf("b"))
+    )
+  }
+
+  @Test
+  fun aPinnedDecoderIsNotReleasedWhileSomethingExpendableIsOpen() {
+    assertEquals(
+      listOf("c"),
+      DecoderBudget.evictions(
+        open = listOf("a", "b", "c"),
+        needed = setOf("a"),
+        pinned = setOf("b")
+      ).take(1)
+    )
+  }
+
+  @Test
+  fun aPinnedDecoderThatTheFrameDrawsIsNeededAfterAll() {
+    // A pinned id that ended up in the frame's picture may never be released: the weaker class a
+    // decoder belongs to is not allowed to override what the frame actually draws.
+    assertEquals(
+      emptyList<String>(),
+      DecoderBudget.evictions(open = listOf("a"), needed = setOf("a"), pinned = setOf("a"))
+    )
+  }
+
+  @Test
+  fun theTwoArgumentRuleStillBehavesAsBefore() {
+    assertEquals(
+      DecoderBudget.evictions(listOf("a", "b", "c"), setOf("a", "c")),
+      DecoderBudget.evictions(listOf("a", "b", "c"), setOf("a", "c"), emptySet())
+    )
+  }
 }

@@ -16,6 +16,7 @@ import android.util.Log
 import android.view.Surface
 import com.example.domain.model.VideoClip
 import com.example.engine.controller.DecoderManager
+import com.example.engine.export.CodecAllocationPolicy
 import com.example.engine.media.MediaMetadataHelper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -86,6 +87,10 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
   var isHardwareAccelerated: Boolean = true
     private set
   var isInitialized: Boolean = false
+    private set
+
+  /** MIME type of the source track this decoder was opened for (empty before [initialize]). */
+  var mime: String = ""
     private set
 
   private var lastRequestUs = Long.MIN_VALUE
@@ -211,37 +216,79 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
         }
       }
 
-      // 5. Configure MediaCodec with hardware and software fallback
+      // 5. Open the decoder through the candidate ladder (see CodecAllocationPolicy): hardware for
+      //    this MIME type first, then the platform's software decoder for the same MIME type.
+      //
+      //    Each candidate is created, configured AND started as one unit on purpose. A device that
+      //    has no codec instance left refuses at configure()/start() as often as it does at
+      //    creation, and the previous code only had a fallback for the creation step: a refusal any
+      //    later ended the export with "decoder setup failed ... errorCode=1100" although the
+      //    software decoder for that same MIME type was still there to be used. Software decoding
+      //    changes how fast the picture arrives, never the picture itself, so nothing the user
+      //    added is dropped here.
       val mime = trackFormat.getString(MediaFormat.KEY_MIME) ?: MediaFormat.MIMETYPE_VIDEO_AVC
-      val (dec, isHw) = try {
-        decoderManager.createDecoder(mime, preferHardware = preferHardware)
-      } catch (e: Exception) {
-        Log.w(TAG, "Failed to create decoder for $mime, falling back to software decoder", e)
-        val swName = decoderManager.findSoftwareDecoderName(mime)
-        if (swName != null) {
-          Pair(MediaCodec.createByCodecName(swName), false)
-        } else {
-          Pair(MediaCodec.createDecoderByType(mime), false)
+      this.mime = mime
+      val candidates = CodecAllocationPolicy.candidates(
+        mime = mime,
+        hardwareName = if (preferHardware) decoderManager.findHardwareDecoderName(mime) else null,
+        softwareName = decoderManager.findSoftwareDecoderName(mime),
+        preferHardware = preferHardware
+      )
+      // Every attempt's reason is kept: the export reports "decoder setup failed" with the codec
+      // names it actually tried, which is what makes a device-side failure diagnosable.
+      val attempts = mutableListOf<String>()
+      var opened: MediaCodec? = null
+      var openedIsHardware = false
+      for (candidate in candidates) {
+        val dec = try {
+          if (candidate.name != null) {
+            MediaCodec.createByCodecName(candidate.name)
+          } else {
+            MediaCodec.createDecoderByType(mime)
+          }
+        } catch (e: Exception) {
+          attempts.add("${candidate.label}: ${describeFailure(e)}")
+          continue
+        }
+        try {
+          // The GPU compositor applies clip.naturalRotation itself (see GpuCompositionRenderer).
+          // MediaCodec would otherwise also bake KEY_ROTATION into the SurfaceTexture transform
+          // matrix, rotating the frame twice (upside-down / sideways export).
+          try {
+            trackFormat.setInteger(
+              MediaFormat.KEY_ROTATION,
+              com.example.engine.export.ExportOrientationPolicy.DECODER_KEY_ROTATION_DEGREES
+            )
+          } catch (_: Exception) {}
+          dec.configure(trackFormat, decoderSurface, null, 0)
+          dec.start()
+          opened = dec
+          // The resolved name decides, not the ladder step: on a device whose platform default is a
+          // software codec, counting it as hardware would spend the instance budget on it.
+          openedIsHardware = candidate.hardware && !CodecAllocationPolicy.looksSoftware(dec.name)
+          break
+        } catch (e: Exception) {
+          attempts.add("${candidate.label}: ${describeFailure(e)}")
+          try { dec.release() } catch (_: Throwable) {}
         }
       }
-
-      // The GPU compositor applies clip.naturalRotation itself (see GpuCompositionRenderer).
-      // MediaCodec would otherwise also bake KEY_ROTATION into the SurfaceTexture transform
-      // matrix, rotating the frame twice (upside-down / sideways export).
-      try {
-        trackFormat.setInteger(
-          MediaFormat.KEY_ROTATION,
-          com.example.engine.export.ExportOrientationPolicy.DECODER_KEY_ROTATION_DEGREES
-        )
-      } catch (_: Exception) {}
-      dec.configure(trackFormat, decoderSurface, null, 0)
-      dec.start()
+      val dec = opened
+      if (dec == null) {
+        lastError = "decoder setup failed for ${clip.uri}: " +
+          (attempts.ifEmpty { listOf("no decoder candidate for $mime") }).joinToString("; ")
+        release()
+        return false
+      }
 
       codec = dec
-      isHardwareAccelerated = isHw
+      isHardwareAccelerated = openedIsHardware
       isInitialized = true
       lastError = null
-      Log.d(TAG, "Initialized decoder for ${clip.id} ($mime, ${width}x${height}, rot=$rotationDegrees, hw=$isHw)")
+      Log.d(
+        TAG,
+        "Initialized decoder for ${clip.id} on ${if (openedIsHardware) "hardware" else "software"} " +
+          "($mime, ${width}x${height}, rot=$rotationDegrees, candidates=${candidates.size})"
+      )
       return true
     } catch (e: Exception) {
       Log.e(TAG, "Failed to initialize HardwareVideoTextureSource for ${clip.uri}", e)

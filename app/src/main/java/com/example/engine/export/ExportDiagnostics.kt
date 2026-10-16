@@ -59,6 +59,20 @@ object ExportDiagnostics {
     Log.i(TAG, "EXPORT_FINISHED path=$path size=${width}x$height durationMs=$durationMs bytes=$fileBytes")
   }
 
+  /**
+   * One-shot record of a decoder that needed the resource ladder (see `CodecAllocationPolicy`):
+   * either the device refused an instance and the export recovered by releasing one, or the clip now
+   * decodes on a software codec because the hardware instances are in use. Never per frame.
+   */
+  fun decoderLadder(clipName: String, event: String, detail: String) {
+    Log.i(TAG, "EXPORT_DECODER_LADDER clip='$clipName' event=$event $detail")
+  }
+
+  /** Stage timing of the export's pre-roll, so a slow device can be read off the log. */
+  fun stage(name: String, ms: Long, detail: String = "") {
+    Log.i(TAG, "EXPORT_STAGE $name took=${ms}ms ${detail}".trim())
+  }
+
   fun transformMatrixOnce(clipId: String, rotation: Int, matrix: FloatArray) {
     if (matrix.size < 16) return
     Log.i(

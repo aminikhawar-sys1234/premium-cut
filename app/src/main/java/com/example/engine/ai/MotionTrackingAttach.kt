@@ -197,9 +197,46 @@ class MotionFaceFallbackSource(
     private val fallback: (clipId: String, sourceTimeUs: Long) -> List<TrackedFace>
 ) : FaceWarpFaceSource {
     override fun facesAt(clipId: String, sourceTimeUs: Long, blocking: Boolean): List<TrackedFace> {
-        val primaryFaces = runCatching { primary.facesAt(clipId, sourceTimeUs, blocking) }
-            .getOrDefault(emptyList())
+        val attempt = runCatching { primary.facesAt(clipId, sourceTimeUs, blocking) }
+        val primaryFaces = attempt.getOrDefault(emptyList())
         if (primaryFaces.isNotEmpty()) return primaryFaces
-        return runCatching { fallback(clipId, sourceTimeUs) }.getOrDefault(emptyList())
+        attempt.exceptionOrNull()?.let { failure ->
+            // This used to be swallowed without a trace, so a tracker that could not deliver (a
+            // stale retriever, a detection that timed out) made the face/AR effect disappear from
+            // the exported video with nothing in logcat to explain it. Record it, report it once
+            // per clip, and fall through to the motion-tracking pose.
+            com.example.engine.export.TrackingHealth.record(
+                clipId, sourceTimeUs,
+                "${failure.javaClass.simpleName}: ${failure.message ?: "face tracking failed"}"
+            )
+            if (reportedClips.add(clipId)) {
+                android.util.Log.w(
+                    TAG,
+                    "Face tracking could not deliver a result for clip $clipId at " +
+                        "${sourceTimeUs / 1000}ms (${failure.message}); using the motion-tracking pose " +
+                        "instead. Further failures for this clip are counted, not logged.",
+                    failure
+                )
+            }
+        }
+        return runCatching { fallback(clipId, sourceTimeUs) }
+            .onFailure { logFallbackFailure(clipId, sourceTimeUs, it) }
+            .getOrDefault(emptyList())
+    }
+
+    private fun logFallbackFailure(clipId: String, sourceTimeUs: Long, failure: Throwable) {
+        com.example.engine.export.TrackingHealth.record(
+            clipId, sourceTimeUs,
+            "motion fallback: ${failure.javaClass.simpleName}: ${failure.message ?: "failed"}"
+        )
+        if (reportedClips.add(clipId)) {
+            android.util.Log.w(TAG, "Motion-tracking fallback failed for clip $clipId", failure)
+        }
+    }
+
+    private val reportedClips = java.util.concurrent.ConcurrentHashMap.newKeySet<String>()
+
+    private companion object {
+        const val TAG = "MotionFaceFallback"
     }
 }

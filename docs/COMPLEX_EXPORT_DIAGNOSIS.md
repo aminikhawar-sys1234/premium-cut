@@ -144,12 +144,10 @@ whole device stdout, and the engine/codec/native-compositor lines of logcat into
 **The reported failure has not been reproduced.** Complex projects export correctly on the reference
 device (section 2). Everything below is therefore a hypothesis with a stated bound, not a claim:
 
-* **Codec instance limits on real hardware.** The emulator's software decoders allow dozens of
-  instances; a phone commonly allows four hardware ones. The mitigation in 3.2 covers the case where
-  an instance is refused *and* an idle decoder exists. A project that genuinely needs more
-  simultaneous pictures than the device can decode (many video overlays at once) still cannot be
-  decoded in full; the export now says so instead of failing anonymously. The remaining decision —
-  whether to trade a visible layer for another one — is deliberately *not* taken silently.
+* ~~**Codec instance limits on real hardware.**~~ **Reproduced on the user's phone on 2026-10-16 and
+  fixed — see section 7.** The failure was exactly this: the device refused a codec instance
+  (`errorCode=1100`, `ERROR_INSUFFICIENT_RESOURCE`) for the clip the frame needed, and the export had
+  nothing left it was allowed to release.
 * **Long timelines / high resolution.** The suite's timelines are 0.9–1.4 s and export at
   720p/1080p, because the emulator's software GL renders ~40x slower than realtime there (a 22.9 s
   export for 1.4 s of video). Encoder-idle (60 s), EOS-drain (30 s) and teardown (10 s) watchdogs,
@@ -186,3 +184,71 @@ The next failure on a real device now carries the answer:
 
 No composition, compositor, codec-planner or UI code was changed: the exported picture for the
 projects in the suite is produced by the same code as before this work.
+
+## 7. The real-device failure of 2026-10-16 (root cause, fix, tests)
+
+The user exported a real project on a phone — several video tracks, multiple overlay tracks, an
+audio track, filters, a colour grade and several stickers — and the export failed at 56%. The
+message on the device (the diagnostics from section 3, doing their job):
+
+```
+Could not decode a video frame from '1000428262.mp4' at 8 ms (timeline 250133 ms);
+decoder reported: decoder setup failed for file:///data/user/0/<app>/files/project_media/
+clip_..._1000428262.mp4: android.media.MediaCodec$CodecException: (errorCode=1100
+recoverable=false transient=false diagnostic=android.media.MediaCodec.error_1100).
+Export stopped instead of writing black frames.
+```
+
+`errorCode=1100` is `MediaCodec.CodecException.ERROR_INSUFFICIENT_RESOURCE` — *"required resource was
+not able to be allocated"*. The device refused to hand out one more codec instance because the export
+already held as many as it can give, while opening the decoder for the main clip that starts at
+4:10 of the timeline (source position 8 ms = the clip's first frame).
+
+### 7.1 Three defects met at that frame
+
+1. **The fallback ladder did not cover `configure()` / `start()`.** `HardwareVideoTextureSource`
+   only had a software fallback around *creating* the codec. A device that refuses the instance at
+   `configure()`/`start()` — which is where this error is seen in practice — had no second attempt
+   at all: the setup failed even though the platform's software decoder for the same MIME type was
+   available. Software decoding produces the same pictures, so nothing had to be given up there.
+2. **A decoder that was only kept warm counted as needed.** For a transition the engine pinned both
+   sides' decoders "so a following real transition does not have to reopen them" — including the
+   *before* side of a `NONE` transition, which `CompositionRenderGraph.layersOf` does not draw at
+   all. So at a clip boundary the export believed every decoder it held was needed, released nothing
+   (`freed == 0`, which is why the message has no "after releasing N idle decoder(s)" part) and gave
+   up although a whole decoder could have been freed.
+3. **The refusal was not remembered.** Nothing learned that the device's limit had been reached, so
+   every later clip walked into the same wall.
+
+### 7.2 What changed
+
+* `app/src/main/java/com/example/engine/export/CodecAllocationPolicy.kt` (**new**) — the whole
+  decision, pure and unit tested: the codec candidate ladder (hardware first, the platform's
+  software decoder for the same MIME second, never more than two attempts), recognising a resource
+  refusal from the codec's own text (and *not* treating a corrupt file as one), the device limit
+  (declared vs. learned) and the user-facing hint for a genuine exhaustion.
+* `HardwareVideoTextureSource.initialize()` — each candidate is now created, configured **and
+  started** as one unit, and the next candidate is tried when any of those steps fails. The failure
+  text keeps every attempt with the codec names.
+* `AsyncFramePipelineEngine` — the ladder around it: hardware → (release what the frame does not
+  draw, pause 80 ms, retry) → software decoder → only then fail, with the device's own reason and a
+  hint that it ran out of codec instances. It also learns the limit from the refusal (the number of
+  hardware decoders that were open), so later clips go straight to the software step instead of
+  repeating a refused request. `DecoderBudget` gained the third class of decoder: released last,
+  only when the device needs the instance for a picture the frame really draws.
+* `ExportDiagnostics` — `EXPORT_DECODER_LADDER` (once per clip, never per frame) and
+  `EXPORT_STAGE` timings (`audio-mix`, `tracking-prewarm`, `preroll`), which is
+  also how the "progress sat at 0–5% for two minutes" report is explained: the PCM mix of a
+  four-minute multi-track timeline runs before the render loop, and its length is now in the log.
+
+Nothing about the picture changed: the ladder only decides *which codec* decodes a layer, and the
+software step yields the same decoded frames. No layer is dropped, no resolution or quality is
+reduced, and a clip that genuinely cannot be decoded still fails with its own reason.
+
+### 7.3 Tests
+
+| Test | What it proves |
+| --- | --- |
+| `CodecAllocationPolicyTest` (13 unit tests) | ladder order and dedupe, no hardware step on the software ladder step, refusal recognition (and that a missing video track is *not* one), declared-vs-learned limit, "software from now on", honest hardware counting |
+| `DecoderBudgetTest` (+4) | a decoder kept warm is released before a drawn layer ever would be; a pinned id that the frame draws is still needed |
+| `c02_exportKeepsEveryLayerWhenTheDeviceGrantsFewerCodecInstancesThanLayers` (instrumented) | the export is given **one** hardware decoder for a frame that needs **four** video pictures (main clip at a `NONE` transition boundary + three video overlays + the pinned before-side). It must still validate, still be non-black, and be **pixel-for-pixel the same picture** as the same project exported without the limit (mean absolute channel delta < 0.06 over a 24x24 grid at three sample times) |

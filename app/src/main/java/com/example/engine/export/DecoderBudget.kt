@@ -22,12 +22,28 @@ object DecoderBudget {
    * order they were opened, so the caller's log and eviction order stay deterministic.
    */
   fun evictions(open: Collection<String>, needed: Set<String>): List<String> =
-    open.filter { it !in needed }
+    evictions(open, needed, emptySet())
+
+  /**
+   * The same rule with a second, weaker class of decoder.
+   *
+   * [pinned] clips are *not* drawn by the current frame but are open on purpose - the "before" side
+   * of a NONE transition is the case that exists in this pipeline: nothing of it is on screen, it is
+   * merely held so a following real transition does not have to reopen it. Pinned decoders are
+   * released last and only when the frame needs the instance for a picture it really draws, so the
+   * optimisation costs a reopen at worst and never a layer.
+   */
+  fun evictions(open: Collection<String>, needed: Set<String>, pinned: Set<String>): List<String> {
+    val optional = open.filter { it !in needed && it !in pinned }
+    val pinnedOnly = open.filter { it in pinned && it !in needed }
+    return optional + pinnedOnly
+  }
 
   /**
    * Whether the export may release anything at all while [needed] clips are on screen. False means
    * the decoder budget is exhausted by the frame itself - the caller may not trade a visible layer
-   * for another one.
+   * for another one, and must fall back to a software decoder (or report the device's refusal)
+   * instead.
    */
   fun canFree(open: Collection<String>, needed: Set<String>): Boolean =
     evictions(open, needed).isNotEmpty()

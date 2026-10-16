@@ -48,7 +48,14 @@ class ClipBodyTracker(
   }
 
   private fun detect(clipId: String, sourceTimeUs: Long): BodyPose? {
-    val uri = uriFor(clipId) ?: return null
+    val uri = uriFor(clipId)
+    if (uri == null) {
+      // No source for this clip: the body reshape cannot be drawn for any frame. Recorded, because
+      // a silently missing effect is exactly what makes an export look "fine" while the user sees
+      // the slider do nothing.
+      com.example.engine.export.TrackingHealth.record(clipId, sourceTimeUs, "no media uri for clip $clipId")
+      return null
+    }
     val retriever = MediaMetadataRetriever()
     return try {
       retriever.setDataSource(context, Uri.parse(uri))
@@ -56,7 +63,13 @@ class ClipBodyTracker(
         retriever.getScaledFrameAtTime(sourceTimeUs, MediaMetadataRetriever.OPTION_CLOSEST, 480, 480)
       } else {
         retriever.getFrameAtTime(sourceTimeUs, MediaMetadataRetriever.OPTION_CLOSEST)
-      } ?: return null
+      }
+      if (bmp == null) {
+        com.example.engine.export.TrackingHealth.record(
+          clipId, sourceTimeUs, "no frame for body tracking at ${sourceTimeUs / 1000}ms"
+        )
+        return null
+      }
       val w = bmp.width.coerceAtLeast(1).toFloat()
       val h = bmp.height.coerceAtLeast(1).toFloat()
       val pose = Tasks.await(
@@ -80,7 +93,13 @@ class ClipBodyTracker(
         leftAnkle = joint(PoseLandmark.LEFT_ANKLE),
         rightAnkle = joint(PoseLandmark.RIGHT_ANKLE),
       )
-    } catch (_: Throwable) {
+    } catch (t: Throwable) {
+      // Was swallowed to null, so a failing pose detector quietly dropped the body reshape from the
+      // exported video. The reason is now recorded (and reported by the export).
+      com.example.engine.export.TrackingHealth.record(
+        clipId, sourceTimeUs,
+        "pose detection failed: ${t.javaClass.simpleName}: ${t.message ?: "unknown"}"
+      )
       null
     } finally {
       runCatching { retriever.release() }
