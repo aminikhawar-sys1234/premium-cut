@@ -58,6 +58,17 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
   private var codec: MediaCodec? = null
   private var extractor: MediaExtractor? = null
 
+  /**
+   * Why the last [initialize] / [decodeFrame] failed; null when the last call succeeded.
+   *
+   * Without it a caller only learns "no picture", and the export ends in
+   * "Could not decode a video frame from X" without the codec's own reason (instance limit,
+   * unsupported profile, decoder that never produced output). The message travels into the export
+   * exception and therefore into the user-visible "Export failed" diagnostics.
+   */
+  @Volatile var lastError: String? = null
+    private set
+
   var width: Int = 1920
     private set
   var height: Int = 1080
@@ -147,6 +158,7 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
 
       if (trackIndex < 0 || trackFormat == null) {
         Log.w(TAG, "No valid video track found in ${clip.uri}")
+        lastError = "no video track in ${clip.uri}"
         ex.release()
         return false
       }
@@ -186,12 +198,14 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       if (glHandler != null && android.os.Looper.myLooper() != glHandler.looper) {
         glHandler.post(setupGlAction)
         if (!latch.await(3, TimeUnit.SECONDS) || !glSuccess) {
+          lastError = "OES texture/SurfaceTexture could not be created on the GL thread"
           release()
           return false
         }
       } else {
         setupGlAction.run()
         if (!glSuccess) {
+          lastError = "OES texture/SurfaceTexture could not be created on the GL thread"
           release()
           return false
         }
@@ -226,13 +240,27 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       codec = dec
       isHardwareAccelerated = isHw
       isInitialized = true
+      lastError = null
       Log.d(TAG, "Initialized decoder for ${clip.id} ($mime, ${width}x${height}, rot=$rotationDegrees, hw=$isHw)")
       return true
     } catch (e: Exception) {
       Log.e(TAG, "Failed to initialize HardwareVideoTextureSource for ${clip.uri}", e)
+      lastError = "decoder setup failed for ${clip.uri}: ${describeFailure(e)}"
       release()
       return false
     }
+  }
+
+  /** `MediaCodec.CodecException` carries the codec's own error code and diagnostics; keep them. */
+  private fun describeFailure(t: Throwable): String {
+    val codecError = t as? MediaCodec.CodecException
+    val detail = if (codecError != null) {
+      " (errorCode=${codecError.errorCode} recoverable=${codecError.isRecoverable} " +
+        "transient=${codecError.isTransient} diagnostic=${codecError.diagnosticInfo})"
+    } else {
+      ""
+    }
+    return "${t.javaClass.name}: ${t.message}$detail"
   }
 
   private fun setupTextureAndSurface(decoderHandler: Handler?) {
@@ -289,9 +317,16 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
     cancelled: AtomicBoolean = AtomicBoolean(false),
     @Suppress("UNUSED_PARAMETER") toleranceUs: Long = 40_000L
   ): Boolean {
-    if (!isInitialized) return false
-    val c = codec ?: return false
-    val ex = extractor ?: return false
+    if (!isInitialized) {
+      lastError = "decoder is not initialized"
+      return false
+    }
+    val c = codec
+    val ex = extractor
+    if (c == null || ex == null) {
+      lastError = "decoder or extractor is missing"
+      return false
+    }
 
     val frameDurUs = (1_000_000.0 / frameRate.coerceIn(10f, 240f)).toLong()
     val halfWindowUs = (frameDurUs / 2).coerceIn(4_000L, 40_000L)
@@ -316,14 +351,16 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
 
     val info = MediaCodec.BufferInfo()
     val noPictureYet = deliveredFrames == 0L
-    val deadline = SystemClock.elapsedRealtime() +
-      if (noPictureYet) FIRST_PICTURE_DEADLINE_MS else DECODE_DEADLINE_MS
+    val deadlineMs = if (noPictureYet) FIRST_PICTURE_DEADLINE_MS else DECODE_DEADLINE_MS
+    val deadline = SystemClock.elapsedRealtime() + deadlineMs
     var rendered = false
 
     while (!cancelled.get()) {
       if (SystemClock.elapsedRealtime() > deadline) {
         Log.w(TAG, "decodeFrame timed out for target=${targetUs}us (hasPicture=$hasPicture inputs=$inputsQueued outputs=$outputsDequeued eosIn=$isInputEos)")
         if (noPictureYet && outputsDequeued == 0L) {
+          lastError = "video decoder produced no output for target=${targetUs}us within " +
+            "${deadlineMs}ms (inputs=$inputsQueued queued, outputs=$outputsDequeued dequeued)"
           throw IllegalStateException("Video decoder produced no output for target=${targetUs}us (inputs=$inputsQueued)")
         }
         break
@@ -399,9 +436,18 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
       if (awaitFrameArrival(cancelled)) {
         hasPicture = true
         deliveredFrames++
+        lastError = null
       } else {
         Log.w(TAG, "Decoded frame never arrived at SurfaceTexture (target=${targetUs}us)")
+        lastError = "decoded frame never arrived at the SurfaceTexture for target=${targetUs}us " +
+          "within ${FRAME_ARRIVAL_TIMEOUT_MS}ms (outputs=$outputsDequeued)"
       }
+    }
+    if (!hasPicture) {
+      lastError = lastError ?: (
+        "no decoded picture for target=${targetUs}us within ${deadlineMs}ms " +
+          "(inputs=$inputsQueued queued, outputs=$outputsDequeued dequeued, eosIn=$isInputEos)"
+        )
     }
     return hasPicture
   }
