@@ -45,6 +45,7 @@ SOURCES=(
   "$MAIN/com/example/engine/composition/CompositionLookResolver.kt"
   "$MAIN/com/example/engine/effects/media3/PreviewGraphDecision.kt"
   "$MAIN/com/example/engine/ai/cutout/MaskDecoding.kt"
+  "$MAIN/com/example/engine/ai/cutout/MaskAnalysisCadence.kt"
   "$MAIN/com/example/engine/preview/PreviewCompositionPolicy.kt"
   "$MAIN/com/example/engine/export/ExportSurfaceSize.kt"
   "$MAIN/com/example/engine/export/ExportBlackFrameGuard.kt"
@@ -109,6 +110,7 @@ SOURCES=(
   "$TEST/com/ahstudio/color/LutAtlasLayoutTest.kt"
   "$TEST/com/example/engine/effects/media3/PreviewGraphDecisionTest.kt"
   "$TEST/com/example/engine/ai/cutout/MaskDecodingTest.kt"
+  "$TEST/com/example/engine/ai/cutout/MaskAnalysisCadenceTest.kt"
   "$TEST/com/example/engine/preview/PreviewCompositionPolicyTest.kt"
   # harness
   "$HARNESS/AndroidGraphicsStubs.kt"
@@ -134,6 +136,7 @@ echo "== running tests"
   com.ahstudio.color.LutAtlasLayoutTest \
   com.example.engine.effects.media3.PreviewGraphDecisionTest \
   com.example.engine.ai.cutout.MaskDecodingTest \
+  com.example.engine.ai.cutout.MaskAnalysisCadenceTest \
   com.example.engine.preview.PreviewCompositionPolicyTest \
   com.example.engine.export.ExportSurfaceSizeTest \
   com.example.engine.export.ExportBlackFrameGuardTest \

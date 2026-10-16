@@ -217,3 +217,23 @@ For (1)-(3) the harness had to reach a closure that ends in `android.graphics.Re
 stand-ins for exactly those two framework types, so `AudioMixPlanTest`, `TimelineAudioMixerTest` and
 `AudioExportWindowTest` now run on a plain JVM (`run_logic_tests.sh`: 194 tests, 0 failures). The stubs
 perform no matrix maths - nothing those tests assert depends on them - and the file says so.
+
+## 7. The one rendering-side defect this patch also fixes
+
+`SubjectCutoutStage` keyed its masks by a 30 ms bucket for both paths. For the preview that is
+correct (it analyses off the GL thread, at most ~15x/s, and holds the last mask for 20 buckets). For
+the **export** it meant the opposite of what the export needs: with `blocking = true` - which is what
+`FramePresentation.export(...)` asks for, via `deterministicMasks` - every bucket misses, so a
+background-removal clip paid, **on the GL thread, for every frame**: a 384 px `glReadPixels` of the
+composed frame, an ARGB conversion, an on-device segmentation, a temporal filter and a mask upload.
+At the ~25 ms such an analysis typically costs on a phone, that alone is ~2.5x a 1080p30 frame budget,
+and it is charged again for every frame of a ten-minute timeline.
+
+`MaskAnalysisCadence` now keys the export's masks by a **200 ms window of timeline** (6 frames at
+30 fps) while the preview keeps its per-frame key. The window is a pure function of the timeline
+position, so a re-render is still frame-exact - the export just stops re-segmenting a subject that
+moved a few pixels. `MaskAnalysisCadenceTest` pins the cadence, the monotonicity, the floor-division
+of negative keys (a stale mask must never look current to the temporal filter) and the ~6x reduction
+(3000 analyses for ten minutes instead of 18000). The first export frame logs the cadence it chose,
+once, so a launcher reading logcat can see why background removal costs what it costs.
+
