@@ -501,7 +501,7 @@ for label, cw, ch, rot, _aspect, ow, oh, mirror in cases:
         box_h, box_w = oh, round(oh * display_aspect)
     left, top = (ow - box_w) // 2, (oh - box_h) // 2
 
-    def read(flip):
+    def quadrant_luma(flip):
         out = []
         for fx, fy in ((0.25, 0.25), (0.75, 0.25), (0.25, 0.75), (0.75, 0.75)):
             x = left + int(box_w * fx)
@@ -524,12 +524,101 @@ for label, cw, ch, rot, _aspect, ow, oh, mirror in cases:
         return ranked[0][1], ranked[1][0] - ranked[0][0]
 
     expected = f"rot{rot}" + ("+mirrorX" if mirror else "")
-    got, margin = classify(read(False))
+    got, margin = classify(quadrant_luma(False))
     check(got == expected and margin >= 20,
           f"device test would read {label} as {expected}", f"classified {got} (margin {margin})")
-    got_flip, _ = classify(read(True))
+    got_flip, _ = classify(quadrant_luma(True))
     check(got_flip != expected,
           f"device test would reject an upside-down {label}", f"flipped frame classified {got_flip}")
+
+
+# ------------------------------------------------------------------------------------------------
+# Part 4 - qualified names resolve to the right nesting level
+# ------------------------------------------------------------------------------------------------
+# CI caught `CompositionRenderGraph.PREVIEW` in the device test (it does not compile): PREVIEW is
+# declared in the companion object of the *nested* FramePresentation class, so the two-level name has
+# no such member. The Kotlin compiler is the only real authority, but it is not available in every
+# environment that runs this guard, so the two composition types are resolved here by nesting depth
+# the way Kotlin does - including members of a nested companion object.
+print()
+print("-- D. qualified references resolve at the right nesting level --")
+
+MEMBER_PATTERNS = [
+    r"(?:@\w+\s+)*(?:private |public |internal |protected )?(?:const )?val ([A-Za-z_]\w*)",
+    r"(?:private |public |internal |protected )?fun ([A-Za-z_]\w*)",
+    r"(?:private |public |internal )?(?:data |abstract |open |sealed |enum )*(?:class|object|interface) ([A-Za-z_]\w*)",
+]
+
+
+def direct_members(source: str, header_regex: str) -> set:
+    """Names callable as `<Header>.<name>`: the body's own declarations plus its companion's."""
+    m = re.search(header_regex, source)
+    if m is None:
+        return set()
+    depth = 1
+    companion_depth = None
+    names = set()
+    for line in source[m.end():].split("\n"):
+        stripped = line.strip()
+        collect = depth == 1 or (companion_depth is not None and depth == companion_depth + 1)
+        if collect:
+            for pat in MEMBER_PATTERNS:
+                mm = re.match(pat, stripped)
+                if mm:
+                    names.add(mm.group(1))
+            if stripped.startswith("companion object") and depth == 1:
+                companion_depth = depth
+        depth += line.count("{") - line.count("}")
+        if depth <= 0:
+            break
+    return names
+
+
+graph_src = read(GRAPH)
+object_members = direct_members(graph_src, r"object CompositionRenderGraph \{")
+presentation_members = direct_members(graph_src, r"data class FramePresentation\([^)]*\) \{")
+check(
+    {"FramePresentation", "LayerRole", "LayerSample", "ResolvedLayer", "AssembledFrame"} <= object_members
+    and {"present", "assemble", "layersOf"} <= object_members,
+    "the nesting check reads CompositionRenderGraph's direct members",
+    f"{sorted(object_members)}",
+)
+check("PREVIEW" in presentation_members and "PREVIEW" not in object_members,
+      "PREVIEW is a member of FramePresentation (companion), not of the outer object",
+      f"presentation={sorted(presentation_members)}")
+
+# Every reference to CompositionRenderGraph in the Kotlin sources must match that nesting.
+graph_refs = []
+for root, _dirs, files in os.walk(os.path.join(APP, "src")):
+    for f in sorted(files):
+        if not f.endswith(".kt"):
+            continue
+        path = os.path.join(root, f)
+        text = strip_comments(read(path))
+        if "CompositionRenderGraph." not in text:
+            continue
+        for m in re.finditer(r"(?:\w+\.)*CompositionRenderGraph\.([A-Za-z_]\w*)(?:\.([A-Za-z_]\w*))?", text):
+            line = text[: m.start()].count("\n") + 1
+            graph_refs.append((os.path.relpath(path, REPO), line, m.group(1), m.group(2), m.group(0)))
+
+bad = []
+for rel, line, first, second, whole in graph_refs:
+    if first not in object_members:
+        bad.append(f"{rel}:{line} {whole} - '{first}' is not a direct member of CompositionRenderGraph")
+    elif second is not None:
+        if first == "FramePresentation":
+            if second not in presentation_members:
+                bad.append(f"{rel}:{line} {whole} - '{second}' is not a member of FramePresentation")
+        else:
+            nested = direct_members(graph_src, rf"(?:enum class|data class|class|object) {first} \{{")
+            if nested and second not in nested:
+                bad.append(f"{rel}:{line} {whole} - '{second}' is not a member of {first}")
+check(len(graph_refs) >= 15, "the nesting check saw the references in app/src", f"{len(graph_refs)} references")
+check(not bad, "every CompositionRenderGraph.<...> reference in app/src resolves against the real nesting",
+      "; ".join(bad[:4]))
+check(not any(first == "PREVIEW" for _r, _l, first, _s, _w in graph_refs),
+      "no source references the two-level name CompositionRenderGraph.PREVIEW",
+      "; ".join(f"{r}:{l}" for r, l, first, _s, _w in graph_refs if first == "PREVIEW"))
 
 print()
 print("=" * 78)

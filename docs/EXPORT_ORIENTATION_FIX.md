@@ -60,7 +60,7 @@ export path still sets `deterministicMasks = true`, so export tracking stays blo
 
 | Command | Result |
 | --- | --- |
-| `python3 toolchain/verify/verify_export_orientation.py` | **127 checks, 0 failures** (20 source-contract + 48 simulated + 59 re-evaluated test expectations) |
+| `python3 toolchain/verify/verify_export_orientation.py` | **132 checks, 0 failures** (20 source-contract + 48 simulated + 59 re-evaluated test expectations + 5 nesting checks) |
 | `python3 toolchain/verify/verify_export_orientation.py --blit-flip true` | **36 failures** — putting the old flip back reproduces the upside-down/mirrored export, so the guard is not vacuous |
 
 The new guard (`toolchain/verify/verify_export_orientation.py`) does two jobs:
@@ -89,12 +89,18 @@ The new guard (`toolchain/verify/verify_export_orientation.py`) does two jobs:
   exported picture is upright and must **not** classify as that when the picture is mirrored
   vertically. (This part caught a wrong expectation while the guard was being written - a swapped
   90/270 case - which is exactly the class of mistake nobody can catch without running the test.)
+* **Part 4 — qualified names resolve to the right nesting level (5 checks).** Resolves
+  `CompositionRenderGraph` and its nested `FramePresentation` the way Kotlin does (including companion
+  members) and checks every `CompositionRenderGraph.<...>` reference under `app/src` against that
+  nesting. This exists because CI found the device test calling `CompositionRenderGraph.PREVIEW`,
+  which does not compile - `PREVIEW` lives in the companion of the nested `FramePresentation` class, so
+  the name needs three levels. Reinstate that name and the guard fails with the exact `file:line`.
 
 Whole guard suite afterwards (same interpreter, no device):
 
 | Guard | Result |
 | --- | --- |
-| `verify_export_orientation.py` | 127 checks, 0 failures |
+| `verify_export_orientation.py` | 132 checks, 0 failures |
 | `verify_render_contract.py` | 52 checks, 0 failures |
 | `verify_shader_parity.py` | 55 checks, 0 failures |
 | `verify_gl_sampler_contract.py` | 37 checks, 0 failures |
@@ -117,9 +123,20 @@ claimed for them**:
 * `:app:assembleDebugAndroidTest` and every test under `app/src/androidTest`, including the new
   `ExportOrientationInstrumentedTest`.
 
-`main.yml` / `postpatch-verify.yml` run these on a runner with JDK 21 + NDK 28.2.13676358. Until they
-do, the orientation of an exported frame is *designed* to be upright, not *measured* to be upright on
-a device.
+`main.yml` / `postpatch-verify.yml` run these on a runner with JDK 21 + NDK 28.2.13676358.
+
+### What CI has since executed (first push of this PR, run 38856757586)
+
+| Job | Result |
+| --- | --- |
+| `Android CI/CD Build and Test` | **pass** (17m15s) |
+| *Build, unit tests, lint* -> Gradle unit tests | **pass**: 196 suites, **1560 cases, 0 failed/errored** - so `ExportOrientationPolicyTest` and the updated `ExportOrientationAndPipelineTest` / `CompositionRenderGraphTest` really ran and passed |
+| *Build, unit tests, lint* -> `:app:assembleDebugAndroidTest` | **fail**: `ExportOrientationInstrumentedTest.kt:194:63 Unresolved reference 'PREVIEW'` - the new device test itself did not compile (a wrong qualified name, not a failing assertion) |
+| *Device tests (emulator, real GLES)* | skipped (depends on the job above) |
+
+That one compile error is fixed (`CompositionRenderGraph.FramePresentation.PREVIEW`) and Part 4 of the
+guard now catches this class of mistake before CI does. The device tests are still **not executed** -
+they need the re-run of this PR to be green first.
 
 ## 4. Tests added / updated
 

@@ -189,9 +189,11 @@ class ExportOrientationInstrumentedTest {
       )
 
       // 2. Preview/export parity, asserted on the values the two destinations actually consume.
+      //    PREVIEW lives in the companion of the nested FramePresentation class, hence the
+      //    three-level name - `CompositionRenderGraph.PREVIEW` does not resolve (CI caught that).
       assertEquals(
         "preview and export blit the composite with a different Y flip (${case.label})",
-        com.example.engine.composition.CompositionRenderGraph.PREVIEW.flipY,
+        com.example.engine.composition.CompositionRenderGraph.FramePresentation.PREVIEW.flipY,
         ExportOrientationPolicy.FLIP_Y_FOR_ENCODER
       )
 
