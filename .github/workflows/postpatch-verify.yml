@@ -450,6 +450,10 @@ jobs:
               "com.example.engine.export.CompositionRegressionInstrumentedTest",
               "com.example.engine.export.ExportLookPersistenceInstrumentedTest",
               "com.example.engine.export.ExportValidatorInstrumentedTest",
+              # The reported failure, as a device test: it must *run*, not merely exist. If it were
+              # ever skipped (or removed from the source set) the gate fails instead of passing
+              # quietly on the strength of the older suites.
+              "com.example.engine.export.ExportProgressStallInstrumentedTest",
           ]
           seen, bad, total = set(), [], 0
           for path in sorted(glob.glob("app/build/outputs/androidTest-results/**/*.xml", recursive=True)):
