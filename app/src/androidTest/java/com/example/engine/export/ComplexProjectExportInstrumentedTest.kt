@@ -159,7 +159,12 @@ class ComplexProjectExportInstrumentedTest {
     rotationDegrees = rotationDegrees
   )
 
-  private fun export(timeline: Timeline, config: ExportConfig, name: String): File {
+  private fun export(
+    timeline: Timeline,
+    config: ExportConfig,
+    name: String,
+    configureEngine: (AsyncFramePipelineEngine) -> Unit = {}
+  ): File {
     val out = File(dir, name)
     // The export deletes the file at its output path before muxing. Writing over a source would
     // silently destroy the very clip the export has to decode, so make that a test error.
@@ -172,6 +177,7 @@ class ComplexProjectExportInstrumentedTest {
     )
     val started = System.currentTimeMillis()
     val engine = AsyncFramePipelineEngine(context)
+    configureEngine(engine)
     try {
       runBlocking { engine.export(timeline, config, out) }
     } catch (t: Throwable) {
@@ -361,6 +367,29 @@ class ComplexProjectExportInstrumentedTest {
   }
 
   private fun format(rgb: FloatArray) = "%.4f/%.4f/%.4f".format(rgb[0], rgb[1], rgb[2])
+
+  /**
+   * Mean absolute per-channel difference between two decoded frames on a 24x24 grid: 0 means the two
+   * exports show the same picture. Used to prove that decoding a layer through a different codec path
+   * does not change (or drop) what is on screen.
+   */
+  private fun meanAbsPixelDelta(a: Bitmap, b: Bitmap): Float {
+    val scaledA = Bitmap.createScaledBitmap(a, 24, 24, true)
+    val scaledB = Bitmap.createScaledBitmap(b, 24, 24, true)
+    val pixelsA = IntArray(24 * 24)
+    val pixelsB = IntArray(24 * 24)
+    scaledA.getPixels(pixelsA, 0, 24, 0, 0, 24, 24)
+    scaledB.getPixels(pixelsB, 0, 24, 0, 0, 24, 24)
+    var sum = 0.0
+    for (i in pixelsA.indices) {
+      sum += abs(Color.red(pixelsA[i]) - Color.red(pixelsB[i])) / 255.0
+      sum += abs(Color.green(pixelsA[i]) - Color.green(pixelsB[i])) / 255.0
+      sum += abs(Color.blue(pixelsA[i]) - Color.blue(pixelsB[i])) / 255.0
+    }
+    if (scaledA != a) scaledA.recycle()
+    if (scaledB != b) scaledB.recycle()
+    return (sum / (pixelsA.size * 3)).toFloat()
+  }
 
   private fun audioTrackMime(file: File): String {
     val extractor = MediaExtractor()
@@ -723,6 +752,104 @@ class ComplexProjectExportInstrumentedTest {
       "many-layer export has the wrong shape: ${validation.width}x${validation.height}",
       validation.height > validation.width && abs(validation.width - expected.first) <= 16
     )
+  }
+
+  @Test
+  fun c02_exportKeepsEveryLayerWhenTheDeviceGrantsFewerCodecInstancesThanLayers() {
+    LookVerificationReport.line(">>> START c02_exportKeepsEveryLayerWhenTheDeviceGrantsFewerCodecInstancesThanLayers")
+    // The device report that started this: a four-minute project (several video tracks, overlays,
+    // stickers, an audio track, filters, a colour grade) failed the export at 56% with
+    //   MediaCodec.CodecException: (errorCode=1100 recoverable=false transient=false
+    //   diagnostic=android.media.MediaCodec.error_1100)
+    // while opening the decoder of the clip the frame needed. 1100 is ERROR_INSUFFICIENT_RESOURCE:
+    // the device had no codec instance left, and the frame needed every decoder the export held -
+    // a main clip, three video overlays, and the before-side of a NONE transition that draws nothing
+    // at all but used to count as needed.
+    //
+    // A real device's limit cannot be reproduced on an emulator, so it is forced instead: the export
+    // gets exactly ONE hardware decoder for a frame that needs four pictures. It must come out the
+    // same way as the unlimited export - the same layers, the same pixels - by releasing what the
+    // frame does not draw and by decoding the rest on the software codec. What must not happen is a
+    // failure, a dropped layer or a black frame.
+    val ms = 900L
+    val a = source("pressure-a.mp4", TestMp4Factory.Picture.COLORFUL, ms)
+    val b = source("pressure-b.mp4", TestMp4Factory.Picture.DARK_NIGHT, ms)
+    val c = source("pressure-c.mp4", TestMp4Factory.Picture.GREEN_SCREEN, ms)
+
+    fun project(): Timeline = Timeline(
+      videoClips = listOf(
+        video("press-main-a", a, durationMs = 900L),
+        video("press-main-b", b, startMs = 900L, durationMs = 900L, sourceTotalMs = ms)
+      ),
+      overlayClips = listOf(
+        video(
+          id = "press-ov-1", file = a, durationMs = 1700L, sourceTotalMs = ms, trackIndex = 1,
+          opacity = 0.9f,
+          keyframes = listOf(
+            ClipKeyframe(timeMs = 0L, scale = 0.35f, posX = -0.45f, posY = -0.45f),
+            ClipKeyframe(timeMs = 1600L, scale = 0.4f, posX = -0.4f, posY = -0.4f)
+          )
+        ),
+        video(
+          id = "press-ov-2", file = b, durationMs = 1700L, sourceTotalMs = ms, trackIndex = 2,
+          opacity = 0.9f,
+          keyframes = listOf(
+            ClipKeyframe(timeMs = 0L, scale = 0.35f, posX = 0.45f, posY = 0.45f),
+            ClipKeyframe(timeMs = 1600L, scale = 0.4f, posX = 0.4f, posY = 0.4f)
+          )
+        ),
+        video(
+          id = "press-ov-3", file = c, durationMs = 1700L, sourceTotalMs = ms, trackIndex = 3,
+          opacity = 0.9f,
+          keyframes = listOf(
+            ClipKeyframe(timeMs = 0L, scale = 0.35f, posX = 0.45f, posY = -0.45f),
+            ClipKeyframe(timeMs = 1600L, scale = 0.4f, posX = 0.4f, posY = -0.4f)
+          )
+        )
+      ),
+      transitions = listOf(Transition(clipIndexBefore = 0, type = TransitionType.NONE, durationMs = 300L)),
+      aspectRatio = AspectRatio.RATIO_9_16
+    )
+
+    val reference = export(project(), portraitConfig, "codec-pressure-reference.mp4")
+    val pressured = export(project(), portraitConfig, "codec-pressure-budget-1.mp4") { engine ->
+      engine.decoderBudgetForTests = 1
+    }
+
+    val expected = ExportDimensionResolver.resolve(portraitConfig.resolution, project().aspectRatio)
+    for ((label, file) in listOf("reference" to reference, "budget-1" to pressured)) {
+      val validation = ExportValidator.validate(
+        file, portraitConfig, project().totalDurationMs,
+        requireAudio = true, expectedDimensions = expected, sampleFrames = true, expectedRotation = 0
+      )
+      LookVerificationReport.line(
+        "codec pressure $label validation: valid=${validation.valid} '${validation.message}' " +
+          "size=${validation.width}x${validation.height}"
+      )
+      assertTrue("codec-pressure export ($label) was rejected: ${validation.message}", validation.valid)
+    }
+
+    // Three sample points: inside the first main clip, inside the NONE transition window (the frame
+    // that used to believe it could free nothing), and after it.
+    for (timeUs in listOf(300_000L, 950_000L, 1_400_000L)) {
+      val referenceFrame = frameAt(reference, timeUs)
+      val pressuredFrame = frameAt(pressured, timeUs)
+      val delta = meanAbsPixelDelta(referenceFrame, pressuredFrame)
+      LookVerificationReport.line(
+        "codec pressure parity at ${timeUs}us: delta=%.4f reference=%.4f budget1=%.4f".format(
+          delta, luma(referenceFrame), luma(pressuredFrame)
+        )
+      )
+      assertTrue(
+        "the budget-limited export is black at ${timeUs}us",
+        luma(pressuredFrame) > 0.05f
+      )
+      assertTrue(
+        "decoding through the resource ladder changed the picture at ${timeUs}us " +
+          "(mean pixel delta %.4f): a layer was dropped or drawn differently".format(delta),
+        delta < 0.06f
+      )
+    }
   }
 
   @Test

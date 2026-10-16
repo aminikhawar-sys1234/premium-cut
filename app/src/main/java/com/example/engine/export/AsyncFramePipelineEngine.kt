@@ -152,7 +152,9 @@ private class HardwareClipDecoder(
   val clip: VideoClip,
   private val glHandler: Handler,
   private val decoderHandler: Handler,
-  private val decoderManager: DecoderManager = DecoderManager()
+  private val decoderManager: DecoderManager = DecoderManager(),
+  /** False puts this clip on the software ladder step (see CodecAllocationPolicy). */
+  private val preferHardware: Boolean = true
 ) {
   private val textureSource = HardwareVideoTextureSource()
 
@@ -168,9 +170,13 @@ private class HardwareClipDecoder(
       clip = clip,
       glHandler = glHandler,
       decoderHandler = decoderHandler,
-      decoderManager = decoderManager
+      decoderManager = decoderManager,
+      preferHardware = preferHardware
     )
   }
+
+  /** True while this decoder runs on a hardware codec (false on the software ladder step). */
+  val isHardware: Boolean get() = textureSource.isHardwareAccelerated
 
   /** @return true when the OES texture holds a real decoded picture for [targetUs]. */
   fun decodeFrame(targetUs: Long, cancelled: AtomicBoolean): Boolean {
@@ -230,6 +236,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
   @Volatile var activePlan: EncoderPlan? = null
     private set
 
+  /**
+   * Instrumentation-test seam only: caps how many hardware decoders this export may keep open, so the
+   * codec-pressure ladder (release what the frame does not draw, retry, software fallback) runs on a
+   * device whose codecs are nowhere near exhausted. Production never sets it - the real limit is
+   * learned from the device itself (see `learnedHardwareLimit` in [export]).
+   */
+  var decoderBudgetForTests: Int? = null
+
   fun cancel() {
     userCancelled.set(true)
     currentStop?.set(true)
@@ -269,6 +283,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
       if (durationMs <= 0L) {
         throw ExportPipelineException("Timeline has no duration to export.", retryable = false)
       }
+      // Wall clock from here to the first encoded frame: the UI reports preparation for that whole
+      // stretch, so its length is worth a log line (see the "audio-mix" / "preroll" stages below).
+      val exportStartMs = System.currentTimeMillis()
 
       // Mix audio on its own thread so encoder/EGL setup is not blocked behind PCM decode
       // (that stall is what left the progress ring at 5% for minutes).
@@ -611,6 +628,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
       mixError.get()?.let { throw wrap("Audio mix failed", it) }
       val masterPcm = mixResult.get() ?: ShortArray(0)
       val encodeAudio = hasAudio && masterPcm.isNotEmpty()
+      // How long a long project's PCM mix really takes on the user's device: the render loop cannot
+      // start before this, so it is the phase a "0% for two minutes" report is about.
+      ExportDiagnostics.stage(
+        "audio-mix",
+        System.currentTimeMillis() - exportStartMs,
+        "active=$hasAudio samples=${masterPcm.size} channels=$audioChannels rate=$audioSampleRate"
+      )
 
       // 4. Audio encoder. If the timeline has audio, failing to encode it is an error, not a silent drop.
       var audioEncoder: MediaCodec? = null
@@ -787,8 +811,6 @@ class AsyncFramePipelineEngine(private val context: Context) {
       // Prime the audio encoder so its output format (needed to start the muxer) appears early.
       if (aenc != null && totalAudioFrames > 0) feedAudio(2048, 10_000L)
 
-      val maxConcurrentDecoders = DecoderManager.MAX_RECOMMENDED_HARDWARE_DECODERS
-
       /**
        * Why the last decode of a clip produced no picture. Written by the decoder pre-open (this
        * thread) and by the render loop (GL thread), read by the render loop; carried into the export
@@ -797,51 +819,158 @@ class AsyncFramePipelineEngine(private val context: Context) {
        */
       val decodeFailures = java.util.concurrent.ConcurrentHashMap<String, String>()
 
-      /** Releases every open decoder no layer of this frame needs, returns how many were freed. */
-      fun evictIdleDecoders(currentActiveIds: Set<String>): Int {
-        val idle = DecoderBudget.evictions(decoders.keys, currentActiveIds)
+      /**
+       * Clips whose *hardware* decoder failed while decoding (a runtime codec error, not a refusal to
+       * open). Their next attempt goes straight to the software ladder step; without this the retry
+       * in [decodeClipFrame] would reopen the very codec that just failed.
+       */
+      val softwareOnlyClips = HashSet<String>()
+
+      /**
+       * How many open decoders the export tolerates before it starts releasing the ones this frame
+       * does not need. It is a soft threshold: the hard limit is whatever the device actually gives,
+       * which is discovered below and remembered in [learnedHardwareLimit].
+       */
+      val maxConcurrentDecodersDefault = DecoderManager.MAX_RECOMMENDED_HARDWARE_DECODERS
+      /** Pause between a refused decoder request and the retry: the platform must destroy the released instances. */
+      val decoderRetryPauseMs = 80L
+      val maxConcurrentDecoders = decoderBudgetForTests ?: maxConcurrentDecodersDefault
+
+      /**
+       * What the device has actually allowed so far, or null while nothing has been refused.
+       *
+       * Seeded from [decoderBudgetForTests] (instrumentation tests only) and otherwise learned from a
+       * real refusal: the number of hardware decoders that were open when the device said "not
+       * enough resource" *is* that device's practical limit under this export's load. Once it is
+       * known, a clip that would need one instance more goes straight to the software ladder step
+       * instead of repeating a request the device has just refused.
+       */
+      var learnedHardwareLimit: Int? = decoderBudgetForTests
+
+      /** How many hardware decoders this clip may be opened with, or null while nothing is known. */
+      fun hardwareLimit(): Int? = CodecAllocationPolicy.hardwareLimit(null, learnedHardwareLimit)
+
+      /**
+       * Releases every open decoder no layer of this frame draws, returns how many were freed.
+       *
+       * [pinned] decoders are kept warm on purpose but are not part of the picture: the "before"
+       * side of a NONE transition is the case that matters, where holding its decoder is an
+       * optimisation. They are released last, and only when the device needs the instance for a
+       * picture the frame really draws - never the other way round.
+       */
+      fun evictIdleDecoders(needed: Set<String>, pinned: Set<String>): Int {
+        val idle = DecoderBudget.evictions(decoders.keys, needed, pinned)
         for (id in idle) {
           decoders.remove(id)?.release()
-          Log.d(tag, "Evicted idle decoder for clip $id to avoid codec exhaustion")
+          Log.d(tag, "Evicted idle decoder for clip $id to stay inside the device's codec instances")
         }
         return idle.size
       }
 
-      fun getOrCreateDecoder(clip: VideoClip, currentActiveIds: Set<String>): HardwareClipDecoder? {
-        decoders[clip.id]?.let { return it }
-        if (decoders.size >= maxConcurrentDecoders) evictIdleDecoders(currentActiveIds)
+      /** One ladder attempt: the opened decoder, or why the attempt failed. */
+      fun attemptDecoder(clip: VideoClip, preferHardware: Boolean): Pair<HardwareClipDecoder?, String?> {
+        val candidate = HardwareClipDecoder(
+          context = context,
+          clip = clip,
+          glHandler = glHandler,
+          decoderHandler = decoderHandler,
+          decoderManager = decoderManager,
+          preferHardware = preferHardware
+        )
+        if (candidate.init()) return candidate to null
+        val failure = candidate.lastError
+          ?: "the decoder for '${clip.name}' could not be opened (${clip.uri})"
+        candidate.release()
+        return null to failure
+      }
 
-        var newDecoder = HardwareClipDecoder(context, clip, glHandler, decoderHandler, decoderManager)
-        if (!newDecoder.init()) {
-          // The device refused another codec instance (every layer of this frame is already using
-          // one, and the hardware codec budget is typically far smaller than "one per clip"):
-          // "Failed to allocate component instance" / NO_MEMORY / ResourceBusy. Free every decoder
-          // this frame does not need - never one it does, so no layer is dropped from the picture -
-          // and try once more. A device that gave the instance immediately never takes this path.
-          val firstFailure = newDecoder.lastError
-            ?: "the decoder for '${clip.name}' could not be opened (${clip.uri})"
-          newDecoder.release()
-          val freed = evictIdleDecoders(currentActiveIds)
+      /**
+       * Opens the decoder of [clip] through the resource ladder. Never returns a decoder that is not
+       * fully started, and never trades a layer away to get one:
+       *
+       *  1. hardware codec (or the software one right away when the device's instances are used up),
+       *  2. release what the frame does not draw, pause so the platform can destroy those instances,
+       *     and try the same codec again - a refusal caused by a momentary peak ends here,
+       *  3. the software decoder for the same MIME type: same pictures, decoded on the CPU, so a
+       *     project with more simultaneous layers than the device has hardware codec instances still
+       *     exports instead of failing.
+       *
+       * A clip whose file genuinely cannot be decoded walks the same ladder, fails on every step and
+       * reports every reason - it never reports "resource" for a corrupt file.
+       */
+      fun getOrCreateDecoder(clip: VideoClip, needed: Set<String>, pinned: Set<String>): HardwareClipDecoder? {
+        decoders[clip.id]?.let { return it }
+        if (decoders.size >= maxConcurrentDecoders) evictIdleDecoders(needed, pinned)
+
+        val limit = hardwareLimit()
+        val hardwareOpen = decoders.values.count { it.isHardware }
+        val startOnSoftware = clip.id in softwareOnlyClips ||
+          CodecAllocationPolicy.needsSoftwareFallback(hardwareOpen, limit)
+        val trail = mutableListOf<String>()
+
+        var attempt = attemptDecoder(clip, preferHardware = !startOnSoftware)
+        if (attempt.first == null && !startOnSoftware) {
+          attempt.second?.let { trail.add(it) }
+          val freed = evictIdleDecoders(needed, pinned)
           if (freed > 0) {
-            Log.w(tag, "Decoder for ${clip.name} failed to open ($firstFailure); released $freed idle decoder(s) and retrying")
-            // Give the platform a moment to actually destroy the released codec instances.
-            Thread.sleep(50)
-            newDecoder = HardwareClipDecoder(context, clip, glHandler, decoderHandler, decoderManager)
-            if (newDecoder.init()) {
-              decoders[clip.id] = newDecoder
-              decodeFailures.remove(clip.id)
-              return newDecoder
+            Log.w(
+              tag,
+              "Decoder for ${clip.name} was refused (${trail.last()}); released $freed decoder(s) the " +
+                "frame does not draw and retrying"
+            )
+            Thread.sleep(decoderRetryPauseMs)
+            attempt = attemptDecoder(clip, preferHardware = true)
+            if (attempt.first == null) {
+              attempt.second?.let { trail.add("after releasing $freed decoder(s): $it") }
             }
-            decodeFailures[clip.id] = "$firstFailure; after releasing $freed idle decoder(s): " +
-              (newDecoder.lastError ?: "the decoder still could not be opened")
-          } else {
-            decodeFailures[clip.id] = firstFailure
           }
-          newDecoder.release()
+          if (attempt.first == null && CodecAllocationPolicy.isResourceRefusal(trail.joinToString(" "))) {
+            // The device has named its limit: the instances that were already open.
+            learnedHardwareLimit = CodecAllocationPolicy.hardwareLimit(learnedHardwareLimit, hardwareOpen)
+            ExportDiagnostics.decoderLadder(
+              clip.name,
+              "refused",
+              "hardwareCodecsOpen=$hardwareOpen, freed=$freed, limit=${learnedHardwareLimit ?: 0}, ${trail.last()}"
+            )
+          }
+        }
+
+        if (attempt.first == null && !startOnSoftware) {
+          // Software ladder step. This is the bounded resource strategy for "more simultaneous video
+          // layers than the device has hardware codec instances": the layer keeps its picture and
+          // nothing is silently dropped or graded down.
+          attempt = attemptDecoder(clip, preferHardware = false)
+          if (attempt.first != null) {
+            ExportDiagnostics.decoderLadder(
+              clip.name,
+              "software",
+              "hardwareCodecsOpen=$hardwareOpen, limit=${hardwareLimit() ?: 0}, ${trail.joinToString("; ")}"
+            )
+          } else {
+            attempt.second?.let { trail.add("software fallback: $it") }
+          }
+        }
+
+        if (attempt.first == null && startOnSoftware) {
+          // This clip was opened on the software step because an earlier clip exhausted the hardware
+          // instances - but a few devices have no software decoder for the codec at all, and a refusal
+          // is not proof about *this* clip's codec. One bounded hardware attempt is the last resort
+          // before the export reports that it cannot decode the clip.
+          attempt.second?.let { trail.add(it) }
+          attempt = attemptDecoder(clip, preferHardware = true)
+          if (attempt.first == null) attempt.second?.let { trail.add("hardware retry: $it") }
+        }
+
+        val opened = attempt.first
+        if (opened == null) {
+          val reason = trail.joinToString("; ")
+            .ifEmpty { "the decoder for '${clip.name}' could not be opened (${clip.uri})" }
+          decodeFailures[clip.id] = CodecAllocationPolicy.hintFor(reason)?.let { "$reason ($it)" } ?: reason
           return null
         }
-        decoders[clip.id] = newDecoder
-        return newDecoder
+        decoders[clip.id] = opened
+        decodeFailures.remove(clip.id)
+        return opened
       }
 
       val undecodableClipIds = HashSet<String>()
@@ -851,17 +980,22 @@ class AsyncFramePipelineEngine(private val context: Context) {
           clip.timelineStartMs < durationMs && (clip.timelineStartMs + clip.durationMs) > 0L
       }
       if (firstVideoClip != null) {
-        getOrCreateDecoder(firstVideoClip, setOf(firstVideoClip.id))
+        getOrCreateDecoder(firstVideoClip, setOf(firstVideoClip.id), emptySet())
       }
 
       /**
        * Decodes the source frame for [srcPosMs] into the clip's OES texture and latches it (GL thread).
        * A codec error triggers ONE retry on a software decoder; null means "no usable picture".
        */
-      fun decodeClipFrame(clip: VideoClip, srcPosMs: Long, activeIds: Set<String>): HardwareClipDecoder? {
+      fun decodeClipFrame(
+        clip: VideoClip,
+        srcPosMs: Long,
+        activeIds: Set<String>,
+        pinnedIds: Set<String> = emptySet()
+      ): HardwareClipDecoder? {
         if (clip.id in undecodableClipIds) return null
         for (tryNo in 0..1) {
-          val dec = getOrCreateDecoder(clip, activeIds) ?: return null
+          val dec = getOrCreateDecoder(clip, activeIds, pinnedIds) ?: return null
           try {
             val t0 = System.nanoTime()
             val ok = dec.decodeFrame(srcPosMs * 1000L, stop)
@@ -880,6 +1014,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
             decodeFailures[clip.id] = "try ${tryNo + 1}: ${e.message}" +
               (dec.lastError?.let { " (${it})" } ?: "")
             decoders.remove(clip.id)?.release()
+            if (dec.isHardware) {
+              // The retry must not reopen the codec that just failed: this clip takes the software
+              // ladder step from now on (see CodecAllocationPolicy).
+              softwareOnlyClips.add(clip.id)
+              ExportDiagnostics.decoderLadder(clip.name, "runtime-error", "${e.javaClass.simpleName}: ${e.message}")
+            }
             decoderManager.triggerSoftwareFallback("Runtime decoder error: ${e.message}")
           }
         }
@@ -898,8 +1038,21 @@ class AsyncFramePipelineEngine(private val context: Context) {
       //    the render loop behaves exactly as before, so the picture never changes - only when the
       //    work happens.
       TrackingHealth.reset()
+      val prewarmStartMs = System.currentTimeMillis()
       runCatching { ExportTrackingPrewarm.warm(timeline, fps) }
         .onFailure { Log.w(tag, "Tracking prewarm failed; the render loop will track per frame", it) }
+      ExportDiagnostics.stage(
+        "tracking-prewarm",
+        System.currentTimeMillis() - prewarmStartMs,
+        "trackedClips=${ExportTrackingPrewarm.trackedClips(timeline).size}"
+      )
+      // Everything before frame 0: encoder + EGL setup, the PCM mix, this prewarm. The UI shows the
+      // preparation state for this whole time, so its length belongs in the device log.
+      ExportDiagnostics.stage(
+        "preroll",
+        System.currentTimeMillis() - exportStartMs,
+        "frames=$totalFrames decoderBudget=${maxConcurrentDecoders}"
+      )
 
       // Render loop (GL thread): every frame is drawn into the encoder Surface and its swap submits it.
       renderStarted.set(true)
@@ -933,14 +1086,29 @@ class AsyncFramePipelineEngine(private val context: Context) {
             val frame = SharedCompositionGraph.evaluate(timeline, timelinePosMs, fps).composedFrame
             val activeClip = frame.activeClip
 
-            // The same layer list the preview samples. A NONE transition still pins its decoders
-            // so a following real transition does not have to reopen them.
+            // The same layer list the preview samples.
+            //
+            // `needed` is what this frame *draws*: a decoder in it may never be released, because
+            // releasing one would drop a layer the user added. `pinned` is what the export keeps warm
+            // on purpose - the "before" side of a NONE transition, which draws nothing (see
+            // CompositionRenderGraph.layersOf) but is held so a following real transition does not
+            // have to reopen it. Those two sets are what the codec budget is spent on, and the
+            // difference matters on a device whose codec instances are limited: an old export
+            // treated the pinned decoder as needed, so a clip boundary that needed one more instance
+            // than the device had failed with errorCode=1100 although a whole decoder could be freed.
             val layers = CompositionRenderGraph.layersOf(frame)
-            val currentNeededClipIds = layers.filter { it.clip.isVideo }.map { it.clip.id }.toMutableSet()
+            val neededClipIds = layers.filter { it.clip.isVideo }.map { it.clip.id }.toMutableSet()
+            val pinnedClipIds = HashSet<String>()
             frame.activeTransition?.let { tr ->
-              if (tr.clipBefore.isVideo) currentNeededClipIds.add(tr.clipBefore.id)
-              if (tr.clipAfter.isVideo) currentNeededClipIds.add(tr.clipAfter.id)
+              val drawnByThisFrame = tr.type != TransitionType.NONE
+              if (tr.clipBefore.isVideo) {
+                if (drawnByThisFrame) neededClipIds.add(tr.clipBefore.id) else pinnedClipIds.add(tr.clipBefore.id)
+              }
+              if (tr.clipAfter.isVideo) {
+                if (drawnByThisFrame) neededClipIds.add(tr.clipAfter.id) else pinnedClipIds.add(tr.clipAfter.id)
+              }
             }
+            pinnedClipIds.removeAll(neededClipIds)
 
             // Chroma-key background: a video has to be decoded like any other layer, at the looped
             // source time, so the export draws the same background picture the preview draws.
@@ -949,10 +1117,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
             val chromaBgClip = ChromaKeyResolver.backgroundClip(frameChroma)
             var chromaBackgroundFrame: ChromaBackgroundFrame? = null
             if (chromaBgClip != null && chromaBgClip.isVideo) {
-              currentNeededClipIds.add(chromaBgClip.id)
+              neededClipIds.add(chromaBgClip.id)
               val loopMs = (decoders[chromaBgClip.id]?.durationUs ?: 0L) / 1000L
               val chromaSrcMs = ChromaKeyResolver.backgroundSourceMs(frameChroma, timelinePosMs, loopMs)
-              val bgDec = decodeClipFrame(chromaBgClip, chromaSrcMs, currentNeededClipIds)
+              val bgDec = decodeClipFrame(chromaBgClip, chromaSrcMs, neededClipIds, pinnedClipIds)
               if (bgDec != null) {
                 chromaBackgroundFrame = ChromaBackgroundFrame(
                   textureId = bgDec.textureId,
@@ -992,7 +1160,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
               val clip = layer.clip
               if (!clip.isVideo || clip.uri.isBlank() || clip.id in decoded) continue
               val srcMs = layer.sourceUs / 1000L
-              decodeClipFrame(clip, srcMs, currentNeededClipIds)?.let { rememberDecoded(clip, it) }
+              decodeClipFrame(clip, srcMs, neededClipIds, pinnedClipIds)?.let { rememberDecoded(clip, it) }
               if (clip.id in decoded) continue
               val key = when (layer.role) {
                 CompositionRenderGraph.LayerRole.MAIN -> "fallback_main_${clip.id}"

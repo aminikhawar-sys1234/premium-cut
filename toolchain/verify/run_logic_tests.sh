@@ -45,6 +45,7 @@ SOURCES=(
   "$MAIN/com/example/engine/export/ExportSurfaceSize.kt"
   "$MAIN/com/example/engine/export/ExportBlackFrameGuard.kt"
   "$MAIN/com/example/engine/export/DecoderBudget.kt"
+  "$MAIN/com/example/engine/export/CodecAllocationPolicy.kt"
   "$MAIN/com/example/engine/export/TrackingHealth.kt"
   "$MAIN/com/example/engine/export/TrackingPrewarmPlan.kt"
   "$MAIN/com/example/engine/export/ExportOrientationPolicy.kt"
@@ -55,6 +56,7 @@ SOURCES=(
   "$TEST/com/example/engine/export/ExportSurfaceSizeTest.kt"
   "$TEST/com/example/engine/export/ExportBlackFrameGuardTest.kt"
   "$TEST/com/example/engine/export/DecoderBudgetTest.kt"
+  "$TEST/com/example/engine/export/CodecAllocationPolicyTest.kt"
   "$TEST/com/example/engine/export/TrackingHealthTest.kt"
   "$TEST/com/example/engine/export/TrackingPrewarmPlanTest.kt"
   "$TEST/com/example/engine/export/ExportOrientationPolicyTest.kt"
@@ -94,6 +96,7 @@ echo "== running tests"
   com.example.engine.export.ExportSurfaceSizeTest \
   com.example.engine.export.ExportBlackFrameGuardTest \
   com.example.engine.export.DecoderBudgetTest \
+  com.example.engine.export.CodecAllocationPolicyTest \
   com.example.engine.export.TrackingHealthTest \
   com.example.engine.export.TrackingPrewarmPlanTest \
   com.example.engine.export.ExportOrientationPolicyTest \
