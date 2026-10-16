@@ -43,9 +43,11 @@ SOURCES=(
   "$MAIN/com/example/engine/preview/PreviewCompositionPolicy.kt"
   "$MAIN/com/example/engine/export/ExportSurfaceSize.kt"
   "$MAIN/com/example/engine/export/ExportBlackFrameGuard.kt"
+  "$MAIN/com/example/engine/composition/gpu/GpuShaders.kt"
   # tests
   "$TEST/com/example/engine/export/ExportSurfaceSizeTest.kt"
   "$TEST/com/example/engine/export/ExportBlackFrameGuardTest.kt"
+  "$TEST/com/example/engine/composition/gpu/GpuSamplerContractTest.kt"
   "$TEST/com/example/engine/composition/ChromaKeyMathTest.kt"
   "$TEST/com/example/engine/composition/ChromaKeyResolverTest.kt"
   "$TEST/com/example/engine/composition/CompositionLookResolverTest.kt"
@@ -76,4 +78,5 @@ echo "== running tests"
   com.example.engine.ai.cutout.MaskDecodingTest \
   com.example.engine.preview.PreviewCompositionPolicyTest \
   com.example.engine.export.ExportSurfaceSizeTest \
-  com.example.engine.export.ExportBlackFrameGuardTest
+  com.example.engine.export.ExportBlackFrameGuardTest \
+  com.example.engine.composition.gpu.GpuSamplerContractTest
