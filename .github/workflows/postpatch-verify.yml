@@ -254,6 +254,13 @@ jobs:
             [ -s look-verification.txt ] || adb shell "cat /sdcard/Android/data/$APP_ID/files/look-verification.txt" > look-verification.txt 2>> look-pull-status.txt || true
             wc -c look-verification.txt look-internal.txt >> look-pull-status.txt 2>&1 || true
             tail -c 8000 gradle-connected.log || true
+            # The measurement file is evidence, not a nicety. When the tests pass but it is empty the
+            # run has thrown the measurements away - which is exactly what AGP's
+            # uninstall-the-APKs-after-the-run behaviour did (see the note in gradle.properties):
+            # `run-as` answered "unknown package" for the whole report and 48 passing tests published
+            # an empty "Measured pixels" section. Fail the step so that can never be silent again.
+            if [ ! -s look-verification.txt ] && [ ! -s look-internal.txt ] && [ "$(cat gradle-exit.txt 2>/dev/null)" = "0" ]; then echo "::error::the instrumented tests passed but the device report file is empty: the measurements were lost"; exit 1; fi
+            if [ ! -s look-verification.txt ] && [ ! -s look-internal.txt ] && [ "$(cat gradle-exit.txt 2>/dev/null)" != "0" ]; then echo "::warning::the device report file is empty and the instrumented run exited $(cat gradle-exit.txt 2>/dev/null)"; fi
             true
 
       - name: Summarise instrumented results
