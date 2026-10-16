@@ -166,6 +166,68 @@ check("val glErrorDetail: String? = null" in renderer_src, "RenderReport carries
 check("glValidateProgram" in renderer_src, "diagnostics validate the program against live sampler state")
 
 print()
+print("Contract F - colour-grade pipeline (ColorGpuProcessor / ColorShaderManager / ColorGradeStage)")
+COLOR_PROC = os.path.join(MAIN, "com/ahstudio/color/gpu/ColorGpuProcessor.kt")
+COLOR_MGR = os.path.join(MAIN, "com/ahstudio/color/gpu/ColorShaderManager.kt")
+COLOR_SRC = os.path.join(MAIN, "com/ahstudio/color/gpu/ColorShaderSource.kt")
+GRADE_STAGE = os.path.join(MAIN, "com/example/engine/composition/gpu/ColorGradeStage.kt")
+
+proc_src = read(COLOR_PROC)
+mgr_src = read(COLOR_MGR)
+csrc_src = read(COLOR_SRC)
+stage_src = read(GRADE_STAGE)
+
+# F1. uLut3d is pinned to unit 3 on every draw of a HAS_LUT3D variant — including when the LUT
+#     data is not loaded yet (lut3d == null). The old `if (key.hasLut3d && lut3d != null)` left a
+#     sampler3D on unit 0 next to uInput: GL_INVALID_OPERATION, dropped draw, black graded frame.
+check(
+    re.search(r"if \(key\.hasLut3d\)\s*\{", proc_src) is not None
+    and "if (key.hasLut3d && lut3d != null)" not in proc_src,
+    "uLut3d unit binding no longer depends on the LUT data being loaded",
+)
+check(proc_src.count('glUniform1i(prog.loc("uLut3d"), 3)') == 2,
+      "uLut3d pinned to unit 3 in BOTH the loaded and the not-loaded branch")
+check('GLES30.glUniform1f(prog.loc("uLutIntensity"), 0f)' in proc_src,
+      "missing LUT data renders as the identity (uLutIntensity = 0)")
+# F2. The LUT2D variant pins its sampler too and keeps uLutSize finite.
+check('glUniform1i(prog.loc("uLut2d"), 3)' in proc_src, "uLut2d pinned to its own unit")
+check('glUniform1f(prog.loc("uLutSize"), 2f)' in proc_src, "uLutSize stays finite (no NaN UVs)")
+# F3. BOTH uSecMask array elements are pinned on every masked draw, even when a mask is
+#     unavailable this frame (null provider result used to leave a sampler2D on unit 0 next to a
+#     samplerExternalOES uInput).
+check("for (i in 0 until 2)" in proc_src
+      and 'glUniform1i(prog.loc("uSecMask[$i]"), 4 + i)' in proc_src,
+      "uSecMask[0..1] units assigned unconditionally")
+check("glBindTexture(GLES30.GL_TEXTURE_2D, tex ?: 0)" in proc_src,
+      "unavailable mask binds texture 0 instead of leaving the unit unassigned")
+
+# F4. Variant #defines come from the pure, JVM-tested builder and carry explicit values: the
+#     shader tests flags BY VALUE, so valueless/undefined flags are preprocessor errors that made
+#     every colour-grade variant fail to compile (grades silently dropped from preview + export).
+check("ColorShaderSource.variantDefines(" in mgr_src,
+      "ColorShaderManager builds defines via ColorShaderSource.variantDefines")
+check(re.search(r'sb\.append\("#define HAS_\w+\\n"\)', mgr_src) is None,
+      "no valueless feature #define remains in ColorShaderManager")
+check('fun flag(name: String, on: Boolean) = sb.append("#define $name ${if (on) 1 else 0}\\n")'
+      in csrc_src, "variantDefines emits explicit 0/1 flag values")
+check('flag("LUT_BEFORE", lutBefore)' in csrc_src and 'flag("LUT_AFTER", !lutBefore)' in csrc_src,
+      "LUT_BEFORE and LUT_AFTER are both always defined")
+
+# F5. #extension precedes every non-preprocessor token in the generated fragment source.
+frag_builder = csrc_src.split('fun fragment(defines: String): String = """')[1].split('"""')[0]
+ext_pos = frag_builder.find("#extension GL_OES_EGL_image_external_essl3")
+prec_pos = frag_builder.find("precision highp float;")
+check(0 <= ext_pos < prec_pos,
+      "#extension block precedes the precision statement in fragment()")
+
+# F6. ColorGradeStage refuses to hand an undrawn (black) FBO texture downstream: a GL error from
+#     the grade draw passes the ungraded picture through instead.
+check("GLES20.glGetError()" in stage_src and "srcTex" in stage_src
+      and "glError != GLES20.GL_NO_ERROR" in stage_src,
+      "ColorGradeStage checks glGetError after the grade draw")
+check("loggedDrawError = false" in stage_src, "draw-error log latch resets on context loss")
+
+print()
 print("=" * 78)
 print("RESULT: %d checks, %d failures" % (checks, len(failures)))
 print("=" * 78)

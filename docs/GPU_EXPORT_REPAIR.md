@@ -229,3 +229,51 @@ The black-frame validation itself is unchanged: in-flight probes
 - The existing real-export suites (`CompositionRegressionInstrumentedTest`,
   `ExportLookPersistenceInstrumentedTest`) remain the decoded-MP4 proof that
   plain, filtered and adjusted exports contain the expected pictures.
+
+## Colour-grade pipeline sweep (same 0x502 class + variants that never compiled)
+
+A systematic sweep of every shader-bearing file (36 files) for the sampler-conflict class found
+the remaining offenders concentrated in the colour-grade pipeline, which `GpuCompositionRenderer`
+runs on the export path through `ColorGradeStage` for any clip with a grade:
+
+- **`uLut3d` bound only when the LUT data was loaded.** The shader variant is keyed on the
+  *state* (`state.lut` valid ⇒ `HAS_LUT3D`, so the program declares and samples
+  `uniform sampler3D uLut3d`), but `ColorGpuProcessor.render` assigned its texture unit only when
+  the *loaded data* was non-null (`key.hasLut3d && lut3d != null`). `ColorEngine.resolveLut3d`
+  legitimately returns null until the LUT file finishes loading (or after eviction) — in exactly
+  that window the sampler3D stayed on unit 0 next to `uInput`, a different-type conflict that
+  drops every draw with GL_INVALID_OPERATION and leaves the grade FBO black. Fixed: the unit is
+  pinned on every draw; missing data binds texture 0 with `uLutIntensity = 0`
+  (`applyLut` ≡ identity).
+- **`uLut2d` was never bound at all** (and `uLutSize` never set — `applyLut` divides by it, so the
+  weight-0 LUT sample would have been NaN, which `mix()` propagates). The GLES2-class fallback
+  variant now pins the unit and renders as the identity.
+- **`uSecMask[2]` bound per-element only when a mask texture existed.** A mask that is
+  unavailable this frame, or an unused second slot, stayed on unit 0 and conflicted with an
+  external-OES `uInput`. Both elements are now pinned to units 4/5 on every masked draw.
+- **No colour-grade shader variant ever compiled on a conformant preprocessor.** The shader tests
+  its feature flags BY VALUE (`#if HAS_CURVES`, `#if LUT_AFTER && (HAS_LUT3D || HAS_LUT2D)`), but
+  the variant builder emitted valueless `#define HAS_CURVES` style flags and left disabled flags
+  undefined. A valueless macro in `#if` is an empty (invalid) expression — `#if LUT_AFTER && (...)`
+  appears in EVERY variant as `#if && (...)` — and an undefined macro in `#if` is an error on
+  strict GLSL ES preprocessors (GLSL ES 3.0 §3.4). Every variant therefore failed to compile,
+  `getProgram` threw, and `ColorGradeStage` silently disabled itself: all colour grades were
+  dropped from preview and export. Verified with GNU cpp as an independent strict preprocessor:
+  the old define block errors, the new one passes. Defines are now built by the pure, JVM-tested
+  `ColorShaderSource.variantDefines` (explicit 0/1 for every value-tested flag; `SEC_COUNT`
+  always numeric; only the `#ifdef`-tested `TEXTURE_EXTERNAL`/`HDR_OUTPUT` stay presence-based).
+- **`#extension` after a non-preprocessor token.** `fragment()` emitted `precision highp float;`
+  before the OES `#extension` block, which conformant compilers reject for the external-texture
+  variant. The extension block now precedes the precision statement.
+- **`ColorGradeStage` returned the FBO texture even when the grade draw was dropped.** Its
+  documented contract is "a colour bug can never break preview or export", but a GL *error* (as
+  opposed to an exception) handed an undrawn — black — texture downstream. The stage now drains
+  pending GL errors before the draw, checks after it, and passes the ungraded picture through for
+  that frame (logged once; not a permanent disable, since the cause can be transient).
+
+Verification: `ColorVariantShaderContractTest` (JVM, in `toolchain/verify/run_logic_tests.sh`)
+preprocesses EVERY shader variant with a strict mini-preprocessor (undefined/empty `#if`
+expressions are failures, like a conformant driver) and pins the surviving sampler declarations
+to the units `ColorGpuProcessor` assigns. `verify_gl_sampler_contract.py` Contract F guards the
+unconditional unit bindings, the 0/1 define emission, the `#extension` ordering and the
+`ColorGradeStage` error passthrough against drift.
