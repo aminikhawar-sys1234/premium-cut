@@ -283,10 +283,6 @@ class AsyncFramePipelineEngine(private val context: Context) {
       if (durationMs <= 0L) {
         throw ExportPipelineException("Timeline has no duration to export.", retryable = false)
       }
-      // Wall clock from here to the first encoded frame: the UI reports preparation for that whole
-      // stretch, so its length is worth a log line (see the "audio-mix" / "preroll" stages below).
-      val exportStartMs = System.currentTimeMillis()
-
       // Mix audio on its own thread so encoder/EGL setup is not blocked behind PCM decode
       // (that stall is what left the progress ring at 5% for minutes).
       var hasAudio = audioProcessor.hasActiveAudio(timeline)
@@ -501,6 +497,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
   ): File {
     metrics.reset()
     activePlan = plan
+    // Wall clock from here to the first encoded frame: the UI shows the preparation state for that
+    // whole stretch, so its length is worth a log line (see the "audio-mix" / "preroll" stages).
+    val attemptStartMs = System.currentTimeMillis()
     val fps = plan.fps
     val exportWidth = plan.width
     val exportHeight = plan.height
@@ -632,7 +631,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       // start before this, so it is the phase a "0% for two minutes" report is about.
       ExportDiagnostics.stage(
         "audio-mix",
-        System.currentTimeMillis() - exportStartMs,
+        System.currentTimeMillis() - attemptStartMs,
         "active=$hasAudio samples=${masterPcm.size} channels=$audioChannels rate=$audioSampleRate"
       )
 
@@ -1050,7 +1049,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       // preparation state for this whole time, so its length belongs in the device log.
       ExportDiagnostics.stage(
         "preroll",
-        System.currentTimeMillis() - exportStartMs,
+        System.currentTimeMillis() - attemptStartMs,
         "frames=$totalFrames decoderBudget=${maxConcurrentDecoders}"
       )
 
