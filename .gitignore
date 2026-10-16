@@ -13,3 +13,6 @@ terminals/
 serviceAccountKey.json
 tools/assets/serviceAccountKey.json
 node_modules/
+
+# Python bytecode from toolchain/verify scripts
+__pycache__/

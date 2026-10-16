@@ -35,6 +35,7 @@ SOURCES=(
   "$MAIN/com/ahstudio/animation/curves/Bezier.kt"
   "$MAIN/com/ahstudio/animation/speed/SpeedRamp.kt"
   "$MAIN/com/ahstudio/animation/speed/SpeedPresets.kt"
+  "$MAIN/com/ahstudio/color/lut/LutAtlasLayout.kt"
   "$MAIN/com/example/engine/composition/ChromaKeyMath.kt"
   "$MAIN/com/example/engine/composition/ChromaKeyResolver.kt"
   "$MAIN/com/example/engine/composition/CompositionLookResolver.kt"
@@ -54,6 +55,7 @@ SOURCES=(
   "$TEST/com/example/engine/composition/ChromaKeyMathTest.kt"
   "$TEST/com/example/engine/composition/ChromaKeyResolverTest.kt"
   "$TEST/com/example/engine/composition/CompositionLookResolverTest.kt"
+  "$TEST/com/ahstudio/color/LutAtlasLayoutTest.kt"
   "$TEST/com/example/engine/effects/media3/PreviewGraphDecisionTest.kt"
   "$TEST/com/example/engine/ai/cutout/MaskDecodingTest.kt"
   "$TEST/com/example/engine/preview/PreviewCompositionPolicyTest.kt"
@@ -77,6 +79,7 @@ echo "== running tests"
   com.example.engine.composition.ChromaKeyMathTest \
   com.example.engine.composition.ChromaKeyResolverTest \
   com.example.engine.composition.CompositionLookResolverTest \
+  com.ahstudio.color.LutAtlasLayoutTest \
   com.example.engine.effects.media3.PreviewGraphDecisionTest \
   com.example.engine.ai.cutout.MaskDecodingTest \
   com.example.engine.preview.PreviewCompositionPolicyTest \
