@@ -97,11 +97,15 @@ class ColorGpuProcessor(
         GLES30.glUseProgram(prog.id)
         GLES30.glBindVertexArray(vao)
 
-        // Input texture — unit 0
-        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
+        // Input texture — unit 0, bound with the target that matches the shader variant's sampler
+        // (GL_OES_EGL_image_external on video frames, GL_TEXTURE_2D on composed FBO textures).
+        // The uniform is assigned in BOTH variants: `glBindTexture(inputTarget, ...)` binds the
+        // bind point of that target only, so a sampler left at its implicit default 0 is not the
+        // same thing as "unit 0 has a texture" — and a samplerExternalOES sitting on the same unit
+        // as any unassigned sampler2D is the 0x502 sampler-type clash.
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + ColorTextureUnits.INPUT)
         GLES30.glBindTexture(inputTarget, inputTex)
-        if (inputTarget != GLES11Ext.GL_TEXTURE_EXTERNAL_OES)
-            GLES30.glUniform1i(prog.loc("uInput"), 0)
+        GLES30.glUniform1i(prog.loc("uInput"), ColorTextureUnits.INPUT)
 
         GLES30.glUniform1f(prog.loc("uFlipY"), flipY)
 
@@ -146,15 +150,17 @@ class ColorGpuProcessor(
             state.bw.weightG / bwSum,
             state.bw.weightB / bwSum)
 
-        // Curves — bake once per state change (§49)
+        // Curves — bake once per state change (§49). The bake binds its own unit (uploadCurveTex
+        // used to bind on whatever unit was active, which was unit 0 right after the input was
+        // bound — the curve then replaced the input texture at the unit `uInput` samples).
         if (key.hasCurves) {
             if (curvesBakedFor != state.curves.hashCode()) bakeCurveTextures(state)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE1)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + ColorTextureUnits.CURVE)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, curveTex)
-            GLES30.glUniform1i(prog.loc("uCurveTex"), 1)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE2)
+            GLES30.glUniform1i(prog.loc("uCurveTex"), ColorTextureUnits.CURVE)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + ColorTextureUnits.LUMA_CURVE)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, lumaCurveTex)
-            GLES30.glUniform1i(prog.loc("uLumaCurveTex"), 2)
+            GLES30.glUniform1i(prog.loc("uLumaCurveTex"), ColorTextureUnits.LUMA_CURVE)
         }
 
         // Wheels
@@ -177,16 +183,46 @@ class ColorGpuProcessor(
             GLES30.glUniform4fv(prog.loc("uHslBands[0]"), 8, arr, 0)
         }
 
-        // LUT — texture uploaded once per LUT (§34)
-        if (key.hasLut3d && lut3d != null) {
-            val texId = lutTextures.getOrCreate(lut3d, state.lut!!.lutId, caps.supportsFloatTextures)
-            val p = lutTextures.lutParams(lut3d)
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+        // LUT — texture uploaded once per LUT (§34). TWO encodings of the same data: a 3D texture
+        // when this context can sample `sampler3D`, otherwise the tiled 2D atlas that
+        // `#if HAS_LUT2D` samples. Both need their sampler told which unit to read:
+        //  - an unwritten sampler keeps its default 0 and then shares unit 0 with the input
+        //    sampler — on a video frame that is samplerExternalOES + sampler2D on one unit, i.e.
+        //    GL_INVALID_OPERATION (0x502) on every draw, with a black frame as the visible result;
+        //  - `uLutSize` is divided by inside the shader. Left at 0 it produces inf/NaN atlas
+        //    coordinates, samples black and mixes the frame to black at the clip's LUT intensity.
+        // When the LUT variant is active but the data is missing, a texture of the sampler's own
+        // target is still bound and `uLutIntensity` is forced to 0, so the pass-through is exact
+        // instead of a mismatch.
+        val lutState = state.lut
+        val lutIntensity = lutState?.intensity ?: 0f
+        if (key.hasLut3d) {
+            val texId = if (lut3d != null) {
+                lutTextures.getOrCreate3D(lut3d, lutState?.lutId ?: "", caps.supportsFloatTextures)
+            } else {
+                lutTextures.black3D()
+            }
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + ColorTextureUnits.LUT)
             GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texId)
-            GLES30.glUniform1i(prog.loc("uLut3d"), 3)
-            GLES30.glUniform3f(prog.loc("uLutScale"), p[0], p[1], p[2])
-            GLES30.glUniform3f(prog.loc("uLutOffset"), p[3], p[4], p[5])
-            GLES30.glUniform1f(prog.loc("uLutIntensity"), state.lut!!.intensity)
+            GLES30.glUniform1i(prog.loc("uLut3d"), ColorTextureUnits.LUT)
+            if (lut3d != null) {
+                val p = lutTextures.lutParams(lut3d)
+                GLES30.glUniform3f(prog.loc("uLutScale"), p[0], p[1], p[2])
+                GLES30.glUniform3f(prog.loc("uLutOffset"), p[3], p[4], p[5])
+            }
+            GLES30.glUniform1f(prog.loc("uLutIntensity"), if (lut3d != null) lutIntensity else 0f)
+        } else if (key.hasLut2d) {
+            val texId = if (lut3d != null) {
+                lutTextures.getOrCreate2DAtlas(lut3d, lutState?.lutId ?: "")
+            } else {
+                lutTextures.white2D()
+            }
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + ColorTextureUnits.LUT)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texId)
+            GLES30.glUniform1i(prog.loc("uLut2d"), ColorTextureUnits.LUT)
+            // Never 0: the shader divides by this value to walk the atlas.
+            GLES30.glUniform1f(prog.loc("uLutSize"), lutTextures.atlasSize(lut3d))
+            GLES30.glUniform1f(prog.loc("uLutIntensity"), if (lut3d != null) lutIntensity else 0f)
         }
 
         // Secondaries
@@ -207,11 +243,15 @@ class ColorGpuProcessor(
             if (key.secMask) {
                 val cfgs = FloatArray(8)
                 secs.forEachIndexed { i, s ->
+                    val unit = ColorTextureUnits.secondaryMask(i)
                     val tex = s.maskId?.let { maskProvider?.maskTexture(clipId, it, timeMs) }
+                    // Every slot gets a unit assignment even when it has no mask this frame: an
+                    // unassigned sampler defaults to unit 0, where the OES input sampler lives.
+                    GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
+                    val fallback = if (tex == null) lutTextures.white2D() else 0
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex ?: fallback)
+                    GLES30.glUniform1i(prog.loc("uSecMask[$i]"), unit)
                     if (tex != null) {
-                        GLES30.glActiveTexture(GLES30.GL_TEXTURE4 + i)
-                        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
-                        GLES30.glUniform1i(prog.loc("uSecMask[$i]"), 4 + i)
                         cfgs[i * 4 + 0] = 1f; cfgs[i * 4 + 1] = if (s.invert) 1f else 0f
                     }
                 }
@@ -223,20 +263,40 @@ class ColorGpuProcessor(
         GLES30.glUniform4f(prog.loc("uDebug"),
             if (cfg.debugStage >= 0) 1f else 0f, cfg.debugStage.toFloat(), 0f, 0f)
 
+        // One read-back per program variant: prints/validates the sampler -> unit map the driver
+        // will use, so a unit clash (the 0x502 family) is attributable instead of showing up only
+        // as a black frame with `glErrors=[0x502]` at the end of the export.
+        ColorTextureUnits.audit(prog, key.toString())
+
         GLES30.glDrawArrays(GLES30.GL_TRIANGLE_STRIP, 0, 4)
         GLES30.glBindVertexArray(0)
+
+        // Leave the units clean. A 3D LUT left bound on the LUT unit is harmless for this pipeline
+        // but becomes a sampler/target mismatch for any later 2D sampler that reads that unit, so
+        // it is unbound on ES3 contexts (GL_TEXTURE_3D does not exist on an ES2 context).
+        if (key.hasLut3d && caps.glVersionMajor >= 3) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + ColorTextureUnits.LUT)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
+        }
         GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
     }
 
     private fun bakeCurveTextures(state: ColorState) {
         val (main, luma) = com.ahstudio.color.curves.CurveBaker.bakeCombined(state.curves)
-        curveTex = uploadCurveTex(curveTex, main, 4)
-        lumaCurveTex = uploadCurveTex(lumaCurveTex, luma, 1)
+        curveTex = uploadCurveTex(curveTex, main, 4, ColorTextureUnits.CURVE)
+        lumaCurveTex = uploadCurveTex(lumaCurveTex, luma, 1, ColorTextureUnits.LUMA_CURVE)
         curvesBakedFor = state.curves.hashCode()
     }
 
-    private fun uploadCurveTex(existing: Int, data: FloatArray, comps: Int): Int {
+    /**
+     * Uploads a baked curve texture into [unit] and leaves the active texture back at unit 0.
+     * Binding on an explicit unit matters: without `glActiveTexture` the upload landed on the unit
+     * that happened to be active — unit 0, right after the input picture was bound there — so the
+     * first graded frame after a curve change sampled the 256x1 curve as the clip's picture.
+     */
+    private fun uploadCurveTex(existing: Int, data: FloatArray, comps: Int, unit: Int): Int {
         val tex = if (existing != 0) existing else IntArray(1).also { GLES30.glGenTextures(1, it, 0) }[0]
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
         GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
         GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
@@ -247,6 +307,7 @@ class ColorGpuProcessor(
         for (v in data) bb.put((v.coerceIn(0f, 1f) * 255f + 0.5f).toInt().coerceIn(0, 255).toByte())
         bb.position(0)
         GLES30.glTexImage2D(GLES30.GL_TEXTURE_2D, 0, fmt, com.ahstudio.color.curves.CurveBaker.TEX_SIZE, 1, 0, fmt, GLES30.GL_UNSIGNED_BYTE, bb)
+        GLES30.glActiveTexture(GLES30.GL_TEXTURE0)
         return tex
     }
 

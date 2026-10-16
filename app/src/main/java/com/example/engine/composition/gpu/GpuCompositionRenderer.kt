@@ -1101,6 +1101,12 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uClarityResetHandle >= 0) GLES20.glUniform1f(uClarityResetHandle, 0f)
     if (uTexelSizeHandle >= 0) GLES20.glUniform2f(uTexelSizeHandle, 1.0f / max(1, viewportWidth), 1.0f / max(1, viewportHeight))
     if (uChromaEnabledHandle >= 0) GLES20.glUniform1i(uChromaEnabledHandle, 0)
+    // This variant declares `uChromaBgTex` too. Assignment is unconditional (see
+    // bindCommonUniforms): an unwritten sampler uniform defaults to unit 0, the unit this batch
+    // binds every layer's texture to, and two samplers of different types on one unit is the
+    // GL_INVALID_OPERATION (0x502) that blacked out the exports.
+    GLES20.glGetUniformLocation(program2D, "uChromaBgTex")
+      .let { if (it >= 0) GLES20.glUniform1i(it, GpuTextureUnits.CHROMA_BG) }
     bindMaskUniforms(program2D, null)
     if (uBlurHandle >= 0) GLES20.glUniform1f(uBlurHandle, 0f)
     GLES20.glGetUniformLocation(program2D, "uMotionVec").let { if (it >= 0) GLES20.glUniform2f(it, 0f, 0f) }
@@ -2052,14 +2058,6 @@ class GpuCompositionRenderer(private val context: Context) {
         val bgB = Color.blue(bgColor) / 255f
         val bgA = Color.alpha(bgColor) / 255f
         GLES20.glUniform4f(GLES20.glGetUniformLocation(program, "uChromaBgColor"), bgR, bgG, bgB, bgA)
-
-        val bgTexHandle = GLES20.glGetUniformLocation(program, "uChromaBgTex")
-        if (bgTexHandle >= 0) {
-          GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
-          GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, if (bgMode == ChromaKeyResolver.BACKGROUND_MODE_TEXTURE) chromaBackgroundTextureId else 0)
-          GLES20.glUniform1i(bgTexHandle, 2)
-          GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        }
         GLES20.glUniform2f(
           GLES20.glGetUniformLocation(program, "uChromaBgFit"),
           chromaBackgroundFit[0],
@@ -2069,6 +2067,30 @@ class GpuCompositionRenderer(private val context: Context) {
         GLES20.glUniform1i(uChromaEnabledHandle, 0)
       }
     }
+
+    // Sampler units are assigned UNCONDITIONALLY, never inside the feature branch above.
+    //
+    // `uChromaBgTex` is declared by every variant of this fragment shader, including the OES one,
+    // and it is referenced by the `uChromaBgType == 2` branch, so the driver keeps it as an active
+    // sampler even when `uChromaEnabled` is 0. An unwritten sampler keeps its default value, which
+    // is 0 — and on a video frame unit 0 already holds the picture sampler, declared as
+    // `samplerExternalOES`. A `sampler2D` and a `samplerExternalOES` resolving to the same texture
+    // unit is GL_INVALID_OPERATION (0x502) on the draw call, and a rejected draw is a black frame:
+    // that was the all-black export with `glErrors=[0x502]`. Assigning unit 2 here, on every pass,
+    // keeps each sampler type on its own unit no matter which features are switched on.
+    val bgTexHandle = GLES20.glGetUniformLocation(program, "uChromaBgTex")
+    if (bgTexHandle >= 0) {
+      val bgTexture =
+        if (chromaKey.enabled && ChromaKeyResolver.backgroundModeId(chromaKey) == ChromaKeyResolver.BACKGROUND_MODE_TEXTURE) {
+          chromaBackgroundTextureId
+        } else {
+          0
+        }
+      GLES20.glActiveTexture(GLES20.GL_TEXTURE0 + GpuTextureUnits.CHROMA_BG)
+      GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, bgTexture)
+      GLES20.glUniform1i(bgTexHandle, GpuTextureUnits.CHROMA_BG)
+    }
+    GLES20.glActiveTexture(GLES20.GL_TEXTURE0 + GpuTextureUnits.PICTURE)
 
     bindMaskUniforms(program, mask)
 

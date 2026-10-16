@@ -6,6 +6,19 @@ import android.opengl.GLES30
 object GpuCaps {
     @Volatile private var cached: Caps? = null
 
+    /**
+     * The `GL_VERSION` string the cached [Caps] were detected on.
+     *
+     * Preview and export do NOT share one EGL context: the compositor runs in its own context and
+     * the export path has the encoder's. This object is shared by both, so a cache keyed on
+     * nothing handed the preview context's capabilities to the export context. That matters here
+     * because `glVersionMajor` picks the LUT encoding — a `sampler3D` texture, or the tiled 2D
+     * atlas of `LutAtlasLayout` — and a stale value selected a variant the running context had to
+     * execute (`hasLut2d` / `hasLut3d` in [ColorShaderManager.variantKey]). Re-reading the version
+     * string is one cheap call per frame and keeps the cache honest per context.
+     */
+    @Volatile private var cachedVersion: String? = null
+
     data class Caps(
         val glVersionMajor: Int,
         val supportsFloatTextures: Boolean,
@@ -15,8 +28,8 @@ object GpuCaps {
     )
 
     fun detect(): Caps {
-        cached?.let { return it }
         val version = GLES30.glGetString(GLES30.GL_VERSION) ?: ""
+        cached?.let { if (cachedVersion == version) return it }
         val major = Regex("OpenGL ES ([0-9])").find(version)?.groupValues?.get(1)?.toIntOrNull() ?: 2
         val ext = GLES30.glGetString(GLES30.GL_EXTENSIONS) ?: ""
         val caps = Caps(
@@ -27,10 +40,11 @@ object GpuCaps {
             maxColorAttachments = IntArray(1).also { GLES30.glGetIntegerv(GLES30.GL_MAX_COLOR_ATTACHMENTS, it, 0) }[0]
         )
         cached = caps
+        cachedVersion = version
         return caps
     }
 
-    fun resetCache() { cached = null }
+    fun resetCache() { cached = null; cachedVersion = null }
 }
 
 /** GL-thread confinement (§58). All GPU color work runs here. */
