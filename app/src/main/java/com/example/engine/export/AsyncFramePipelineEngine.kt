@@ -797,25 +797,51 @@ class AsyncFramePipelineEngine(private val context: Context) {
        */
       val decodeFailures = java.util.concurrent.ConcurrentHashMap<String, String>()
 
+      /** Releases every open decoder no layer of this frame needs, returns how many were freed. */
+      fun evictIdleDecoders(currentActiveIds: Set<String>): Int {
+        val idle = DecoderBudget.evictions(decoders.keys, currentActiveIds)
+        for (id in idle) {
+          decoders.remove(id)?.release()
+          Log.d(tag, "Evicted idle decoder for clip $id to avoid codec exhaustion")
+        }
+        return idle.size
+      }
+
       fun getOrCreateDecoder(clip: VideoClip, currentActiveIds: Set<String>): HardwareClipDecoder? {
         decoders[clip.id]?.let { return it }
-        if (decoders.size >= maxConcurrentDecoders) {
-          val evictCandidate = decoders.keys.firstOrNull { it !in currentActiveIds }
-          if (evictCandidate != null) {
-            decoders.remove(evictCandidate)?.release()
-            Log.d(tag, "Evicted idle decoder for clip $evictCandidate to avoid codec exhaustion")
-          }
-        }
-        val newDecoder = HardwareClipDecoder(context, clip, glHandler, decoderHandler, decoderManager)
-        return if (newDecoder.init()) {
-          decoders[clip.id] = newDecoder
-          newDecoder
-        } else {
-          decodeFailures[clip.id] = newDecoder.lastError
+        if (decoders.size >= maxConcurrentDecoders) evictIdleDecoders(currentActiveIds)
+
+        var newDecoder = HardwareClipDecoder(context, clip, glHandler, decoderHandler, decoderManager)
+        if (!newDecoder.init()) {
+          // The device refused another codec instance (every layer of this frame is already using
+          // one, and the hardware codec budget is typically far smaller than "one per clip"):
+          // "Failed to allocate component instance" / NO_MEMORY / ResourceBusy. Free every decoder
+          // this frame does not need - never one it does, so no layer is dropped from the picture -
+          // and try once more. A device that gave the instance immediately never takes this path.
+          val firstFailure = newDecoder.lastError
             ?: "the decoder for '${clip.name}' could not be opened (${clip.uri})"
           newDecoder.release()
-          null
+          val freed = evictIdleDecoders(currentActiveIds)
+          if (freed > 0) {
+            Log.w(tag, "Decoder for ${clip.name} failed to open ($firstFailure); released $freed idle decoder(s) and retrying")
+            // Give the platform a moment to actually destroy the released codec instances.
+            Thread.sleep(50)
+            newDecoder = HardwareClipDecoder(context, clip, glHandler, decoderHandler, decoderManager)
+            if (newDecoder.init()) {
+              decoders[clip.id] = newDecoder
+              decodeFailures.remove(clip.id)
+              return newDecoder
+            }
+            decodeFailures[clip.id] = "$firstFailure; after releasing $freed idle decoder(s): " +
+              (newDecoder.lastError ?: "the decoder still could not be opened")
+          } else {
+            decodeFailures[clip.id] = firstFailure
+          }
+          newDecoder.release()
+          return null
         }
+        decoders[clip.id] = newDecoder
+        return newDecoder
       }
 
       val undecodableClipIds = HashSet<String>()
