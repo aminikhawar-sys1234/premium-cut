@@ -746,10 +746,80 @@ class ComplexProjectExportInstrumentedTest {
   }
 
   @Test
+  fun e01_multipleAudioTracksAndDifferentFiltersPerClipStillExport() {
+    LookVerificationReport.line(">>> START e01_multipleAudioTracksAndDifferentFiltersPerClipStillExport")
+    // Two explicit Phase-3 shapes the suites above only cover singly: several audio tracks mixed
+    // into one soundtrack, and different filters on different clips of the same project. The source
+    // is a saturated green-screen picture, so the monochrome look's desaturation is measurable
+    // against the warm look's saturation on the very same source frame.
+    val ms = 900L
+    val sourceA = source("filters-a.mp4", TestMp4Factory.Picture.GREEN_SCREEN, ms)
+    val sourceB = source("filters-b.mp4", TestMp4Factory.Picture.GREEN_SCREEN, ms)
+
+    val timeline = Timeline(
+      videoClips = listOf(
+        video("filter-warm", sourceA, startMs = 0L, durationMs = ms, filter = FilterSettings(FilterType.GOLDEN_AUTUMN, 1f)),
+        video("filter-mono", sourceB, startMs = ms, durationMs = ms, filter = FilterSettings(FilterType.BLACK_AND_WHITE, 1f))
+      ),
+      audioClips = listOf(
+        AudioClip(
+          id = "audio-bed", uri = android.net.Uri.fromFile(sourceA).toString(), title = "filters-a.mp4",
+          timelineStartMs = 0L, durationMs = ms, sourceStartMs = 0L, sourceEndMs = ms,
+          sourceTotalDurationMs = ms, volume = 0.8f, fadeInMs = 100L
+        ),
+        AudioClip(
+          id = "audio-layer", uri = android.net.Uri.fromFile(sourceB).toString(), title = "filters-b.mp4",
+          timelineStartMs = ms, durationMs = ms, sourceStartMs = 0L, sourceEndMs = ms,
+          sourceTotalDurationMs = ms, volume = 0.5f, fadeOutMs = 150L
+        )
+      ),
+      aspectRatio = AspectRatio.RATIO_9_16
+    )
+
+    val out = export(timeline, portraitConfig, "filters-and-audio.mp4")
+    val expected = ExportDimensionResolver.resolve(portraitConfig.resolution, timeline.aspectRatio)
+    val validation = ExportValidator.validate(
+      out, portraitConfig, timeline.totalDurationMs,
+      requireAudio = true, expectedDimensions = expected, sampleFrames = true, expectedRotation = 0
+    )
+    LookVerificationReport.line(
+      "filters/audio validation: valid=${validation.valid} '${validation.message}' " +
+        "size=${validation.width}x${validation.height} audioMime=${audioTrackMime(out)}"
+    )
+    assertTrue("two filters + two audio tracks were rejected: ${validation.message}", validation.valid)
+    assertTrue("no mixed audio track in the export", audioTrackMime(out) != "none")
+
+    // Same source content at the same source time in both clips: any difference is the filter.
+    val warm = meanRgb(frameAt(out, 300_000L), 0.05f, 0.45f, 0.3f, 0.7f)
+    val mono = meanRgb(frameAt(out, 1_200_000L), 0.05f, 0.45f, 0.3f, 0.7f)
+    val warmSpread = warm.max() - warm.min()
+    val monoSpread = mono.max() - mono.min()
+    LookVerificationReport.line(
+      "filtered subject half: golden=%.3f/%.3f/%.3f (spread %.3f) mono=%.3f/%.3f/%.3f (spread %.3f)".format(
+        warm[0], warm[1], warm[2], warmSpread, mono[0], mono[1], mono[2], monoSpread
+      )
+    )
+    assertTrue("the filtered clip is black: %.3f/%.3f/%.3f".format(warm[0], warm[1], warm[2]), warm.max() > 0.05f)
+    // Different filters on different clips must reach the export as different pixels. Both clips read
+    // the same source frame, so the difference cannot come from the source.
+    val perChannelDelta = (0..2).maxOf { abs(warm[it] - mono[it]) }
+    assertTrue(
+      "both clips exported with the same look (max channel delta=%.3f)".format(perChannelDelta),
+      perChannelDelta > 0.05f
+    )
+    // A monochrome look must drain more of the source's saturation than a warm colour grade does;
+    // the source half is strongly green, so this only holds when the filters really ran.
+    assertTrue(
+      "BLACK_AND_WHITE did not desaturate the source (golden spread=%.3f, mono spread=%.3f)".format(warmSpread, monoSpread),
+      monoSpread < warmSpread
+    )
+  }
+
+  @Test
   fun d01_simpleProjectStillExportsAfterHeavyProjects() {
     LookVerificationReport.line(">>> START d01_simpleProjectStillExportsAfterHeavyProjects")
     // The report the bug is about is *comparative*: a simple project exports, a complex one does
-    // not. This runs the simple project again, at the end, after four heavy exports have opened
+    // not. This runs the simple project again, at the end, after the heavy exports above have opened
     // dozens of decoders, EGL contexts, FBOs and textures in this process. If a resource the export
     // does not release is what breaks the complex case, this control fails where the first one did
     // not - and the engine metrics printed by `export()` show how far it got.

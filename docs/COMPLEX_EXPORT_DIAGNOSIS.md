@@ -23,7 +23,8 @@ the report names, and then measures the decoded MP4:
 | `b01_complexProjectExportsAValidPortraitVideo` | 2 main clips + `FADE`, `GOLDEN_AUTUMN` filter, adjustments, motion/scale keyframes, motion blur, chroma key over a **background video**, rotation, 2 overlays (PIP `Screen` + PNG `Multiply`, keyframed), 3 text clips (stroke/shadow, animation, 3D mesh), 2 stickers (emoji `BOUNCE`, image + badge `PULSE`), 2 effect clips (`GLOW` keyframed, `CELEBRATE_CONFETTI`), 1 audio clip, project-level adjustments — portrait 720x1280 |
 | `b02_complexProjectExportsAValidLandscapeVideo` | the same project, landscape 1920x1080 |
 | `c01_manySimultaneousLayersStillExport` | 2 main + 3 overlay **video** lanes + 3 text + 3 stickers + 3 effects (`GLOW`, `VIGNETTE`, `CELEBRATE_FIREWORKS`) + `SLIDE_LEFT` |
-| `d01_simpleProjectStillExportsAfterHeavyProjects` | the control again, last, after four heavy exports |
+| `d01_simpleProjectStillExportsAfterHeavyProjects` | the control again, after the heavy exports above |
+| `e01_multipleAudioTracksAndDifferentFiltersPerClipStillExport` | two clips with **different filters** (`GOLDEN_AUTUMN`, `BLACK_AND_WHITE`) on the same saturated source + **two mixed audio tracks**; asserts the two looks reach the export as different pixels |
 
 Every test asserts the export does not throw, the validator says `Verified` (size, orientation,
 duration, A/V track, sampled frames), the MIME has an audio track, the frame is not black and the
@@ -175,7 +176,7 @@ The next failure on a real device now carries the answer:
 
 | File | Change |
 | --- | --- |
-| `app/src/androidTest/java/com/example/engine/export/ComplexProjectExportInstrumentedTest.kt` | new: the complex-project regression suite (5 tests) |
+| `app/src/androidTest/java/com/example/engine/export/ComplexProjectExportInstrumentedTest.kt` | new: the complex-project regression suite (6 tests) |
 | `app/src/main/java/com/example/engine/composition/gpu/HardwareVideoTextureSource.kt` | records why a decode produced no picture (`lastError`) |
 | `app/src/main/java/com/example/engine/export/AsyncFramePipelineEngine.kt` | carries that reason into the export exception; retries once after freeing decoders no frame layer needs |
 | `app/src/main/java/com/example/engine/export/DecoderBudget.kt` | new: the "never release a decoder the frame needs" rule |
