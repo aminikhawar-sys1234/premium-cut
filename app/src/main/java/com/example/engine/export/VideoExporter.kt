@@ -49,7 +49,14 @@ sealed class ExportState {
     val estimatedRemainingSec: Int = 0,
     val resolution: Resolution = Resolution.RES_1080P,
     val renderEngine: String = "Hardware Video Engine (GPU)",
-    val isPaused: Boolean = false
+    val isPaused: Boolean = false,
+    /**
+     * Human name of the pipeline stage the export is in (e.g. "Mixing audio", "Rendering frames").
+     * Shown next to the ring so the panel always says *what* it is waiting for - the reported export
+     * showed `encoded 0 / 18484` and "Finalizing..." for twenty minutes with no way to tell which
+     * stage had stopped.
+     */
+    val phaseLabel: String? = null
   ) : ExportState()
   data class Success(val file: File, val durationMs: Long, val fileSizeBytes: Long) : ExportState()
   data class Error(
@@ -633,7 +640,8 @@ class VideoExporter(private val context: Context) {
     currentFrame: Int = 0,
     totalFrames: Int = 0,
     fps: Float = 0f,
-    estimatedRemainingSec: Int = 0
+    estimatedRemainingSec: Int = 0,
+    phaseLabel: String? = null
   ) {
     val current = _exportState.value as? ExportState.Rendering ?: return
     _exportState.value = current.copy(
@@ -642,7 +650,8 @@ class VideoExporter(private val context: Context) {
       currentFrame = currentFrame,
       totalFrames = totalFrames,
       fps = fps,
-      estimatedRemainingSec = estimatedRemainingSec.coerceAtLeast(0)
+      estimatedRemainingSec = estimatedRemainingSec.coerceAtLeast(0),
+      phaseLabel = phaseLabel
     )
   }
 

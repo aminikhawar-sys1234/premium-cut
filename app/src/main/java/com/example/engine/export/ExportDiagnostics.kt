@@ -4,6 +4,7 @@ import android.media.MediaFormat
 import android.media.MediaCodec
 import android.os.Build
 import android.util.Log
+import java.util.Locale
 
 /** One-shot export setup/teardown logs. Never called from the per-frame render loop. */
 object ExportDiagnostics {
@@ -71,6 +72,42 @@ object ExportDiagnostics {
   /** Stage timing of the export's pre-roll, so a slow device can be read off the log. */
   fun stage(name: String, ms: Long, detail: String = "") {
     Log.i(TAG, "EXPORT_STAGE $name took=${ms}ms ${detail}".trim())
+  }
+
+  /**
+   * One line per phase change. This is the log line that turns "the export sat at 5 %" into a
+   * timestamped, named history: the last `EXPORT_PHASE` line before the device log goes quiet *is*
+   * the stage the export was in when it stopped moving.
+   */
+  fun phase(phase: ExportPhase, attemptElapsedMs: Long) {
+    Log.i(TAG, "EXPORT_PHASE ${phase.name} ('${phase.label}') at +${attemptElapsedMs}ms of this attempt")
+  }
+
+  /** The stall watchdog's verdict: what was stuck, for how long, and what state the pipeline was in. */
+  fun stall(verdict: ExportStallWatchdog.Verdict.Stall) {
+    Log.e(
+      TAG,
+      "EXPORT_STALL kind=${verdict.kind} phase=${verdict.phase.name} waitedMs=${verdict.waitedMs} " +
+        "budget=${ExportStallWatchdog.budgetFor(verdict.phase)} message=${verdict.message}"
+    )
+  }
+
+  /** Progress heartbeat: written every few seconds, so logcat shows an export that is still alive. */
+  fun heartbeat(
+    phase: ExportPhase,
+    phasePercent: Int,
+    framesSubmitted: Long,
+    framesEncoded: Long,
+    framesTotal: Long,
+    elapsedMs: Long,
+    fps: Float
+  ) {
+    Log.i(
+      TAG,
+      "EXPORT_HEARTBEAT phase=${phase.name} phasePercent=$phasePercent " +
+        "frames=$framesSubmitted/$framesTotal encoded=$framesEncoded fps=${String.format(Locale.US, "%.1f", fps)} " +
+        "elapsed=${elapsedMs / 1000}s"
+    )
   }
 
   fun transformMatrixOnce(clipId: String, rotation: Int, matrix: FloatArray) {

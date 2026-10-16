@@ -6,6 +6,7 @@ import com.ahstudio.face.gl.FullscreenQuad
 import com.ahstudio.face.gl.GlUtil
 import com.example.engine.ai.cutout.BgRemoveParams
 import com.example.engine.ai.cutout.CutoutStatus
+import com.example.engine.ai.cutout.MaskAnalysisCadence
 import com.example.engine.ai.cutout.SubjectCutoutRegistry
 import com.example.engine.ai.cutout.MaskTemporalFilter
 import com.example.engine.ai.cutout.SubjectMaskPixels
@@ -144,7 +145,21 @@ class SubjectCutoutStage {
       }
 
       // 2. Make sure we have (or are getting) a mask for this frame.
-      val bucket = frameKeyUs / BUCKET_US
+      // Preview keys masks per frame (it analyses off the GL thread anyway); the export keys them by
+      // a 200 ms window, because with `blocking = true` a per-frame key meant a synchronous readback
+      // *and* a segmentation *for every frame* of the clip. See [MaskAnalysisCadence].
+      val bucket = if (blocking) {
+        if (cadenceLogged.compareAndSet(false, true)) {
+          Log.i(
+            TAG,
+            "Export mask cadence: one segmentation per ${MaskAnalysisCadence.EXPORT_WINDOW_US / 1000}ms " +
+              "of timeline instead of one per frame (analysis ${ANALYSIS_LONG_SIDE}px, on the GL thread)."
+          )
+        }
+        MaskAnalysisCadence.exportBucketFor(frameKeyUs)
+      } else {
+        MaskAnalysisCadence.previewBucketFor(frameKeyUs)
+      }
       val exact = slot.hasMask && slot.maskBucket == bucket
       if (!exact) {
         if (blocking) {
@@ -419,8 +434,8 @@ class SubjectCutoutStage {
     /** Longest side of the analysis image. Small on purpose: fast segmentation, tiny mask. */
     const val ANALYSIS_LONG_SIDE = 384
 
-    /** Frames closer than this share one mask (about 30 fps). */
-    const val BUCKET_US = 30_000L
+    /** Frames closer than this share one mask in the preview (about 30 fps). */
+    const val BUCKET_US = MaskAnalysisCadence.FRAME_BUCKET_US
 
     /** Preview keeps using the last mask for up to this many buckets (about 0.6 s) while a new one is computed. */
     const val HOLD_BUCKETS = 20L
@@ -430,6 +445,9 @@ class SubjectCutoutStage {
 
     /** After this many failed analyses in a row the feature reports UNAVAILABLE instead of retrying forever. */
     const val MAX_FAILURES = 3
+
+    /** One log line per process, so a slow export's launcher can see the mask cadence it chose. */
+    val cadenceLogged = java.util.concurrent.atomic.AtomicBoolean(false)
 
     const val BLUR_RADIUS = 0.03f
 

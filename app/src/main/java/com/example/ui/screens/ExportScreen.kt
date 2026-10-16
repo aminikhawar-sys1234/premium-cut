@@ -42,6 +42,7 @@ import com.example.ui.components.PrimaryPillButton
 import com.example.ui.components.export.ExportConfigurationDialog
 import com.example.ui.components.formatDurationShort
 import com.example.ui.theme.*
+import java.util.Locale
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,7 +81,7 @@ fun ExportScreen(
     viewModel.videoExporter.calculateEstimatedSizeBytes(timeline.totalDurationMs, config)
   }
   val estimatedMb = remember(estimatedBytes) {
-    String.format("%.1f MB", estimatedBytes / (1024f * 1024f))
+    String.format(Locale.US, "%.1f MB", estimatedBytes / (1024f * 1024f))
   }
 
   Scaffold(
@@ -471,7 +472,17 @@ fun ExportScreen(
                 }
                 Column(horizontalAlignment = Alignment.End) {
                   Text("Remaining", style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF64748B), fontSize = 11.sp))
-                  val etaText = if (state.isPaused) "Paused" else if (state.estimatedRemainingSec > 0) "${state.estimatedRemainingSec}s" else "Finalizing..."
+                  // "Finalizing..." used to be the fallback for everything the frame counter could
+                  // not explain, including the eight stages that run before the first frame - the
+                  // reported panel showed it for twenty minutes while the export was stuck in the
+                  // pre-roll. The pipeline now names its stage, so the cell shows the real one, and
+                  // "Finalizing..." is reserved for the stages that actually finalise the MP4.
+                  val etaText = when {
+                    state.isPaused -> "Paused"
+                    state.estimatedRemainingSec > 0 -> "${state.estimatedRemainingSec}s"
+                    state.phaseLabel != null && state.currentFrame <= 0 -> state.phaseLabel
+                    else -> "Finalizing..."
+                  }
                   Text(etaText, style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold, color = Color(0xFFD97706)))
                 }
               }
@@ -602,7 +613,7 @@ fun ExportScreen(
             Spacer(modifier = Modifier.height(16.dp))
 
             Text(
-              text = "Size: ${String.format("%.1f MB", state.fileSizeBytes / (1024f * 1024f))}",
+              text = "Size: ${String.format(Locale.US, "%.1f MB", state.fileSizeBytes / (1024f * 1024f))}",
               style = MaterialTheme.typography.labelLarge.copy(color = Color(0xFF2563EB), fontWeight = FontWeight.Bold)
             )
 
