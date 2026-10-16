@@ -114,48 +114,48 @@ check(
 )
 
 print()
-print("Contract B - bindChromaBackgroundSampler pins uChromaBgTex to its own unit")
-try:
-    helper = function_body(renderer_src, "bindChromaBackgroundSampler")
-except AssertionError as e:
-    helper = ""
-    check(False, str(e))
-if helper:
-    check('glGetUniformLocation(program, "uChromaBgTex")' in helper, "helper resolves uChromaBgTex")
-    check("GLES20.glActiveTexture(GLES20.GL_TEXTURE2)" in helper, "helper selects texture unit 2")
-    check(
-        re.search(r"glUniform1i\(\s*bgTexHandle\s*,\s*2\s*\)", helper) is not None,
-        "helper assigns the sampler to unit 2",
-    )
-    check("GLES20.glActiveTexture(GLES20.GL_TEXTURE0)" in helper, "helper restores unit 0")
-
-print()
-print("Contract C - the helper is called unconditionally from bindCommonUniforms")
+print("Contract B - uChromaBgTex is pinned to its own unit (GpuTextureUnits.CHROMA_BG)")
 try:
     bind_body = function_body(renderer_src, "bindCommonUniforms")
 except AssertionError as e:
     bind_body = ""
     check(False, str(e))
 if bind_body:
-    calls = bind_body.count("bindChromaBackgroundSampler(")
-    top_calls = top_level_offsets(bind_body, "bindChromaBackgroundSampler(")
-    check(calls == 1, "exactly one call site", "found %d" % calls)
-    check(
-        len(top_calls) == 1,
-        "the call is at the top level of the function body (NOT inside `if (chromaKey.enabled)`)",
-    )
+    check('glGetUniformLocation(program, "uChromaBgTex")' in bind_body,
+          "bindCommonUniforms resolves uChromaBgTex")
+    check("GLES20.glActiveTexture(GLES20.GL_TEXTURE0 + GpuTextureUnits.CHROMA_BG)" in bind_body,
+          "binding selects the registry unit, not unit 0")
+    check(re.search(r"glUniform1i\(\s*bgTexHandle\s*,\s*GpuTextureUnits\.CHROMA_BG\s*\)", bind_body)
+          is not None, "the sampler is assigned to GpuTextureUnits.CHROMA_BG")
+    check("GLES20.glActiveTexture(GLES20.GL_TEXTURE0 + GpuTextureUnits.PICTURE)" in bind_body,
+          "the active unit is restored to the picture unit afterwards")
 
 print()
-print("Contract D - the old conditional in-branch binding is gone")
+print("Contract C - the assignment is unconditional (top level of bindCommonUniforms)")
 if bind_body:
-    check(
-        'glGetUniformLocation(program, "uChromaBgTex")' not in bind_body,
-        "bindCommonUniforms no longer resolves/binds uChromaBgTex inline",
-    )
-    check(
-        "GLES20.glActiveTexture(GLES20.GL_TEXTURE2)" not in bind_body,
-        "no second unit-2 bind remains inside bindCommonUniforms",
-    )
+    offsets = top_level_offsets(bind_body, 'glGetUniformLocation(program, "uChromaBgTex")')
+    check(len(offsets) == 1,
+          "uChromaBgTex is resolved at the top level of the function body "
+          "(NOT inside `if (chromaKey.enabled)`)", "found %d top-level sites" % len(offsets))
+    # The guard `if (bgTexHandle >= 0)` only skips programs without the uniform; the chroma-state
+    # branch must not gate it.
+    idx = bind_body.find('val bgTexHandle')
+    check(idx >= 0 and "if (bgTexHandle >= 0)" in bind_body[idx:idx + 400],
+          "only the uniform-present guard wraps the binding")
+
+print()
+print("Contract D - no conditional chroma-only binding remains")
+if bind_body:
+    enabled_branch = bind_body.find("if (chromaKey.enabled)")
+    check(enabled_branch >= 0, "the chroma feature branch still exists")
+    # Between the feature branch start and the unconditional binding there must be no
+    # glActiveTexture/glUniform1i for uChromaBgTex (the old in-branch binding).
+    bg_idx = bind_body.find('val bgTexHandle')
+    branch_text = bind_body[enabled_branch:bg_idx] if 0 <= enabled_branch < bg_idx else ""
+    check('"uChromaBgTex"' not in branch_text,
+          "the chroma-enabled branch no longer touches the uChromaBgTex sampler")
+check('GLES20.glGetUniformLocation(program2D, "uChromaBgTex")' in renderer_src,
+      "the 2D batch path assigns uChromaBgTex too")
 
 print()
 print("Contract E - targeted draw diagnostics stay wired")
@@ -177,29 +177,38 @@ mgr_src = read(COLOR_MGR)
 csrc_src = read(COLOR_SRC)
 stage_src = read(GRADE_STAGE)
 
-# F1. uLut3d is pinned to unit 3 on every draw of a HAS_LUT3D variant — including when the LUT
-#     data is not loaded yet (lut3d == null). The old `if (key.hasLut3d && lut3d != null)` left a
-#     sampler3D on unit 0 next to uInput: GL_INVALID_OPERATION, dropped draw, black graded frame.
+# F1. uLut3d is pinned to its unit on every draw of a HAS_LUT3D variant — including when the
+#     LUT data is not loaded yet (lut3d == null). The old `if (key.hasLut3d && lut3d != null)`
+#     left a sampler3D on unit 0 next to uInput: GL_INVALID_OPERATION, dropped draw, black frame.
 check(
-    re.search(r"if \(key\.hasLut3d\)\s*\{", proc_src) is not None
+    re.search(r"if \(key\.hasLut3d\)", proc_src) is not None
     and "if (key.hasLut3d && lut3d != null)" not in proc_src,
     "uLut3d unit binding no longer depends on the LUT data being loaded",
 )
-check(proc_src.count('glUniform1i(prog.loc("uLut3d"), 3)') == 2,
-      "uLut3d pinned to unit 3 in BOTH the loaded and the not-loaded branch")
-check('GLES30.glUniform1f(prog.loc("uLutIntensity"), 0f)' in proc_src,
+check('glUniform1i(prog.loc("uLut3d"), ColorTextureUnits.LUT)' in proc_src,
+      "uLut3d pinned to the registry LUT unit")
+check("lutTextures.black3D()" in proc_src,
+      "missing 3D LUT data binds a real texture of the sampler's own target")
+check('glUniform1f(prog.loc("uLutIntensity"), if (lut3d != null) lutIntensity else 0f)' in proc_src,
       "missing LUT data renders as the identity (uLutIntensity = 0)")
 # F2. The LUT2D variant pins its sampler too and keeps uLutSize finite.
-check('glUniform1i(prog.loc("uLut2d"), 3)' in proc_src, "uLut2d pinned to its own unit")
-check('glUniform1f(prog.loc("uLutSize"), 2f)' in proc_src, "uLutSize stays finite (no NaN UVs)")
-# F3. BOTH uSecMask array elements are pinned on every masked draw, even when a mask is
-#     unavailable this frame (null provider result used to leave a sampler2D on unit 0 next to a
+check('glUniform1i(prog.loc("uLut2d"), ColorTextureUnits.LUT)' in proc_src,
+      "uLut2d pinned to the registry LUT unit")
+check('glUniform1f(prog.loc("uLutSize"), lutTextures.atlasSize(lut3d))' in proc_src
+      and "Never 0" in proc_src,
+      "uLutSize stays finite (no NaN UVs)")
+check("lutTextures.white2D()" in proc_src,
+      "missing 2D LUT data binds a real 2D texture (identity)")
+# F3. BOTH uSecMask slots are pinned on every masked draw, even when a mask is unavailable this
+#     frame (a null provider result used to leave a sampler2D on unit 0 next to a
 #     samplerExternalOES uInput).
-check("for (i in 0 until 2)" in proc_src
-      and 'glUniform1i(prog.loc("uSecMask[$i]"), 4 + i)' in proc_src,
-      "uSecMask[0..1] units assigned unconditionally")
-check("glBindTexture(GLES30.GL_TEXTURE_2D, tex ?: 0)" in proc_src,
-      "unavailable mask binds texture 0 instead of leaving the unit unassigned")
+check('glUniform1i(prog.loc("uSecMask[$i]"), unit)' in proc_src,
+      "uSecMask slots get their unit assignment unconditionally")
+check("val fallback = if (tex == null) lutTextures.white2D() else 0" in proc_src
+      and "glBindTexture(GLES30.GL_TEXTURE_2D, tex ?: fallback)" in proc_src,
+      "unavailable mask binds a fallback texture instead of leaving the unit unassigned")
+check("ColorTextureUnits.audit(prog" in proc_src,
+      "per-variant sampler/unit audit stays wired")
 
 # F4. Variant #defines come from the pure, JVM-tested builder and carry explicit values: the
 #     shader tests flags BY VALUE, so valueless/undefined flags are preprocessor errors that made

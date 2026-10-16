@@ -193,10 +193,13 @@ device-dependent and survived the earlier audits.
 
 **Fix** (`GpuCompositionRenderer`):
 
-- `bindChromaBackgroundSampler(program, textureId)` now pins `uChromaBgTex` to
-  texture unit 2 on **every** draw, chroma key on or off, and is called
-  unconditionally from `bindCommonUniforms`. With the key off, unit 2 holds the
-  default 2D texture — legal, and never sampled while `uChromaBgType != 2`.
+- `uChromaBgTex` is now pinned to its own texture unit (`GpuTextureUnits.CHROMA_BG`)
+  on **every** draw, chroma key on or off, at the top level of
+  `bindCommonUniforms` (the same fix was made independently on `main` with the
+  `GpuTextureUnits` registry; the merged code keeps that registry-based shape —
+  see `docs/GPU_TEXTURE_UNITS.md` and `verify_texture_units.py`). With the key
+  off, the unit holds texture 0 — legal, and never sampled while
+  `uChromaBgType != 2`. The 2D batch path assigns the sampler too.
 - Targeted draw diagnostics: `checkDrawErrors(site, program, target, textureId)`
   runs after the OES→2D conversions, each Kotlin-compositor layer, the
   post-process passes and the encoder blit. On the first failing draw of a frame
@@ -242,15 +245,18 @@ runs on the export path through `ColorGradeStage` for any clip with a grade:
   the *loaded data* was non-null (`key.hasLut3d && lut3d != null`). `ColorEngine.resolveLut3d`
   legitimately returns null until the LUT file finishes loading (or after eviction) — in exactly
   that window the sampler3D stayed on unit 0 next to `uInput`, a different-type conflict that
-  drops every draw with GL_INVALID_OPERATION and leaves the grade FBO black. Fixed: the unit is
-  pinned on every draw; missing data binds texture 0 with `uLutIntensity = 0`
-  (`applyLut` ≡ identity).
+  drops every draw with GL_INVALID_OPERATION and leaves the grade FBO black. Fixed (merged with
+  `main`'s independent `ColorTextureUnits` registry work): the unit is pinned on every draw;
+  missing data binds a 1×1×1 black 3D texture with `uLutIntensity = 0` (`applyLut` ≡ identity).
 - **`uLut2d` was never bound at all** (and `uLutSize` never set — `applyLut` divides by it, so the
-  weight-0 LUT sample would have been NaN, which `mix()` propagates). The GLES2-class fallback
-  variant now pins the unit and renders as the identity.
+  weight-0 LUT sample would have been NaN, which `mix()` propagates). The merged code pins the
+  unit on every draw and now has a real tiled 2D atlas upload (`LutTextureManager.getOrCreate2DAtlas`
+  / `LutAtlasLayout`, from `main`), with a white 1×1 fallback and a never-zero `uLutSize` when the
+  data is missing.
 - **`uSecMask[2]` bound per-element only when a mask texture existed.** A mask that is
   unavailable this frame, or an unused second slot, stayed on unit 0 and conflicted with an
-  external-OES `uInput`. Both elements are now pinned to units 4/5 on every masked draw.
+  external-OES `uInput`. Every slot is now pinned to its registry unit
+  (`ColorTextureUnits.secondaryMask(i)`) on every masked draw, with a white fallback texture.
 - **No colour-grade shader variant ever compiled on a conformant preprocessor.** The shader tests
   its feature flags BY VALUE (`#if HAS_CURVES`, `#if LUT_AFTER && (HAS_LUT3D || HAS_LUT2D)`), but
   the variant builder emitted valueless `#define HAS_CURVES` style flags and left disabled flags
