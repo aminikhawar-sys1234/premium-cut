@@ -45,6 +45,8 @@ SOURCES=(
   "$MAIN/com/example/engine/export/ExportSurfaceSize.kt"
   "$MAIN/com/example/engine/export/ExportBlackFrameGuard.kt"
   "$MAIN/com/example/engine/export/DecoderBudget.kt"
+  "$MAIN/com/example/engine/export/TrackingHealth.kt"
+  "$MAIN/com/example/engine/export/TrackingPrewarmPlan.kt"
   "$MAIN/com/example/engine/export/ExportOrientationPolicy.kt"
   "$MAIN/com/example/engine/composition/gpu/GpuShaders.kt"
   "$MAIN/com/ahstudio/color/primary/PipelineConsts.kt"
@@ -53,6 +55,8 @@ SOURCES=(
   "$TEST/com/example/engine/export/ExportSurfaceSizeTest.kt"
   "$TEST/com/example/engine/export/ExportBlackFrameGuardTest.kt"
   "$TEST/com/example/engine/export/DecoderBudgetTest.kt"
+  "$TEST/com/example/engine/export/TrackingHealthTest.kt"
+  "$TEST/com/example/engine/export/TrackingPrewarmPlanTest.kt"
   "$TEST/com/example/engine/export/ExportOrientationPolicyTest.kt"
   "$TEST/com/example/engine/composition/gpu/GpuSamplerContractTest.kt"
   "$TEST/com/ahstudio/color/gpu/ColorVariantShaderContractTest.kt"
@@ -90,6 +94,8 @@ echo "== running tests"
   com.example.engine.export.ExportSurfaceSizeTest \
   com.example.engine.export.ExportBlackFrameGuardTest \
   com.example.engine.export.DecoderBudgetTest \
+  com.example.engine.export.TrackingHealthTest \
+  com.example.engine.export.TrackingPrewarmPlanTest \
   com.example.engine.export.ExportOrientationPolicyTest \
   com.example.engine.composition.gpu.GpuSamplerContractTest \
   com.ahstudio.color.gpu.ColorVariantShaderContractTest

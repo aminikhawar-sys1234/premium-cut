@@ -446,6 +446,7 @@ jobs:
               "com.example.ExampleInstrumentedTest",
               "com.example.engine.effects.ColorPipelineGpuInstrumentedTest",
               "com.example.engine.export.ComplexProjectExportInstrumentedTest",
+              "com.example.engine.export.TrackedEffectExportInstrumentedTest",
               "com.example.engine.export.CompositionRegressionInstrumentedTest",
               "com.example.engine.export.ExportLookPersistenceInstrumentedTest",
               "com.example.engine.export.ExportValidatorInstrumentedTest",

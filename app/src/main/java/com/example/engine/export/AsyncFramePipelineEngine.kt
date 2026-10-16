@@ -888,7 +888,20 @@ class AsyncFramePipelineEngine(private val context: Context) {
         return null
       }
 
-      // 8. Render loop (GL thread): every frame is drawn into the encoder Surface and its swap submits it.
+      // 8. Warm the tracked poses this project will ask for while rendering. A clip with face
+      //    reshape / AR filter / body reshape is asked for a pose once per exported frame *with
+      //    blocking = true*, i.e. a MediaMetadataRetriever frame extraction plus an ML Kit inference
+      //    on the thread that has to keep the encoder fed, once per frame - because nothing warmed
+      //    the tracker first (FaceTrackingEngine.prewarm existed but no export path called it).
+      //    This runs the render loop's own lookups, before the encoder is in the pipeline, bounded by
+      //    a wall-clock budget and a sample cap. Samples that cannot be warmed stay cache misses and
+      //    the render loop behaves exactly as before, so the picture never changes - only when the
+      //    work happens.
+      TrackingHealth.reset()
+      runCatching { ExportTrackingPrewarm.warm(timeline, fps) }
+        .onFailure { Log.w(tag, "Tracking prewarm failed; the render loop will track per frame", it) }
+
+      // Render loop (GL thread): every frame is drawn into the encoder Surface and its swap submits it.
       renderStarted.set(true)
       glHandler.post {
         var renderingFrame = -1L
@@ -1135,6 +1148,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
             if (unavailableProbes > 0) {
               Log.w(tag, "Encoder-surface black-frame probe unavailable for $unavailableProbes sample(s); final MP4 validation remains authoritative")
             }
+            TrackingHealth.summary()?.let { tracked ->
+              Log.w(
+                tag,
+                "Tracked effects could not be drawn for every frame of the export: $tracked. " +
+                  "Those frames carry the layer without its tracked deformation."
+              )
+            }
           }
         } catch (t: Throwable) {
           Log.e(tag, "Render loop failed frame=$renderingFrame size=${exportWidth}x$exportHeight codec=${videoEncoder.name} mime=${plan.mime} thread=${Thread.currentThread().name} submitted=${metrics.gpuFrames.get()}", t)
@@ -1328,9 +1348,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
     }
   }
 
-  private fun wrap(prefix: String, t: Throwable): Throwable =
-    if (t is ExportPipelineException || t is CancellationException) t
-    else ExportPipelineException("$prefix: ${t.message ?: t.javaClass.simpleName}", t)
+  private fun wrap(prefix: String, t: Throwable): Throwable {
+    if (t is ExportPipelineException || t is CancellationException) return t
+    // A failure raised while a tracked effect could not produce a pose is usually *caused* by it
+    // (the frame was rendered without the deformation, or a tracker threw). Naming it turns
+    // "Rendering failed: null" into something the user and the log can act on.
+    val tracking = TrackingHealth.summary()?.let { " Tracking: $it." }.orEmpty()
+    return ExportPipelineException("$prefix: ${t.message ?: t.javaClass.simpleName}.$tracking", t)
+  }
 
   /**
    * A cheap, advisory probe of five 8x8 back-buffer regions. Returns null when the driver reports
