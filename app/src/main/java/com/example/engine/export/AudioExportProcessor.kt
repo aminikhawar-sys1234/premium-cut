@@ -21,37 +21,9 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.pow
 
-data class DecodedPcm(
-  val samples: ShortArray,
-  val sampleRate: Int,
-  val channels: Int
-)
-
-data class TimelineAudioFormat(
-  val sampleRate: Int = 48000,
-  val channelCount: Int = 2,
-  val bitrate: Int = 192000
-)
-
-data class AudioTrackDescriptor(
-  val uri: String,
-  val title: String,
-  val timelineStartMs: Long,
-  val durationMs: Long,
-  val sourceStartMs: Long,
-  val sourceEndMs: Long,
-  val speed: Float,
-  val volume: Float,
-  val gainDb: Float,
-  val fadeInMs: Long,
-  val fadeOutMs: Long,
-  val isMuted: Boolean,
-  val isReversed: Boolean = false,
-  val keyframes: List<com.example.domain.model.ClipKeyframe> = emptyList(),
-    val audioEffects: com.example.domain.model.AudioEffectsSettings = com.example.domain.model.AudioEffectsSettings(),
-    /** Auto-ducking curve of this clip's lane, evaluated in timeline time; null = not ducked. */
-    val duckEnvelope: com.example.engine.audio.AutoDucking.DuckEnvelope? = null
-)
+// `DecodedPcm`, `TimelineAudioFormat` and `AudioTrackDescriptor` live in the pure `AudioMixMath.kt`
+// so the mixer's arithmetic can be unit tested on a plain JVM (same package, so every caller and
+// test that used them here is unaffected).
 
 class AudioExportProcessor(
     private val muxer: MediaMuxer? = null,
@@ -62,6 +34,23 @@ class AudioExportProcessor(
     companion object {
         private const val TAG = "AudioExportProcessor"
         private const val TIMEOUT_US = 10_000L
+        /**
+         * Wall-clock budget of ONE window decode of the chunked mixer. The decode loop used to have
+         * no deadline at all: a decoder that never produced output and never signalled EOS (a
+         * broken/unusual file, a codec that lost its input) looped forever inside
+         * `mixTimelineAudio`, and the export panel sat at 5 % until the process was killed - the
+         * defect the 2026-10-16 report describes. A window is a few seconds of audio, so a codec
+         * that needs longer than this is not slow, it is stuck.
+         */
+        const val DEFAULT_DECODE_DEADLINE_MS = 30_000L
+        /**
+         * How long an audio worker may wait for the video side to start the muxer before the export
+         * is failed. `MediaMuxer.start()` is a platform call with no timeout of its own, so the two
+         * waits for it used to be `while (!isMuxerStarted) Thread.sleep(..)` - a spin that never
+         * ends if the video encoder never reaches EOS, i.e. exactly the frozen-at-5 %
+         * symptom. Waits are bounded so the failure has a reason and a name.
+         */
+        const val MUXER_START_DEADLINE_MS = 60_000L
         /** PCM grows by doubling from here (samples, not frames). */
         private const val INITIAL_PCM_SAMPLES = 1 shl 16
         /** Upper bound for the pre-sized window buffer (8M samples = 16 MB); growth handles more. */
@@ -129,8 +118,19 @@ class AudioExportProcessor(
                 onTrackReady(audioTrackIndex)
             }
 
-            // Wait until VideoExporter starts the muxer safely
+            // Wait until VideoExporter starts the muxer safely. Bounded: a muxer that never starts
+            // means the video side is not going to finish, and reporting that is better than
+            // spinning here forever (see MUXER_START_DEADLINE_MS).
+            val muxerDeadlineMs = System.currentTimeMillis() + MUXER_START_DEADLINE_MS
             while (!isMuxerStarted()) {
+                if (System.currentTimeMillis() > muxerDeadlineMs) {
+                    Log.e(
+                        TAG,
+                        "Muxer was not started within ${MUXER_START_DEADLINE_MS}ms; abandoning audio " +
+                            "track '${sourceUriPath}' so the export can fail with a reason."
+                    )
+                    return false
+                }
                 Thread.sleep(10)
             }
 
@@ -272,12 +272,32 @@ class AudioExportProcessor(
         return hasAudibleVideoClips || hasAudibleOverlays || hasAudibleAudioClips
     }
 
+    /**
+     * Mixes the timeline's audio into one interleaved 16-bit buffer.
+     *
+     * Chunked, bounded and observable: see [TimelineAudioMixer] and [AudioMixPlan]. The previous
+     * implementation allocated the whole timeline twice (a float accumulator *and* a short output
+     * buffer) and started the render loop only after all of it was done - which, on a ten minute
+     * project, is both the memory peak of the export and the phase the progress panel sat in at 5 %
+     * with nothing but "encoded 0 / N frames" on screen.
+     *
+     * @param onProgress `(0..1)` of the mix, reported once per chunk: the export panel advances
+     *   during the mix, and the stall watchdog can see that the mix is still moving.
+     * @param isCancelled checked before every chunk (and inside every decode), so cancelling a long
+     *   project's mix returns in milliseconds instead of minutes.
+     * @param decodeDeadlineMs per-window decode deadline. 0 disables it (used by analysis callers).
+     * @throws ExportPipelineException when a track the user added cannot be decoded at all - the
+     *   export never silently replaces a track with silence. Gaps past the end of a shorter source
+     *   are not failures; they are mixed as silence and reported.
+     */
     suspend fun mixTimelineAudio(
         timeline: Timeline,
         totalDurationMs: Long,
         targetSampleRate: Int = 48000,
         targetChannelCount: Int = 2,
-        isCancelled: () -> Boolean = { false }
+        isCancelled: () -> Boolean = { false },
+        onProgress: (Float) -> Unit = {},
+        decodeDeadlineMs: Long = DEFAULT_DECODE_DEADLINE_MS
     ): ShortArray = withContext(Dispatchers.IO) {
         this@AudioExportProcessor.sampleRate = targetSampleRate
         this@AudioExportProcessor.channelCount = targetChannelCount
@@ -285,23 +305,162 @@ class AudioExportProcessor(
         val totalFrames = ((totalDurationMs / 1000.0) * targetSampleRate).toInt()
         if (totalFrames <= 0) return@withContext ShortArray(0)
 
-        val mixedPcm = FloatArray(totalFrames * targetChannelCount)
+        val mixedPcm = ShortArray(totalFrames * targetChannelCount)
 
         val tracks = collectAudioTracks(timeline)
-        for (track in tracks) {
-            if (isCancelled()) return@withContext ShortArray(0)
-            val decoded = decodeTrackOrFail(track)
-            if (decoded.samples.isEmpty()) continue
-            mixTrackIntoBuffer(decoded, track, mixedPcm, totalFrames, targetSampleRate, targetChannelCount)
+        if (tracks.isEmpty()) {
+            // Nothing exportable to decode (no source passed `isExportableAudioUri`, or every lane is
+            // muted): the mix is silence, and that is the shape every caller expects - a full-length
+            // buffer for a positive duration. The pipeline only calls this when `hasActiveAudio` is
+            // true, i.e. when a real source does exist; a timeline that reaches this branch has no
+            // audio to write, and [ExportPipelineException] is deliberately *not* thrown for it (the
+            // old mixer returned the same silent buffer).
+            Log.w(TAG, "Timeline has no exportable audio source; the mix is silence.")
+            return@withContext mixedPcm
         }
+        val chunkFrames = AudioMixPlan.chunkFrames(targetSampleRate)
+        val chunks = AudioMixPlan.chunks(totalFrames, chunkFrames)
+        val startedMs = System.currentTimeMillis()
 
-        val finalPcm = ShortArray(mixedPcm.size)
-        for (i in mixedPcm.indices) {
-            finalPcm[i] = softClipSample(mixedPcm[i])
+        // End of the successfully decoded material of each track, so a window that lands entirely
+        // past a shorter source is "the source ended" (silence, and honest reporting) rather than a
+        // decode failure that aborts the export.
+        val decodedUntilMs = HashMap<Int, Long>()
+
+        val result = TimelineAudioMixer.mix(
+            out = mixedPcm,
+            totalFrames = totalFrames,
+            channels = targetChannelCount,
+            targetSampleRate = targetSampleRate,
+            tracks = tracks,
+            chunks = chunks,
+            decodeWindow = { request ->
+                // Cancelling must never look like a decode failure: a cancelled window comes back as
+                // an empty window of the right shape (its frames are counted as silent, and the
+                // export is being torn down anyway).
+                val decoded = if (isCancelled()) {
+                    null
+                } else {
+                    decodeWindowFor(tracks[request.trackIndex], request, isCancelled, decodeDeadlineMs, decodedUntilMs)
+                }
+                if (decoded == null && isCancelled()) {
+                    MixPcmWindow(
+                        ShortArray(0), targetSampleRate, targetChannelCount,
+                        request.startMs, request.originSample
+                    )
+                } else {
+                    decoded
+                }
+            },
+            gainAt = { trackIndex, relativeFrame, durationFrames, rate ->
+                exportMixLinearGain(tracks[trackIndex], relativeFrame, durationFrames, rate)
+            },
+            isCancelled = isCancelled,
+            onChunkMixed = { done, total ->
+                if (total > 0) onProgress((done.toFloat() / total.toFloat()).coerceIn(0f, 1f))
+            }
+        )
+        clearCache()
+
+        // A cancel anywhere (including inside the final decode) is not a failure: report it the way
+        // the pipeline expects and let the render loop's own cancel path take over.
+        if (result.cancelled || isCancelled()) return@withContext ShortArray(0)
+
+        // A window that could not be decoded is an export error, not silence: the previous
+        // implementation failed the export when a track's audio could not be decoded, and a silent
+        // hole in the middle of a track is exactly the "successful export that lost the user's
+        // audio" this pipeline is not allowed to produce. (A window that simply lies past the end of
+        // a shorter source is handled in decodeWindowFor as end-of-source silence, not as a failure.)
+        if (result.decodeFailuresPerTrack.isNotEmpty()) {
+            val detail = result.decodeFailuresPerTrack.entries.joinToString(", ") { (index, failures) ->
+                val track = tracks.getOrNull(index)
+                "'${track?.title ?: "track $index"}' (${failures} window(s))"
+            }
+            throw ExportPipelineException(
+                "Could not decode the audio of $detail. Export stopped instead of writing silence.",
+                retryable = false
+            )
         }
-        finalPcm
+        val partial = tracks.indices.filter { index -> result.silentFrames(index) > 0L }
+        if (partial.isNotEmpty()) {
+            val detail = partial.joinToString(", ") { index ->
+                "'${tracks[index].title}' ${result.silentFrames(index)} frame(s)"
+            }
+            Log.w(TAG, "Audio mix: no decoded samples for $detail; those frames are mixed as silence (source shorter than the clip).")
+        }
+        ExportDiagnostics.stage(
+            "audio-mix-chunked",
+            System.currentTimeMillis() - startedMs,
+            "tracks=${tracks.size} chunks=${result.chunksMixed}/${chunks.size} frames=${result.framesMixed} " +
+                "chunkMs=${AudioMixPlan.DEFAULT_CHUNK_MS} deadlineMs=$decodeDeadlineMs"
+        )
+        mixedPcm
     }
 
+    /**
+     * Decodes one window of one track for the mixer.
+     *
+     * Streaming tracks (forward, unity speed, no audio effects - see [AudioMixPlan.isStreamable])
+     * are decoded window by window: that is what keeps the peak memory of the mix at "one window per
+     * track" instead of "the whole timeline in floats and shorts plus every decoded track". Tracks
+     * that carry processing are decoded once for their trim window with exactly the previous
+     * pipeline (decode -> reverse -> DSP -> pitch-safe speed), because those steps are
+     * whole-buffer operations and a chunked version would change the sound.
+     */
+    private fun decodeWindowFor(
+        track: AudioTrackDescriptor,
+        request: AudioMixWindowRequest,
+        isCancelled: () -> Boolean,
+        deadlineMs: Long,
+        decodedUntilMs: HashMap<Int, Long>
+    ): MixPcmWindow? {
+        if (request.fullWindow) {
+            val decoded = runCatching { decodeTrackOrFail(track) }
+                .onFailure { Log.e(TAG, "Audio decode failed for '${track.title}': ${it.message}", it) }
+                .getOrNull() ?: return null
+            if (decoded.samples.isEmpty()) return null
+            return MixPcmWindow(decoded.samples, decoded.sampleRate, decoded.channels, request.startMs, 0)
+        }
+        val decoded = decodePcmFromMedia(track.uri, request.startMs, request.endMs, deadlineMs, isCancelled)
+        if (decoded == null || decoded.samples.isEmpty()) {
+            val lastCovered = decodedUntilMs[request.trackIndex]
+            if (lastCovered != null && request.startMs >= lastCovered) {
+                // The source ended before this window: the clip is longer than its audio. Silence,
+                // not a failure - exactly what the whole-window mixer produced before.
+                return MixPcmWindow(ShortArray(0), decoded?.sampleRate ?: 48000, decoded?.channels ?: 2, request.startMs, request.originSample)
+            }
+            Log.w(
+                TAG,
+                "Audio window decode failed for '${track.title}' at ${request.startMs}..${request.endMs}ms " +
+                    "(window #${request.chunk.index})"
+            )
+            return null
+        }
+        val coveredEndMs = request.startMs + (decoded.samples.size / decoded.channels.coerceAtLeast(1)).toLong() * 1000L /
+            decoded.sampleRate.coerceAtLeast(1)
+        decodedUntilMs[request.trackIndex] = maxOf(decodedUntilMs[request.trackIndex] ?: 0L, coveredEndMs)
+        // The mixer indexes the window as `sampleIndex(relativeFrame) - originSample`, so the origin
+        // must describe *this* buffer's first sample. It is derived from the window the decoder
+        // actually used (and from the sample rate it actually reported), not from the request: the
+        // request's window start is rounded to a millisecond, which is up to one sample away from the
+        // index the mixer planned, and reading the buffer with the planned index would shift every
+        // sample of the chunk by that much.
+        return MixPcmWindow(
+            samples = decoded.samples,
+            sampleRate = decoded.sampleRate,
+            channels = decoded.channels,
+            windowStartMs = request.startMs,
+            originSample = AudioMixPlan.windowOriginSample(track, request.startMs, decoded.sampleRate)
+        )
+    }
+
+    /**
+     * Mixes the timeline and writes it straight into [audioEncoder] / [muxer].
+     *
+     * Kept for callers that own the muxer themselves; the mix itself is the same chunked, bounded
+     * [mixTimelineAudio] the export pipeline uses, so this path cannot drift from it (it used to
+     * carry its own copy of the whole-timeline float buffer).
+     */
     suspend fun renderMixedAudioToMuxer(
         timeline: Timeline,
         totalDurationMs: Long,
@@ -315,27 +474,17 @@ class AudioExportProcessor(
         targetSampleRate: Int = 48000,
         targetChannelCount: Int = 2
     ): Boolean = withContext(Dispatchers.IO) {
-        this@AudioExportProcessor.sampleRate = targetSampleRate
-        this@AudioExportProcessor.channelCount = targetChannelCount
-
-        val totalFrames = ((totalDurationMs / 1000.0) * targetSampleRate).toInt()
-        if (totalFrames <= 0) return@withContext false
-
-        val mixedPcm = FloatArray(totalFrames * targetChannelCount)
-
-        val tracks = collectAudioTracks(timeline)
-        for (track in tracks) {
-            val decoded = decodeTrackOrFail(track)
-            if (decoded.samples.isEmpty()) continue
-            mixTrackIntoBuffer(decoded, track, mixedPcm, totalFrames, targetSampleRate, targetChannelCount)
-        }
-
-        val finalPcm = ShortArray(mixedPcm.size)
-        for (i in mixedPcm.indices) {
-            finalPcm[i] = softClipSample(mixedPcm[i])
-        }
-
-        encodeAndMuxPcm(finalPcm, targetSampleRate, targetChannelCount, audioEncoder, muxer, muxerLock, getAudioTrackIndex, setAudioTrackIndex, isMuxerStarted, onMuxerReadyCheck)
+        val finalPcm = mixTimelineAudio(
+            timeline = timeline,
+            totalDurationMs = totalDurationMs,
+            targetSampleRate = targetSampleRate,
+            targetChannelCount = targetChannelCount
+        )
+        if (finalPcm.isEmpty()) return@withContext false
+        encodeAndMuxPcm(
+            finalPcm, targetSampleRate, targetChannelCount, audioEncoder, muxer, muxerLock,
+            getAudioTrackIndex, setAudioTrackIndex, isMuxerStarted, onMuxerReadyCheck
+        )
         true
     }
 
@@ -516,9 +665,21 @@ class AudioExportProcessor(
      */
     /** Decodes [startMs, endMs) of a media file's audio for analysis (beats, speech); null when it has no decodable audio. */
     fun decodeForAnalysis(uriString: String, startMs: Long, endMs: Long): DecodedPcm? =
-        decodePcmFromMedia(uriString, startMs, endMs)
+        decodePcmFromMedia(uriString, startMs, endMs, AudioExportProcessor.DEFAULT_DECODE_DEADLINE_MS, { false })
 
-    private fun decodePcmFromMedia(uriString: String, windowStartMs: Long = 0L, windowEndMs: Long = Long.MAX_VALUE): DecodedPcm? {
+    /**
+     * @param deadlineMs wall-clock budget of this decode (0 = unbounded). A decode that overruns it
+     *   gives up and returns null with the counter state in the log, instead of looping forever.
+     * @param isCancelled checked on every loop iteration, so cancelling an export does not wait for
+     *   the remaining minutes of audio to be decoded.
+     */
+    private fun decodePcmFromMedia(
+        uriString: String,
+        windowStartMs: Long = 0L,
+        windowEndMs: Long = Long.MAX_VALUE,
+        deadlineMs: Long = DEFAULT_DECODE_DEADLINE_MS,
+        isCancelled: () -> Boolean = { false }
+    ): DecodedPcm? {
         val ctx = context ?: return null
         val extractor = MediaExtractor()
         var decoder: MediaCodec? = null
@@ -566,6 +727,9 @@ class AudioExportProcessor(
             var reachedWindowEnd = false
             val bufferInfo = MediaCodec.BufferInfo()
             var isEos = false
+            val deadlineAt = if (deadlineMs > 0L) android.os.SystemClock.elapsedRealtime() + deadlineMs else 0L
+            var timedOut = false
+            var cancelledEarly = false
 
             fun append(buffer: ByteBuffer, framesInBuffer: Int, skipFrames: Int) {
                 val usableFrames = framesInBuffer - skipFrames
@@ -583,6 +747,14 @@ class AudioExportProcessor(
             }
 
             while (!isEos && !reachedWindowEnd) {
+                if (isCancelled()) {
+                    cancelledEarly = true
+                    break
+                }
+                if (deadlineAt > 0L && android.os.SystemClock.elapsedRealtime() > deadlineAt) {
+                    timedOut = true
+                    break
+                }
                 val inIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
                 if (inIndex >= 0) {
                     val inputBuf = decoder.getInputBuffer(inIndex) ?: continue
@@ -623,6 +795,19 @@ class AudioExportProcessor(
                 }
             }
 
+            if (timedOut) {
+                Log.e(
+                    TAG,
+                    "Audio decode deadline (${deadlineMs}ms) exceeded for $uriString " +
+                        "[${windowStartMs}ms, ${windowEndMs}ms): decoded $sampleCount samples at ${srcSampleRate}Hz; " +
+                        "the decoder produced no end of stream. Treating this window as undecodable."
+                )
+                return null
+            }
+            if (cancelledEarly) {
+                Log.i(TAG, "Audio decode cancelled for $uriString [${windowStartMs}ms, ${windowEndMs}ms) after $sampleCount samples")
+                return null
+            }
             if (sampleCount == 0) return null
             return DecodedPcm(if (sampleCount == shorts.size) shorts else shorts.copyOf(sampleCount), srcSampleRate, srcChannels)
         } catch (e: Exception) {
@@ -632,49 +817,6 @@ class AudioExportProcessor(
             try { decoder?.stop() } catch (ignored: Exception) {}
             try { decoder?.release() } catch (ignored: Exception) {}
             try { extractor.release() } catch (ignored: Exception) {}
-        }
-    }
-
-    private fun mixTrackIntoBuffer(
-        decoded: DecodedPcm,
-        track: AudioTrackDescriptor,
-        outputMix: FloatArray,
-        totalFrames: Int,
-        targetSampleRate: Int,
-        targetChannels: Int
-    ) {
-        val startFrame = ((track.timelineStartMs / 1000.0) * targetSampleRate).toInt()
-        val durationFrames = ((track.durationMs / 1000.0) * targetSampleRate).toInt()
-        val endFrame = (startFrame + durationFrames).coerceAtMost(totalFrames)
-
-        val srcSamples = decoded.samples
-        val srcRate = decoded.sampleRate
-        val srcChannels = decoded.channels
-
-        // Speed is already baked into [decoded] by decodeTrackOrFail (pitch-safe time stretch).
-        val rateRatio = srcRate.toDouble() / targetSampleRate.toDouble()
-
-        for (frame in startFrame until endFrame) {
-            val relativeFrame = frame - startFrame
-            val srcIndex = (relativeFrame * rateRatio).toInt()
-            val gain = exportMixLinearGain(track, relativeFrame, durationFrames, targetSampleRate)
-
-            for (ch in 0 until targetChannels) {
-                // Source index 0 is the clip in-point (decodePcmFromMedia returns exactly the used
-                // window), so a trimmed clip's audio starts where its picture does.
-                val sampleVal: Short = if (srcChannels == 1) {
-                    if (srcIndex < srcSamples.size) srcSamples[srcIndex] else 0
-                } else {
-                    // Multi channel sources are indexed by their real channel count; stereo
-                    // (2 ch) maps 1:1 to the output channels exactly as before.
-                    val sIdx = srcIndex * srcChannels + (if (ch < srcChannels) ch else ch % srcChannels)
-                    if (sIdx < srcSamples.size) srcSamples[sIdx] else 0
-                }
-                val outIdx = frame * targetChannels + ch
-                if (outIdx < outputMix.size) {
-                    outputMix[outIdx] += (sampleVal * gain)
-                }
-            }
         }
     }
 
@@ -739,7 +881,17 @@ class AudioExportProcessor(
                     val encoded = encoder.getOutputBuffer(outIndex)
                     val isEos = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
                     if (encoded != null && bufferInfo.size > 0) {
+                        // Same bound as processAudioTrack: the muxer belongs to the video side, and a
+                        // sample that cannot be written because the muxer never started must fail the
+                        // export instead of parking this thread (and with it the export) forever.
+                        val muxerDeadlineMs = System.currentTimeMillis() + MUXER_START_DEADLINE_MS
                         while (!isMuxerStarted()) {
+                            if (System.currentTimeMillis() > muxerDeadlineMs) {
+                                throw IllegalStateException(
+                                    "The MP4 muxer was not started within ${MUXER_START_DEADLINE_MS}ms; " +
+                                        "the encoded audio could not be written."
+                                )
+                            }
                             Thread.sleep(5)
                         }
                         synchronized(muxerLock) {
@@ -761,129 +913,9 @@ class AudioExportProcessor(
         }
     }
 
-    private fun softClipSample(sample: Float): Short {
-        val norm = sample / 32768f
-        val clipped = when {
-            norm > 1.0f -> 1.0f
-            norm < -1.0f -> -1.0f
-            norm > 0.75f -> 0.75f + (norm - 0.75f) * 0.5f
-            norm < -0.75f -> -0.75f + (norm + 0.75f) * 0.5f
-            else -> norm
-        }
-        return (clipped * 32767f).toInt().toShort()
-    }
 }
 
-/** Built-in / catalog URIs that have no real media file. Never synthesized into fake PCM. */
-fun isPlaceholderCatalogUri(uri: String): Boolean {
-    if (uri.isBlank()) return true
-    return uri.startsWith("internal://") ||
-        uri.startsWith("built_in_sfx_") ||
-        uri.startsWith("demo://")
-}
-
-/** True when [uri] points at real playable media rather than a catalog placeholder or bare id. */
-fun isExportableAudioUri(uri: String): Boolean {
-    if (isPlaceholderCatalogUri(uri)) return false
-    return uri.contains("://") || uri.startsWith("/")
-}
-
-/**
- * Source window a track actually uses, in milliseconds: `[start, end)` of the source file that the
- * mix needs. Pure and unit tested ([AudioExportWindowTest]); the mixer uses it to bound both the
- * decode and the memory of every track.
- *
- * `sourceMs = timelineRelMs * speed` (see `AudioClip.timelineToSourceMs`), so a 2x clip consumes
- * twice its timeline length of source, a 0.5x clip half of it.
- */
-fun audioSourceWindow(track: AudioTrackDescriptor): Pair<Long, Long> {
-    val speed = track.speed.coerceIn(0.25f, 4.0f)
-    val neededMs = (track.durationMs.coerceAtLeast(1L) * speed).toLong()
-    val hasSourceRange = track.sourceEndMs > track.sourceStartMs
-    if (track.isReversed && hasSourceRange) {
-        // Reversed playback starts at the source end and walks backwards (sourceMs =
-        // sourceEndMs - rel * speed), so the window is anchored to the end. The margin sits
-        // *before* the window because the decoded buffer is reversed afterwards.
-        val endMs = track.sourceEndMs
-        return maxOf(0L, endMs - neededMs - AUDIO_WINDOW_MARGIN_MS) to endMs
-    }
-    val startMs = track.sourceStartMs.coerceAtLeast(0L)
-    // A small margin keeps codec priming / frame rounding inside the window.
-    val endMs = minOf(
-        if (hasSourceRange) track.sourceEndMs else Long.MAX_VALUE,
-        startMs + neededMs + AUDIO_WINDOW_MARGIN_MS
-    )
-    return startMs to maxOf(endMs, startMs + 1L)
-}
-
-/** Extra source material decoded past the used window (codec priming / rounding). */
-private const val AUDIO_WINDOW_MARGIN_MS = 250L
-
-/**
- * Per-sample mix gain for one track.
- *
- * Volume keyframes replace the static clip volume (they are the envelope the timeline draws).
- * Fade in/out is applied on top, linearly, matching the preview player. [AudioTrackDescriptor.gainDb]
- * is a separate trim. An empty keyframe list keeps the old `volume * fade` result.
- */
-internal fun exportMixLinearGain(
-    track: AudioTrackDescriptor,
-    relativeFrame: Int,
-    durationFrames: Int,
-    sampleRate: Int
-): Float {
-    if (track.isMuted) return 0f
-    val rate = sampleRate.coerceAtLeast(1)
-    val relativeMs = (relativeFrame.coerceAtLeast(0).toLong() * 1000L) / rate
-    val envelope = com.example.engine.KeyframeInterpolator.interpolateVolume(
-        track.keyframes,
-        relativeMs,
-        track.volume
-    )
-    var fade = 1f
-    val fadeInFrames = ((track.fadeInMs / 1000.0) * rate).toInt()
-    val fadeOutFrames = ((track.fadeOutMs / 1000.0) * rate).toInt()
-    if (fadeInFrames > 0 && relativeFrame < fadeInFrames) {
-        fade *= relativeFrame.toFloat() / fadeInFrames
-    }
-    if (fadeOutFrames > 0 && (durationFrames - relativeFrame) < fadeOutFrames) {
-        fade *= ((durationFrames - relativeFrame).toFloat() / fadeOutFrames).coerceIn(0f, 1f)
-    }
-    val duck = track.duckEnvelope?.gainAt(track.timelineStartMs + relativeMs) ?: 1f
-    return envelope * 10f.pow(track.gainDb / 20f) * fade * duck
-}
-
-/**
- * Grows a PCM byte stream without boxing every sample. The previous
- * `MutableList<Byte>.addAll(chunk.toList())` path allocated tens of millions of
- * boxed Bytes for a few minutes of audio and stalled export at 5% for minutes.
- */
-internal object PcmByteSink {
-  fun create(estimatedBytes: Int): ByteArrayOutputStream {
-    val cap = estimatedBytes.coerceIn(8 * 1024, 256 * 1024 * 1024)
-    return ByteArrayOutputStream(cap)
-  }
-
-  fun estimatedPcmBytes(durationUs: Long, sampleRate: Int, channels: Int): Int {
-    if (durationUs <= 0L || sampleRate <= 0 || channels <= 0) return 1024 * 1024
-    val bytes = (durationUs / 1_000_000.0) * sampleRate * channels * 2.0
-    return bytes.toInt().coerceIn(64 * 1024, 256 * 1024 * 1024)
-  }
-
-  fun append(out: ByteArrayOutputStream, src: ByteBuffer, scratch: ByteArray) {
-    while (src.hasRemaining()) {
-      val n = minOf(scratch.size, src.remaining())
-      src.get(scratch, 0, n)
-      out.write(scratch, 0, n)
-    }
-  }
-
-  fun toLittleEndianShorts(out: ByteArrayOutputStream): ShortArray {
-    val byteArr = out.toByteArray()
-    if (byteArr.isEmpty()) return ShortArray(0)
-    val shortBuf = ByteBuffer.wrap(byteArr).order(ByteOrder.LITTLE_ENDIAN).asShortBuffer()
-    val shorts = ShortArray(shortBuf.remaining())
-    shortBuf.get(shorts)
-    return shorts
-  }
-}
+// The audio-mix maths that used to live here - `softClipSample`, `isPlaceholderCatalogUri`,
+// `isExportableAudioUri`, `audioSourceWindow`, `exportMixLinearGain` and `PcmByteSink` - moved to
+// the pure `AudioMixMath.kt` (same package) so the values that decide what the exported audio
+// sounds like are unit-testable on a plain JVM. `softClipSample` is now `AudioMixMath.softClip`.

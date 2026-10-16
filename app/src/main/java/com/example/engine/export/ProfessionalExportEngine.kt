@@ -331,16 +331,20 @@ data class ProfessionalExportProgress(
   val message: String = "Preparing export",
   val currentFrame: Long = 0L,
   val totalFrames: Long = 0L,
-  val encodeFps: Float = 0f
+  val encodeFps: Float = 0f,
+  /**
+   * Pipeline stage this value describes ([ExportPhase]). The panel shows [ExportPhase.label] next to
+   * the ring, so a stalled export names the stage it is stuck in instead of only its frame count -
+   * the previous release had no way to say anything about the stages before frame 0, which all read
+   * as the 5 % pre-roll floor (see [ExportProgressModel]).
+   */
+  val phase: ExportPhase = ExportPhase.PREPARING,
+  /** Progress inside [phase] (0..1); only the PCM mix and the frame stage report one. */
+  val phaseFraction: Float = 0f
 )
 
-internal object ExportProgressMapping {
-  fun encodingFraction(doneFrames: Long, totalFrames: Long): Float {
-    if (totalFrames <= 0L) return 0.05f
-    val frameFrac = (doneFrames.toFloat() / totalFrames).coerceIn(0f, 1f).coerceAtMost(0.95f)
-    return 0.05f + frameFrac * 0.90f
-  }
-}
+// `ExportProgressMapping` (the frame->ring formula the previous release used) now lives in
+// ExportProgressModel.kt, which owns the whole mapping including the pre-roll stages.
 
 /**
  * Orchestrates one export through the single authoritative pipeline ([AsyncFramePipelineEngine]), then
@@ -353,6 +357,7 @@ class ProfessionalExportEngine(private val context: Context) {
   val progress: StateFlow<ProfessionalExportProgress> = _progress.asStateFlow()
   @Volatile private var cancelled = false
   @Volatile private var activePipeline: AsyncFramePipelineEngine? = null
+  @Volatile private var lastProgressLogMs = 0L
 
   fun cancel() {
     cancelled = true
@@ -384,7 +389,13 @@ class ProfessionalExportEngine(private val context: Context) {
       if (plan.durationMs <= 0L || plan.totalFrames <= 0L) {
         return@withContext Result.failure(IllegalArgumentException("Timeline contains no renderable duration."))
       }
-      _progress.value = ProfessionalExportProgress(ProfessionalExportStage.PREPARING, 0.05f, message = "Prepared ${plan.totalFrames} deterministic output frames")
+      _progress.value = ProfessionalExportProgress(
+        ProfessionalExportStage.PREPARING,
+        ExportProgressModel.FLOOR_FRACTION,
+        message = "Prepared ${plan.totalFrames} deterministic output frames",
+        totalFrames = plan.totalFrames,
+        phase = ExportPhase.PREPARING
+      )
 
       val hasAudio = AudioExportProcessor(context).hasActiveAudio(timeline)
       val pipeline = AsyncFramePipelineEngine(context)
@@ -401,24 +412,53 @@ class ProfessionalExportEngine(private val context: Context) {
             // Encoder output can lag submitted frames by seconds; count submitted work so the
             // ring is not stuck at 5% while the GPU pipeline is already rendering.
             val done = max(encoded, submitted)
-            val mapped = ExportProgressMapping.encodingFraction(done, total)
+            // Which stage the pipeline is in right now. Without this the panel could only ever show
+            // the frame formula, so every pre-roll stage was indistinguishable from "rendering but no
+            // frame yet" - all of them read 5 % (see [ExportPhase]).
+            val phase = pipeline.currentPhase
+            val phaseFraction = pipeline.phaseFraction
+            val mapped = ExportProgressModel.overall(phase, phaseFraction, done, total)
             val fps = pipeline.activePlan?.fps ?: plan.frameRate
             val renderedMs = ((done.toDouble() / max(1, fps)) * 1000L).toLong()
             val wallMs = (System.currentTimeMillis() - renderStartMs).coerceAtLeast(1L)
             val encodeFps = if (wallMs > 0L) (done.toFloat() * 1000f / wallMs.toFloat()) else 0f
             val remainingFrames = (total - done).coerceAtLeast(0L)
-            val etaMs = if (encodeFps > 0.05f) ((remainingFrames / encodeFps) * 1000f).toLong() else null
+            // An ETA exists only while frames are really being produced: during the pre-roll the
+            // honest answer is the stage name, not "Finalizing..." - which is what the reported panel
+            // showed for the whole twenty minutes it was stuck.
+            val etaMs = if (phase.isFrameStage && encodeFps > 0.05f) {
+              ((remainingFrames / encodeFps) * 1000f).toLong()
+            } else {
+              null
+            }
             _progress.value = ProfessionalExportProgress(
-              ProfessionalExportStage.ENCODING_VIDEO,
-              mapped,
+              stage = phase.toExportStage(),
+              fraction = mapped,
               renderedDurationMs = renderedMs,
               estimatedRemainingMs = etaMs,
-              message = "Hardware GPU pipeline: encoded $encoded / $total frames (${((done.toFloat() / max(1L, total)).coerceIn(0f, 1f) * 100).toInt()}% · ${"%.1f".format(encodeFps)} fps)",
+              message = ExportProgressModel.message(phase, phaseFraction, done, total, encodeFps),
               currentFrame = done,
               totalFrames = total,
-              encodeFps = encodeFps
+              encodeFps = encodeFps,
+              phase = phase,
+              phaseFraction = phaseFraction
             )
-            delay(100L)
+            // One heartbeat line every 5 s: an export that is alive keeps writing them, so the device
+            // log of a stalled export ends with the line that says where it stopped.
+            val nowMs = System.currentTimeMillis()
+            if (nowMs - lastProgressLogMs >= 5_000L) {
+              lastProgressLogMs = nowMs
+              ExportDiagnostics.heartbeat(
+                phase = phase,
+                phasePercent = (phaseFraction.coerceIn(0f, 1f) * 100f).toInt(),
+                framesSubmitted = submitted,
+                framesEncoded = encoded,
+                framesTotal = total,
+                elapsedMs = nowMs - renderStartMs,
+                fps = encodeFps
+              )
+            }
+            delay(200L)
           }
         }
         try {
@@ -474,6 +514,15 @@ class ProfessionalExportEngine(private val context: Context) {
     } finally {
       activePipeline = null
     }
+  }
+
+  /** Maps the pipeline's phase onto the coarser UI stage enum (kept for existing callers/UI). */
+  private fun ExportPhase.toExportStage(): ProfessionalExportStage = when (this) {
+    ExportPhase.RENDERING -> ProfessionalExportStage.ENCODING_VIDEO
+    ExportPhase.MIXING_AUDIO -> ProfessionalExportStage.MIXING_AUDIO
+    ExportPhase.OPENING_MUXER, ExportPhase.FINALISING -> ProfessionalExportStage.MUXING
+    ExportPhase.VERIFYING -> ProfessionalExportStage.VERIFYING
+    else -> ProfessionalExportStage.PREPARING
   }
 
   private fun checkCancelled() {

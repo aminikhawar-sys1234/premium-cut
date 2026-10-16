@@ -3168,7 +3168,8 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
             currentFrame = progress.currentFrame.toInt().coerceAtLeast(0),
             totalFrames = progress.totalFrames.toInt().coerceAtLeast(0),
             fps = progress.encodeFps,
-            estimatedRemainingSec = ((progress.estimatedRemainingMs ?: 0L) / 1000L).toInt()
+            estimatedRemainingSec = ((progress.estimatedRemainingMs ?: 0L) / 1000L).toInt(),
+            phaseLabel = progress.phase.label
           )
         }
       }

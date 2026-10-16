@@ -36,6 +36,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
@@ -244,6 +245,80 @@ class AsyncFramePipelineEngine(private val context: Context) {
    */
   var decoderBudgetForTests: Int? = null
 
+  /**
+   * Instrumentation-test seam only: budget overrides for [ExportStallWatchdog], so a test can prove
+   * that a stall is detected and reported without waiting for the production deadlines (which are
+   * generous on purpose). Production never sets it.
+   */
+  var stallBudgetsForTests: Map<ExportPhase, ExportStallWatchdog.Budget>? = null
+
+  /**
+   * Instrumentation-test seam only: parks this long inside a named phase, so the stall watchdog can
+   * be exercised end to end (`AsyncFramePipelineEngine` accepts `phaseStallForTests` like
+   * `<phase>:<ms>`).
+   */
+  var phaseStallForTests: String? = null
+
+  // ---------------------------------------------------------------------------------------------
+  // Observable progress: which stage of the export is running right now, and when it last moved.
+  //
+  // The panel used to have only "encoded N / M frames", which reads 0 for *every* stage before the
+  // first frame - that is why a stalled export was indistinguishable from a slow one. These fields
+  // are the pipeline's side of the fix: the progress job in ProfessionalExportEngine reads them, the
+  // UI shows the phase label, and the stall watchdog judges them.
+  // ---------------------------------------------------------------------------------------------
+
+  /** Stage the export is in right now. */
+  @Volatile var currentPhase: ExportPhase = ExportPhase.PREPARING
+    private set
+
+  /** Progress inside [currentPhase] (0..1); 0 for stages that have nothing to report. */
+  @Volatile var phaseFraction: Float = 0f
+    private set
+
+  /** `System.currentTimeMillis()` when the current phase was entered. */
+  @Volatile var phaseStartedMs: Long = 0L
+    private set
+
+  /** `System.currentTimeMillis()` when the current attempt started. */
+  @Volatile var attemptStartedMs: Long = 0L
+    private set
+
+  /** `System.currentTimeMillis()` of the last observable movement (phase change or phase progress). */
+  @Volatile var lastHeartbeatMs: Long = 0L
+    private set
+
+  /** `System.currentTimeMillis()` when the last frame reached the encoder; 0 while none has. */
+  @Volatile var lastFrameSubmittedMs: Long = 0L
+    private set
+
+  /** `System.currentTimeMillis()` when the encoder last produced a sample; 0 while none has. */
+  @Volatile var lastEncodedSampleMs: Long = 0L
+    private set
+
+  /**
+   * Set when the stall watchdog abandoned the attempt. The export thread reads it and fails with
+   * this exact message (rather than spinning on a worker that will never return).
+   */
+  @Volatile var stallFailure: ExportPipelineException? = null
+    private set
+
+  /** Enters [phase] and resets its fraction. Also the phase-change heartbeat for the watchdog. */
+  private fun enterPhase(phase: ExportPhase, fraction: Float = 0f) {
+    currentPhase = phase
+    phaseFraction = fraction.coerceIn(0f, 1f)
+    val now = System.currentTimeMillis()
+    phaseStartedMs = now
+    lastHeartbeatMs = now
+    ExportDiagnostics.phase(phase, attemptElapsedMs = if (attemptStartedMs > 0L) now - attemptStartedMs else 0L)
+  }
+
+  /** Reports internal progress of the current phase (the PCM mix calls this once per chunk). */
+  private fun reportPhaseFraction(fraction: Float) {
+    phaseFraction = fraction.coerceIn(0f, 1f)
+    lastHeartbeatMs = System.currentTimeMillis()
+  }
+
   fun cancel() {
     userCancelled.set(true)
     currentStop?.set(true)
@@ -275,6 +350,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
         throw ExportPipelineException("Previous GPU export cleanup is still pending; wait or restart the editor.", retryable = false)
       }
       userCancelled.set(false)
+      stallFailure = null
+      lastFrameSubmittedMs = 0L
+      lastEncodedSampleMs = 0L
+      enterPhase(ExportPhase.DEVICE_CHECK)
       val requestedFps = config.frameRate.fps.coerceIn(15, 120)
       val (requestedWidth, requestedHeight) = sizeOverride
         ?.let { (max(2, it.first / 2 * 2)) to (max(2, it.second / 2 * 2)) }
@@ -285,6 +364,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
       // Mix audio on its own thread so encoder/EGL setup is not blocked behind PCM decode
       // (that stall is what left the progress ring at 5% for minutes).
+      //
+      // The mix reports its own progress once per chunk (plus the phase heartbeats below), which is
+      // what makes the panel move through a long project's mix instead of freezing on the pre-roll
+      // floor, and what lets the stall watchdog tell "still mixing" from "stuck mixing".
       var hasAudio = audioProcessor.hasActiveAudio(timeline)
       val mixResult = AtomicReference<ShortArray>(ShortArray(0))
       val mixError = AtomicReference<Throwable?>(null)
@@ -294,7 +377,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
           try {
             mixResult.set(
               runBlocking {
-                audioProcessor.mixTimelineAudio(timeline, durationMs) { userCancelled.get() }
+                audioProcessor.mixTimelineAudio(
+                  timeline = timeline,
+                  totalDurationMs = durationMs,
+                  isCancelled = { userCancelled.get() },
+                  onProgress = { fraction -> reportPhaseFraction(fraction) }
+                )
               }
             )
           } catch (t: Throwable) {
@@ -478,6 +566,158 @@ class AsyncFramePipelineEngine(private val context: Context) {
     )
   }
 
+  /**
+   * Runs one pre-roll step that has no deadline of its own - opening the video encoder, creating the
+   * muxer, starting the audio encoder - with a hard wall-clock budget.
+   *
+   * These are the calls that made the reported export *silent*: `MediaCodec.configure()`,
+   * `createInputSurface()`, `MediaCodec.start()` and `MediaMuxer(...)` are vendor/platform calls with
+   * no timeout of their own, and a device that hangs inside one of them (a driver lock held by
+   * another encoder session, a codec service that never answers) hangs the export thread forever.
+   * Nothing then fails, so nothing is reported - the panel simply keeps the last progress value,
+   * which for every pre-roll stage is the 5 % floor.
+   *
+   * The step therefore runs on its own thread and the export thread waits with a deadline. On
+   * timeout the attempt is abandoned with a message naming the step, tag and codec - the user gets
+   * an error and can retry, instead of a frozen ring. The abandoned worker is deliberately left
+   * alone (interrupting a MediaCodec call is not supported): it keeps one codec instance until the
+   * process exits, which is why a timeout is never retried ([ExportPipelineException.retryable] is
+   * false).
+   */
+  private fun <T> runBoundedStage(
+    label: String,
+    timeoutMs: Long,
+    stalled: () -> ExportPipelineException?,
+    block: () -> T
+  ): T {
+    val executor = Executors.newSingleThreadExecutor { runnable ->
+      Thread(runnable, "AH-Export-$label").apply { isDaemon = true }
+    }
+    val future = executor.submit(java.util.concurrent.Callable { block() })
+    try {
+      val deadlineAt = System.currentTimeMillis() + timeoutMs
+      while (true) {
+        try {
+          return future.get(200, TimeUnit.MILLISECONDS)
+        } catch (_: java.util.concurrent.TimeoutException) {
+          stalled()?.let { throw it }
+          checkUserCancelled()
+          if (System.currentTimeMillis() > deadlineAt) {
+            future.cancel(true)
+            throw ExportPipelineException(
+              "The export is stuck in '$label': the device did not answer within " +
+                "${timeoutMs / 1000}s. The project is untouched, so it can be retried after " +
+                "restarting the editor.",
+              retryable = false
+            )
+          }
+        }
+      }
+    } catch (e: java.util.concurrent.ExecutionException) {
+      throw (e.cause ?: e)
+    } finally {
+      executor.shutdown()
+    }
+  }
+
+  /**
+   * Watches one attempt for the failure the previous release could not see: an export that never
+   * reaches its first frame (or that stops moving after one). See [ExportStallWatchdog] for the rule
+   * and for why the old `swapPending || gpuFrames > encodedFrames` condition could not fire while
+   * zero frames existed.
+   *
+   * The watcher runs on its own daemon thread so it keeps judging the attempt while the export
+   * thread is blocked inside a vendor call, and it leaves the finding in [stallFailure] for that
+   * thread to throw. When the block is a stalled `eglSwapBuffers` - the encoder no longer consuming
+   * - it also stops the encoder, which is the documented way to unblock the producer.
+   */
+  private inner class AttemptWatchdog(
+    private val stop: AtomicBoolean,
+    private val isPaused: () -> Boolean,
+    private val swapPending: AtomicBoolean,
+    private val videoEncoder: () -> MediaCodec?,
+    private val done: AtomicBoolean
+  ) {
+    private val thread = Thread({ run() }, "AH-ExportWatchdog").apply { isDaemon = true }
+
+    fun start() = also { thread.start() }
+
+    fun join(timeoutMs: Long) {
+      done.set(true)
+      runCatching { thread.join(timeoutMs) }
+    }
+
+    private fun run() {
+      while (!done.get()) {
+        try {
+          Thread.sleep(1_000L)
+        } catch (_: InterruptedException) {
+          return
+        }
+        if (done.get()) return
+        val verdict = ExportStallWatchdog.verdict(heartbeat(isPaused, swapPending), stallBudgetsForTests)
+        if (verdict is ExportStallWatchdog.Verdict.Stall) {
+          val failure = ExportPipelineException(verdict.message, retryable = verdict.retryable)
+          if (stallFailure == null) {
+            stallFailure = failure
+            Log.e(
+              tag,
+              "EXPORT_STALL kind=${verdict.kind} phase=${verdict.phase} waitedMs=${verdict.waitedMs} " +
+                "framesSubmitted=${metrics.gpuFrames.get()} framesEncoded=${metrics.encodedFrames.get()} " +
+                "swapPending=${swapPending.get()}: ${verdict.message}"
+            )
+            ExportDiagnostics.stall(verdict)
+          }
+          // Unblock what can be unblocked: a stopped encoder releases the input-surface queue, so a
+          // render thread parked in eglSwapBuffers returns with an error instead of never.
+          runCatching { videoEncoder()?.stop() }.onFailure {
+            Log.w(tag, "Stall abort: encoder stop failed", it)
+          }
+          stop.set(true)
+          return
+        }
+      }
+    }
+  }
+
+  /** Watchdog budget of [phase], with the instrumentation-test override when one is set. */
+  private fun phaseBudget(phase: ExportPhase): ExportStallWatchdog.Budget =
+    stallBudgetsForTests?.get(phase) ?: ExportStallWatchdog.budgetFor(phase)
+
+  /**
+   * Instrumentation-test seam: `"<phase>:<ms>"` parks the export inside [phase] so the stall
+   * watchdog can be exercised on a device without waiting for a real vendor hang.
+   */
+  private fun applyPhaseStall(spec: String) {
+    val (name, millis) = spec.split(':', limit = 2).let { it.first() to (it.getOrNull(1)?.toLongOrNull() ?: 0L) }
+    val phase = ExportPhase.entries.firstOrNull { it.name.equals(name, ignoreCase = true) } ?: return
+    if (millis <= 0L) return
+    Log.w(tag, "Test seam: parking the export in $phase for ${millis}ms")
+    enterPhase(phase)
+    Thread.sleep(millis)
+  }
+
+  /** Current heartbeat of the attempt, as [ExportStallWatchdog] expects it. */
+  private fun heartbeat(
+    isPaused: () -> Boolean,
+    swapPending: AtomicBoolean
+  ): ExportStallWatchdog.Heartbeat {
+    val now = System.currentTimeMillis()
+    return ExportStallWatchdog.Heartbeat(
+      phase = currentPhase,
+      attemptElapsedMs = if (attemptStartedMs > 0L) now - attemptStartedMs else 0L,
+      phaseElapsedMs = if (phaseStartedMs > 0L) now - phaseStartedMs else 0L,
+      phaseProgressAgoMs = now - lastHeartbeatMs,
+      hasPhaseProgress = ExportStallWatchdog.budgetFor(currentPhase).noProgressMs > 0L,
+      framesSubmitted = metrics.gpuFrames.get(),
+      framesEncoded = metrics.encodedFrames.get(),
+      sinceLastFrameSubmittedMs = if (lastFrameSubmittedMs > 0L) now - lastFrameSubmittedMs else -1L,
+      sinceLastEncodedMs = if (lastEncodedSampleMs > 0L) now - lastEncodedSampleMs else -1L,
+      swapPending = swapPending.get(),
+      paused = isPaused()
+    )
+  }
+
   /** One complete export try with its own threads, codecs, EGL context and muxer. */
   private fun runAttempt(
     attemptNo: Int,
@@ -497,6 +737,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
   ): File {
     metrics.reset()
     activePlan = plan
+    fallbackBudget = ExportFallbackBudget()
+    stallFailure = null
+    attemptStartedMs = System.currentTimeMillis()
+    lastFrameSubmittedMs = 0L
+    lastEncodedSampleMs = 0L
+    enterPhase(ExportPhase.LOADING_ASSETS)
     // Wall clock from here to the first encoded frame: the UI shows the preparation state for that
     // whole stretch, so its length is worth a log line (see the "audio-mix" / "preroll" stages).
     val attemptStartMs = System.currentTimeMillis()
@@ -534,6 +780,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
     var encoderInputSurface: Surface? = null
     var muxerCoordinator: MuxerCoordinator? = null
     var drainExecutor: ExecutorService? = null
+    var watchdog: AttemptWatchdog? = null
     val renderStarted = AtomicBoolean(false)
     val renderCompleteLatch = CountDownLatch(1)
 
@@ -549,17 +796,47 @@ class AsyncFramePipelineEngine(private val context: Context) {
         if (!clip.isVideo && clip.uri.isNotBlank()) imageUris.add(clip.uri)
       }
       imageUris.addAll(ChromaKeyResolver.imageBackgroundUris(timeline))
+      var imagesLoaded = 0
+      val imageExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "AH-ImageLoad").apply { isDaemon = true }
+      }
       for (uri in imageUris) {
         try {
-          val bmp = decodeSampledBitmap(context, uri, exportWidth, exportHeight)
+          // Bounded: `openInputStream`/`decodeStream` of a cloud-backed `content://` photo can block
+          // for minutes with no timeout (the same hazard as the still-frame retriever below), and this
+          // loop runs before the first frame - the exact window in which the reported export showed
+          // "0 / 18484 frames" and nothing else. A timed-out image is treated like the failed load the
+          // loop already tolerated (skip + log), never like a reason to hang.
+          val future = imageExecutor.submit(
+            java.util.concurrent.Callable { decodeSampledBitmap(context, uri, exportWidth, exportHeight) }
+          )
+          val bmp = try {
+            future.get(IMAGE_LOAD_DEADLINE_MS, TimeUnit.MILLISECONDS)
+          } catch (_: java.util.concurrent.TimeoutException) {
+            future.cancel(true)
+            Log.e(
+              tag,
+              "Loading image $uri exceeded ${IMAGE_LOAD_DEADLINE_MS}ms; that clip keeps its " +
+                "placeholder background instead of holding up the whole export."
+            )
+            null
+          }
           if (bmp != null) imageBitmaps[uri] = bmp
         } catch (e: Exception) {
           Log.w(tag, "Failed to load image for $uri", e)
         }
+        imagesLoaded++
+        reportPhaseFraction(imagesLoaded.toFloat() / imageUris.size.coerceAtLeast(1))
       }
+      imageExecutor.shutdown()
 
       // 2. Video encoder (surface input). Size is always the plan size — never silently 720p.
-      val opened = openVideoEncoder(plan)
+      enterPhase(ExportPhase.OPENING_ENCODER)
+      val opened = runBoundedStage(
+        label = "opening the video encoder (${plan.width}x${plan.height} ${plan.mime})",
+        timeoutMs = phaseBudget(ExportPhase.OPENING_ENCODER).hardMs,
+        stalled = { stallFailure }
+      ) { openVideoEncoder(plan) }
       videoEncoderRef = opened.codec
       val videoEncoder: MediaCodec = opened.codec
       val surface: Surface = opened.inputSurface
@@ -584,6 +861,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       )
 
       // 3. EGL + GPU composition on the dedicated GL thread, bound to the encoder Surface
+      enterPhase(ExportPhase.INITIALISING_GPU)
       val glInitLatch = CountDownLatch(1)
       glHandler.post {
         try {
@@ -614,15 +892,37 @@ class AsyncFramePipelineEngine(private val context: Context) {
           glInitLatch.countDown()
         }
       }
-      if (!glInitLatch.await(20, TimeUnit.SECONDS)) {
-        throw ExportPipelineException("Timed out initializing the GPU encoder surface (EGL).")
+      val glWaitStartMs = System.currentTimeMillis()
+      while (!glInitLatch.await(1, TimeUnit.SECONDS)) {
+        stallFailure?.let { throw it }
+        checkUserCancelled()
+        if (System.currentTimeMillis() - glWaitStartMs > phaseBudget(ExportPhase.INITIALISING_GPU).hardMs) {
+          throw ExportPipelineException(
+            "Timed out initializing the GPU encoder surface (EGL) after " +
+              "${System.currentTimeMillis() - glWaitStartMs}ms."
+          )
+        }
       }
       failure.get()?.let { throw wrap("GPU initialization failed", it) }
 
       // Audio mix runs in parallel with encoder/EGL setup. Wait here so the 5% screen is not
       // blocked on PCM decode before the GPU pipeline is even opened.
-      if (!mixLatch.await(3, TimeUnit.MINUTES)) {
-        throw ExportPipelineException("Timed out mixing timeline audio.", retryable = false)
+      //
+      // The wait is stall-aware now: the watchdogs below judge the mix phase by its own per-chunk
+      // progress, so a mix that stops moving (a hung decoder, a device thrashing) is reported with
+      // the phase name instead of holding the export thread on a latch forever.
+      enterPhase(ExportPhase.MIXING_AUDIO)
+      val mixWaitStartMs = System.currentTimeMillis()
+      while (!mixLatch.await(1, TimeUnit.SECONDS)) {
+        stallFailure?.let { throw it }
+        checkUserCancelled()
+        val waitedMs = System.currentTimeMillis() - mixWaitStartMs
+        if (waitedMs > phaseBudget(ExportPhase.MIXING_AUDIO).hardMs) {
+          throw ExportPipelineException(
+            "Timed out mixing timeline audio after ${ExportStallWatchdog.seconds(waitedMs)}.",
+            retryable = false
+          )
+        }
       }
       mixError.get()?.let { throw wrap("Audio mix failed", it) }
       val masterPcm = mixResult.get() ?: ShortArray(0)
@@ -638,16 +938,23 @@ class AsyncFramePipelineEngine(private val context: Context) {
       // 4. Audio encoder. If the timeline has audio, failing to encode it is an error, not a silent drop.
       var audioEncoder: MediaCodec? = null
       if (encodeAudio) {
+        enterPhase(ExportPhase.OPENING_AUDIO_ENCODER)
         try {
           val aacFormat = MediaFormat.createAudioFormat(MediaFormat.MIMETYPE_AUDIO_AAC, audioSampleRate, audioChannels).apply {
             setInteger(MediaFormat.KEY_BIT_RATE, 192_000)
             setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
             setInteger(MediaFormat.KEY_MAX_INPUT_SIZE, 16384)
           }
-          audioEncoder = MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC).also {
-            audioEncoderRef = it
-            it.configure(aacFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
-            it.start()
+          audioEncoder = runBoundedStage(
+            label = "starting the AAC audio encoder",
+            timeoutMs = phaseBudget(ExportPhase.OPENING_AUDIO_ENCODER).hardMs,
+            stalled = { stallFailure }
+          ) {
+            MediaCodec.createEncoderByType(MediaFormat.MIMETYPE_AUDIO_AAC).also {
+              audioEncoderRef = it
+              it.configure(aacFormat, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+              it.start()
+            }
           }
         } catch (e: Exception) {
           ExportDiagnostics.configureError(audioEncoderRef?.name, MediaFormat.MIMETYPE_AUDIO_AAC, 0, 0, e)
@@ -658,14 +965,23 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       // 5. Muxer. The GPU compositor already outputs upright pixels, so the container carries no rotation hint
       //    (a hint here would rotate the already-normalised frames a second time).
+      enterPhase(ExportPhase.OPENING_MUXER)
       outputFile.parentFile?.mkdirs()
       if (outputFile.exists()) outputFile.delete()
-      val localMuxer = MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4)
+      val localMuxer = runBoundedStage(
+        label = "creating the MP4 muxer",
+        timeoutMs = phaseBudget(ExportPhase.OPENING_MUXER).hardMs,
+        stalled = { stallFailure }
+      ) { MediaMuxer(outputFile.absolutePath, MediaMuxer.OutputFormat.MUXER_OUTPUT_MPEG_4) }
       val coordinator = MuxerCoordinator(localMuxer, aenc != null, videoMime = plan.mime)
       muxerCoordinator = coordinator
       coordinator.setOrientationHint(ExportOrientationPolicy.MUXER_ORIENTATION_HINT_DEGREES)
 
-      videoEncoder.start()
+      runBoundedStage(
+        label = "starting the video encoder",
+        timeoutMs = phaseBudget(ExportPhase.OPENING_MUXER).hardMs,
+        stalled = { stallFailure }
+      ) { videoEncoder.start() }
 
       // 6. Drain thread: the ONLY consumer of encoder output (video + audio) -> muxer.
       val drainDone = CountDownLatch(1)
@@ -695,6 +1011,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
                 if (vIndex >= 0) {
                   drainedSomething = true
                   lastOutputNs.set(System.nanoTime())
+                  lastEncodedSampleMs = System.currentTimeMillis()
                   val isEos = (vInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
                   try {
                     // CODEC_CONFIG buffers go to the coordinator too: some encoders put the first IDR
@@ -737,6 +1054,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
                 if (aIndex >= 0) {
                   drainedSomething = true
                   lastOutputNs.set(System.nanoTime())
+                  lastEncodedSampleMs = System.currentTimeMillis()
                   val isEos = (aInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
                   try {
                     if ((aInfo.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) == 0 && aInfo.size > 0) {
@@ -1037,6 +1355,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       //    the render loop behaves exactly as before, so the picture never changes - only when the
       //    work happens.
       TrackingHealth.reset()
+      enterPhase(ExportPhase.WARMING_TRACKERS)
       val prewarmStartMs = System.currentTimeMillis()
       runCatching { ExportTrackingPrewarm.warm(timeline, fps) }
         .onFailure { Log.w(tag, "Tracking prewarm failed; the render loop will track per frame", it) }
@@ -1054,7 +1373,16 @@ class AsyncFramePipelineEngine(private val context: Context) {
       )
 
       // Render loop (GL thread): every frame is drawn into the encoder Surface and its swap submits it.
+      enterPhase(ExportPhase.RENDERING)
       renderStarted.set(true)
+      watchdog = AttemptWatchdog(
+        stop = stop,
+        isPaused = isPaused,
+        swapPending = swapPending,
+        videoEncoder = { videoEncoderRef },
+        done = AtomicBoolean(false)
+      ).start()
+      phaseStallForTests?.let { spec -> runCatching { applyPhaseStall(spec) } }
       glHandler.post {
         var renderingFrame = -1L
         try {
@@ -1288,6 +1616,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
             metrics.encodeWaitTimeNs.addAndGet(System.nanoTime() - swapStart)
             metrics.gpuRenderTimeNs.addAndGet(System.nanoTime() - composeStart)
             metrics.gpuFrames.incrementAndGet()
+            // Heartbeat for the stall watchdog and the progress panel: a frame really did reach the
+            // encoder just now.
+            lastFrameSubmittedMs = System.currentTimeMillis()
 
             // 4. Audio, pro-rata with the video position. Cap buffers per frame so a catch-up
             // burst cannot stall the GL/encoder pipeline around the midpoint of a long export.
@@ -1332,17 +1663,25 @@ class AsyncFramePipelineEngine(private val context: Context) {
         }
       }
 
-      // Wait for the render loop; watch for an encoder that stopped consuming frames (swap would block forever).
+      // Wait for the render loop.
+      //
+      // The decision to keep waiting lives in the watchdog ([AttemptWatchdog] /
+      // [ExportStallWatchdog]): it judges the attempt every second whether or not a single frame has
+      // been submitted yet. The inline condition this replaces
+      // (`idleSec > 60 && (swapPending || framesSubmitted > framesEncoded)`) could not fire at all
+      // while zero frames existed, which is exactly the state the reported export was stuck in - the
+      // loop then spun forever and the panel kept displaying the last value it had, 5 %.
       while (!renderCompleteLatch.await(1, TimeUnit.SECONDS)) {
         failure.get()?.let { throw wrap("Pipeline worker failed", it) }
         checkUserCancelled()
+        stallFailure?.let { throw it }
         if (stop.get()) throw CancellationException("Export stopped")
-        val idleSec = (System.nanoTime() - lastOutputNs.get()) / 1_000_000_000L
-        if (idleSec > 60 && (swapPending.get() || metrics.gpuFrames.get() > metrics.encodedFrames.get())) {
-          throw ExportPipelineException("The video encoder stopped producing output for ${idleSec}s (frames submitted=${metrics.gpuFrames.get()}, encoded=${metrics.encodedFrames.get()}).")
-        }
       }
       failure.get()?.let { throw wrap("Rendering failed", it) }
+      // The watchdog's verdict is the real reason whenever it fired: without this, the abort (which
+      // sets `stop`) would be reported as a user cancellation and the device log would lose the
+      // only line that says what was stuck.
+      stallFailure?.let { throw it }
       checkUserCancelled()
       if (stop.get()) throw CancellationException("Export cancelled")
 
@@ -1379,13 +1718,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
 
       // 10. Wait until the encoders have emitted their own EOS and the drain thread consumed everything.
+      //     Own phase: the panel says so (this is the "Finalizing..."-forever row of the report) and
+      //     the watchdog judges it by its own budget instead of the frame clock.
+      enterPhase(ExportPhase.FINALISING)
       while (!drainDone.await(1, TimeUnit.SECONDS)) {
+        stallFailure?.let { throw it }
         if (stop.get()) break
         val idleSec = (System.nanoTime() - lastOutputNs.get()) / 1_000_000_000L
         if (idleSec > 30) {
           throw ExportPipelineException("The encoder did not finish after end of stream (video EOS=${videoEos.get()}, audio EOS=${audioEos.get()}, idle ${idleSec}s).")
         }
       }
+      stallFailure?.let { throw it }
       failure.get()?.let { throw wrap("Encoding failed", it) }
       checkUserCancelled()
       if (stop.get()) throw CancellationException("Export cancelled")
@@ -1446,7 +1790,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       Log.i(
         tag,
         "Export performance: ${wallMs}ms for ${durationMs}ms of video " +
-          "(${"%.2f".format(realtimeSpeed)}x realtime) | ${metrics.describe()}"
+          "(${String.format(Locale.US, "%.2f", realtimeSpeed)}x realtime) | ${metrics.describe()}"
       )
       ExportDiagnostics.finished(outputFile.absolutePath, exportWidth, exportHeight, durationMs, outputFile.length())
       return outputFile
@@ -1454,6 +1798,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
       stop.set(true)
       cleanupPending.set(true)
       currentStop = null
+      watchdog?.join(2_000L)
       // Do not free a codec/muxer under its consumer or an input surface under eglSwapBuffers.
       drainExecutor?.shutdown()
       val drainStopped = drainExecutor?.awaitTermination(5, TimeUnit.SECONDS) ?: true
@@ -1482,6 +1827,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
           cleanup("unbind EGL") { eglCore?.makeNothingCurrent() }
           cleanup("EGL surface") { windowSurface?.release() }
           cleanup("EGL context") { eglCore?.release() }
+          cleanup("still-frame worker") { fallbackExecutor?.shutdownNow() }
+          fallbackExecutor = null
           fallbackRetrievers.values.forEach { retriever -> cleanup("retriever") { retriever.release() } }
           fallbackRetrievers.clear()
           imageBitmaps.values.forEach { bitmap -> cleanup("bitmap") { bitmap.recycle() } }
@@ -1501,8 +1848,16 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
       if (!cleanLatch.await(10, TimeUnit.SECONDS) || !renderStopped || !drainStopped) {
         // No fallback attempt may reuse shared decoder/retriever state while cleanup is pending.
-        Log.e(tag, "Export teardown timed out; cleanup deferred on render thread, retries disabled")
-        throw ExportPipelineException("GPU/codec teardown timed out; export aborted safely. Check Logcat for the stalled worker.", retryable = false)
+        Log.e(
+          tag,
+          "Export teardown timed out; cleanup deferred on render thread, retries disabled " +
+            "(renderStopped=$renderStopped drainStopped=$drainStopped phase=$currentPhase)"
+        )
+        throw ExportPipelineException(
+          "GPU/codec teardown timed out after the export was in '${currentPhase.label}' " +
+            "(${currentPhase.detail}); export aborted safely. Check Logcat for the stalled worker.",
+          retryable = false
+        )
       }
     }
   }
@@ -1599,7 +1954,29 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
   private val fallbackRetrievers = mutableMapOf<String, MediaMetadataRetriever>()
 
+  /**
+   * Policy of the still-frame fallback for the current attempt (see [ExportFallbackBudget]): every
+   * retriever call gets a deadline, and the first call that overruns it retires the retriever for
+   * that clip - a `MediaMetadataRetriever` that hung once will hang again, and the render loop is the
+   * one thread that must keep the encoder fed.
+   */
+  private var fallbackBudget: ExportFallbackBudget = ExportFallbackBudget()
+
+  companion object {
+    /**
+     * Deadline for loading one still image/sticker of the project. A local image loads in
+     * milliseconds; a file that needs 20 s is a cloud-backed or damaged asset, and waiting for the
+     * provider is not something the export can succeed at.
+     */
+    private const val IMAGE_LOAD_DEADLINE_MS = 20_000L
+  }
+
+  /** One worker for retriever calls, so a hung call can be abandoned without blocking the GL thread. */
+  private var fallbackExecutor: ExecutorService? = null
+
   private fun fetchFallbackBitmap(clip: VideoClip, sourcePosMs: Long, maxW: Int, maxH: Int): Bitmap? {
+    val budget = fallbackBudget
+    if (!budget.mayUse(clip.id)) return null
     val startedNs = System.nanoTime()
     if (metrics.fallbackFrames.incrementAndGet() == 1L) {
       Log.w(
@@ -1608,8 +1985,42 @@ class AsyncFramePipelineEngine(private val context: Context) {
           "MediaMetadataRetriever still-frame extraction for this clip (much slower per frame)."
       )
     }
-    try {
-      return extractFallbackBitmap(clip, sourcePosMs, maxW, maxH)
+    val executor = fallbackExecutor ?: Executors.newSingleThreadExecutor { runnable ->
+      Thread(runnable, "AH-StillFrame").apply { isDaemon = true }
+    }.also { fallbackExecutor = it }
+    val future = executor.submit(java.util.concurrent.Callable { extractFallbackBitmap(clip, sourcePosMs, maxW, maxH) })
+    return try {
+      val bitmap = future.get(budget.perCallDeadlineMs, TimeUnit.MILLISECONDS)
+      budget.recordCall(clip.id, (System.nanoTime() - startedNs) / 1_000_000L, timedOut = false)
+      if (budget.isSlowPath(clip.id) && budget.callsFor(clip.id) == budget.slowPathWarningCalls) {
+        Log.w(
+          tag,
+          "Still-frame extraction has produced ${budget.callsFor(clip.id)} frames of '${clip.name}' " +
+            "(${budget.timeSpentMs(clip.id)}ms so far): this export decodes that clip one still frame " +
+            "at a time, which is why it runs far slower than realtime."
+        )
+      }
+      bitmap
+    } catch (_: java.util.concurrent.TimeoutException) {
+      future.cancel(true)
+      val retired = budget.recordCall(clip.id, budget.perCallDeadlineMs, timedOut = true)
+      // The worker is inside native code and cannot be interrupted. Drop the executor so a later
+      // clip's retriever call is not queued behind it; the clip itself is retired below.
+      runCatching { fallbackExecutor?.shutdownNow() }
+      fallbackExecutor = null
+      Log.e(
+        tag,
+        "Still-frame extraction timed out after ${budget.perCallDeadlineMs}ms for '${clip.name}' " +
+          "(${clip.uri}) at ${sourcePosMs}ms; " +
+          (if (retired) "the retriever is retired for this clip for the rest of this attempt"
+           else "this clip is already retired") +
+          ". Export continues with the layers it can decode."
+      )
+      null
+    } catch (t: Throwable) {
+      budget.recordCall(clip.id, (System.nanoTime() - startedNs) / 1_000_000L, timedOut = false)
+      Log.w(tag, "Still-frame extraction failed for ${clip.uri}", t)
+      null
     } finally {
       metrics.fallbackTimeNs.addAndGet(System.nanoTime() - startedNs)
     }

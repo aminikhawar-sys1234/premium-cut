@@ -5,6 +5,10 @@
 # ML Kit / Media3. In a sandbox that has none of those, this script still executes the real test files
 # against the real production sources - the only difference is the JUnit runner and a `kotlinc` binary.
 #
+# Two `android.graphics` types are supplied as shape-only stubs by the harness itself
+# (kotlin_logic/AndroidGraphicsStubs.kt), because a couple of otherwise pure production files merely
+# mention them. See that file's warning: the stubs add no behaviour and no test may rely on them.
+#
 # Requirements: a JDK 17+ and kotlinc 2.x on PATH (or $KOTLINC / $JAVA_HOME pointing at them).
 #   java   -> $JAVA_HOME/bin/java
 #   kotlinc-> $KOTLINC (default: `kotlinc` from PATH)
@@ -49,6 +53,36 @@ SOURCES=(
   "$MAIN/com/example/engine/export/TrackingHealth.kt"
   "$MAIN/com/example/engine/export/TrackingPrewarmPlan.kt"
   "$MAIN/com/example/engine/export/ExportOrientationPolicy.kt"
+  # The export's stall/progress model and the chunked PCM mix - the two pieces of this patch whose
+  # arithmetic decides what the panel shows and what the mix sounds like. They use no android.* at
+  # all, which is the point: the numbers can be executed here.
+  "$MAIN/com/example/engine/export/ExportProgressModel.kt"
+  "$MAIN/com/example/engine/export/ExportStallWatchdog.kt"
+  "$MAIN/com/example/engine/export/ExportFallbackBudget.kt"
+  # The chunked PCM mix, and the whole closure it reaches: `AudioTrackDescriptor` (AudioMixMath.kt)
+  # carries an `AutoDucking.DuckEnvelope`; AutoDucking reads `PreviewMixPolicy`; that calls
+  # `KeyframeInterpolator`; which calls `OverlayTrackCodec` -> `MotionTrackingModels` / the keyframe
+  # evaluator. The only non-pure hop is `android.graphics.RectF` / `Matrix`, which the harness stubs.
+  "$MAIN/com/example/engine/controller/PreviewMixPolicy.kt"
+  "$MAIN/com/example/engine/KeyframeInterpolator.kt"
+  "$MAIN/com/example/engine/motion/ClipMotionEngine.kt"
+  "$MAIN/com/example/engine/audio/AutoDucking.kt"
+  "$MAIN/com/example/engine/audio/PitchSafeStretch.kt"
+  "$MAIN/com/example/engine/ai/MotionTrackingModels.kt"
+  "$MAIN/com/example/engine/ai/MotionTrackingEvaluator.kt"
+  "$MAIN/com/example/engine/ai/MotionTrackCodec.kt"
+  "$MAIN/com/example/engine/ai/OverlayTrackBinding.kt"
+  "$MAIN/com/ahstudio/animation/math/AnimMath.kt"
+  "$MAIN/com/ahstudio/animation/easing/Easing.kt"
+  "$MAIN/com/ahstudio/animation/keyframes/Keyframe.kt"
+  "$MAIN/com/ahstudio/animation/keyframes/KeyframeTrackData.kt"
+  "$MAIN/com/ahstudio/animation/keyframes/KeyframeEvaluator.kt"
+  "$MAIN/com/ahstudio/animation/expression/ExpressionLanguage.kt"
+  "$MAIN/com/ahstudio/animation/procedural/Procedural.kt"
+  "$MAIN/com/ahstudio/animation/rig/Rig.kt"
+  "$MAIN/com/example/engine/export/AudioMixMath.kt"
+  "$MAIN/com/example/engine/export/AudioMixPlan.kt"
+  "$MAIN/com/example/engine/export/TimelineAudioMixer.kt"
   "$MAIN/com/example/engine/composition/gpu/GpuShaders.kt"
   "$MAIN/com/ahstudio/color/primary/PipelineConsts.kt"
   "$MAIN/com/ahstudio/color/gpu/ColorShaderSource.kt"
@@ -60,6 +94,13 @@ SOURCES=(
   "$TEST/com/example/engine/export/TrackingHealthTest.kt"
   "$TEST/com/example/engine/export/TrackingPrewarmPlanTest.kt"
   "$TEST/com/example/engine/export/ExportOrientationPolicyTest.kt"
+  "$TEST/com/example/engine/export/ExportProgressModelTest.kt"
+  "$TEST/com/example/engine/export/ExportStallWatchdogTest.kt"
+  "$TEST/com/example/engine/export/ExportFallbackBudgetTest.kt"
+  "$TEST/com/example/engine/export/AudioMixPlanTest.kt"
+  "$TEST/com/example/engine/export/TimelineAudioMixerTest.kt"
+  "$TEST/com/example/engine/export/AudioExportWindowTest.kt"
+
   "$TEST/com/example/engine/composition/gpu/GpuSamplerContractTest.kt"
   "$TEST/com/ahstudio/color/gpu/ColorVariantShaderContractTest.kt"
   "$TEST/com/example/engine/composition/ChromaKeyMathTest.kt"
@@ -70,6 +111,7 @@ SOURCES=(
   "$TEST/com/example/engine/ai/cutout/MaskDecodingTest.kt"
   "$TEST/com/example/engine/preview/PreviewCompositionPolicyTest.kt"
   # harness
+  "$HARNESS/AndroidGraphicsStubs.kt"
   "$HARNESS/JUnitShim.kt"
   "$HARNESS/TestRunner.kt"
 )
@@ -101,4 +143,11 @@ echo "== running tests"
   com.example.engine.export.TrackingPrewarmPlanTest \
   com.example.engine.export.ExportOrientationPolicyTest \
   com.example.engine.composition.gpu.GpuSamplerContractTest \
-  com.ahstudio.color.gpu.ColorVariantShaderContractTest
+  com.ahstudio.color.gpu.ColorVariantShaderContractTest \
+  com.example.engine.export.ExportProgressModelTest \
+  com.example.engine.export.ExportStallWatchdogTest \
+  com.example.engine.export.ExportFallbackBudgetTest \
+  com.example.engine.export.AudioMixPlanTest \
+  com.example.engine.export.TimelineAudioMixerTest \
+  com.example.engine.export.AudioExportWindowTest \
+
