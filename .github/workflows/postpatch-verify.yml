@@ -410,17 +410,46 @@ jobs:
                   out += ["", "_gradle-connected.log was not produced_"]
 
           report = "\n".join(out) + "\n"
+
           # A GitHub comment body is capped at 65536 characters and the publish job cats this file
-          # into one. If the report is too long, drop the measured-pixel block first: the same
-          # stdout travels inside the device-log section, which is the section that carries the
-          # engine's own failure lines.
-          if len(report) > 56000:
-              marker = "### Measured pixels"
-              idx = report.find(marker)
-              if idx >= 0:
-                  report = report[:idx] + marker + " (dropped to keep the comment postable)\n"
-          if len(report) > 56000:
-              report = report[:56000] + "\n\n_report truncated at 56000 characters_\n"
+          # into one. Shrink the *largest* section at a time, never by cutting the document short:
+          # an earlier version of this code dropped everything after the first long block, which
+          # silently removed the measured pixels, the export measurements and the engine log from
+          # the comment while the run itself was green.
+          COMMENT_BUDGET = 54000
+
+          def find_section(doc, title):
+              start = doc.find(title)
+              if start < 0:
+                  return None
+              newline = doc.find("\n", start)
+              if newline < 0:
+                  return None
+              end = doc.find("\n### ", newline)
+              return start, newline, (len(doc) if end < 0 else end)
+
+          def shrink_section(doc, title, keep_chars):
+              where = find_section(doc, title)
+              if not where:
+                  return doc
+              start, newline, end = where
+              body = doc[newline:end]
+              if len(body) <= keep_chars:
+                  return doc
+              head = body[: keep_chars // 2]
+              tail = body[-(keep_chars - keep_chars // 2):]
+              return doc[:newline] + head + "\n... [section truncated to fit the comment] ...\n" + tail + doc[end:]
+
+          # Biggest, most redundant first: the scraped stdout repeats what the export-measurements
+          # and device-log sections already carry.
+          for title, keep in (("### Measured pixels", 1500), ("### Device log", 6000),
+                              ("### Export measurements", 6000), ("### Failing device cases", 6000),
+                              ("### Failing cases", 4000)):
+              if len(report) <= COMMENT_BUDGET:
+                  break
+              report = shrink_section(report, title, keep)
+          if len(report) > 62000:
+              report = report[:62000] + "\n\n_report truncated at 62000 characters_\n"
           open("device-report.md", "w").write(report)
           PY
 
