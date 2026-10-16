@@ -236,6 +236,10 @@ jobs:
             # command line of the sh that runs it, so it killed its own parent (exit code null).
             # Hence no background process here: logcat is dumped with -d after the run.
             adb shell "getprop ro.build.version.sdk; getprop ro.hardware.egl" || true
+            # The default ring buffer evicts the beginning of a 25-minute instrumented run, and the
+            # export tests print their measurements as they go (System.out) - a 16 MB buffer keeps
+            # the whole run readable, which is how the complex-project numbers reach the report.
+            adb logcat -G 16M || true
             adb logcat -c || true
             ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue > gradle-connected.log 2>&1; echo $? > gradle-exit.txt
             adb logcat -d -v brief > logcat.txt 2>/dev/null || true
@@ -315,6 +319,41 @@ jobs:
                           "\n".join(scraped)[:30000], "```"]
               else:
                   out += ["", "`look-verification.txt` was not produced and the device stdout was empty."]
+          # The export tests print one line per measured fact. Those lines are the deliverable
+          # (they are what "the MP4 is valid and visually correct" is checked against), so they get
+          # their own section instead of competing with the engine log for characters.
+          measurements = []
+          for source in ("logcat.txt",):
+              if not os.path.exists(source):
+                  continue
+              with open(source, errors="replace") as handle:
+                  for raw in handle:
+                      line = raw.rstrip("\n")
+                      if "System.out" in line and "): " in line:
+                          line = line.split("): ", 1)[1]
+                      if any(
+                          marker in line
+                          for marker in (">>> START", " took ", "validation:", "dimensions:",
+                                         "frames:", "export delta", "report written", "==", "EXPECT",
+                                         "skipped on this device", "detected", "luma")
+                      ):
+                          measurements.append(line.strip())
+          # logcat is newest-last; the report is a narrative, so keep it in run order and drop the
+          # noisy colour-pipeline duplicates.
+          deduped, seen = [], set()
+          for line in measurements:
+              if not line or line in seen:
+                  continue
+              seen.add(line)
+              deduped.append(line)
+          if deduped:
+              body = "\n".join(deduped)
+              window = body if len(body) <= 20000 else (
+                  body[:6000] + "\n... [measurements truncated] ...\n" + body[-14000:]
+              )
+              out += ["", "### Export measurements (printed by the tests as they ran)", "", "```",
+                      window, "```"]
+
           # Filtered logcat: the engine names its failures there (`HwVideoTextureSource`,
           # `AsyncFramePipeline`, decoder/EGL/muxer lines), and the artifact zip that holds the full
           # log is not downloadable from the reviewing workstation, so the decisive lines travel in
