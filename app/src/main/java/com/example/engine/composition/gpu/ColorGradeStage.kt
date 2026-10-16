@@ -26,6 +26,7 @@ class ColorGradeStage {
   private var adapter: CompositionColorAdapter? = null
   private val cfg = ColorConfig(inputMetadata = InputColorMetadata.fallback())
   private var disabled = false
+  private var loggedDrawError = false
 
   fun grade(clipId: String?, timeMs: Long, srcTex: Int, width: Int, height: Int): Int {
     if (disabled || clipId == null || srcTex <= 0 || width <= 0 || height <= 0) return srcTex
@@ -51,9 +52,30 @@ class ColorGradeStage {
       GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
       val a = adapter ?: CompositionColorAdapter(engine, renderer).also { adapter = it }
       val frame = ColorFrame(srcTex, GLES20.GL_TEXTURE_2D, width, height, 0L, InputColorMetadata.fallback())
+      // Drain errors left behind by earlier stages so a failure below is attributed correctly.
+      var pendingGuard = 0
+      while (GLES20.glGetError() != GLES20.GL_NO_ERROR && pendingGuard++ < 16) { /* drain */ }
       // flipY = 0: FBO texture -> FBO texture keeps the compositor's orientation.
       a.gradeClip(clipId, timeMs, frame, fbo.getFboId(), cfg, flipY = 0f)
-      fbo.getTextureId()
+      // A GL error here means the grade draw was dropped (e.g. GL_INVALID_OPERATION from a
+      // sampler conflict): the FBO texture was never written and returning it would hand a BLACK
+      // frame to the compositor/encoder. Honour the stage contract instead: log and pass the
+      // ungraded picture through for this frame. Not a permanent disable — the cause can be
+      // transient (a LUT that finishes loading a moment later).
+      var glError = GLES20.glGetError()
+      if (glError != GLES20.GL_NO_ERROR) {
+        var guard = 0
+        var last = glError
+        while (last != GLES20.GL_NO_ERROR && guard++ < 16) last = GLES20.glGetError()
+        if (!loggedDrawError) {
+          loggedDrawError = true
+          Log.e("ColorGradeStage", "Colour grade draw raised GL error 0x${Integer.toHexString(glError)} " +
+            "for clip=$clipId; passing the ungraded frame through (logged once)")
+        }
+        srcTex
+      } else {
+        fbo.getTextureId()
+      }
     } catch (t: Throwable) {
       Log.e("ColorGradeStage", "Colour grade failed; passing frames through", t)
       disabled = true
@@ -77,6 +99,7 @@ class ColorGradeStage {
     fbo.release()
     adapter = null
     disabled = false
+    loggedDrawError = false
   }
 
   fun release() {

@@ -63,23 +63,31 @@ class ColorShaderManager {
 
     fun getProgram(key: VariantKey): Program {
         cache[key]?.let { return it }
-        val sb = StringBuilder()
-        if (key.externalTex) sb.append("#define TEXTURE_EXTERNAL\n")
-        if (key.hasCurves) sb.append("#define HAS_CURVES\n")
-        if (key.hasHsl) sb.append("#define HAS_HSL\n")
-        if (key.hasWheels) sb.append("#define HAS_WHEELS\n")
-        if (key.hasLut3d) sb.append("#define HAS_LUT3D\n")
-        if (key.hasLut2d) sb.append("#define HAS_LUT2D\n")
-        if (key.hasSplit) sb.append("#define HAS_SPLIT\n")
-        if (key.hasBw) sb.append("#define HAS_BW\n")
-        if (key.secCount > 0) sb.append("#define SEC_COUNT ${key.secCount}\n")
-        if (key.secMask) sb.append("#define SEC_HAS_MASK\n")
-        if (key.lutBefore) sb.append("#define LUT_BEFORE\n") else sb.append("#define LUT_AFTER\n")
-        if (key.rangeExpand) sb.append("#define RANGE_EXPAND\n")
-        if (key.hdrOutput) sb.append("#define HDR_OUTPUT\n")
+        // The #define block is built by pure, JVM-tested code: the shader tests most flags BY
+        // VALUE (`#if HAS_CURVES`, `#if LUT_AFTER && (HAS_LUT3D || HAS_LUT2D)`), so every
+        // value-tested flag must carry an explicit 0/1 in EVERY variant. The previous valueless
+        // `#define HAS_CURVES` style made `#if LUT_AFTER && (...)` expand to `#if && (...)` — a
+        // guaranteed preprocessor error in every variant — so no colour-grade shader ever
+        // compiled and ColorGradeStage silently disabled itself for preview and export.
+        // See ColorShaderSource.variantDefines and ColorVariantShaderContractTest.
+        val defines = ColorShaderSource.variantDefines(
+            externalTex = key.externalTex,
+            hasCurves = key.hasCurves,
+            hasHsl = key.hasHsl,
+            hasWheels = key.hasWheels,
+            hasLut3d = key.hasLut3d,
+            hasLut2d = key.hasLut2d,
+            hasSplit = key.hasSplit,
+            hasBw = key.hasBw,
+            secCount = key.secCount,
+            secMask = key.secMask,
+            lutBefore = key.lutBefore,
+            rangeExpand = key.rangeExpand,
+            hdrOutput = key.hdrOutput
+        )
 
         val vs = compile(GLES30.GL_VERTEX_SHADER, ColorShaderSource.VERT)
-        val fs = compile(GLES30.GL_FRAGMENT_SHADER, ColorShaderSource.fragment(sb.toString()))
+        val fs = compile(GLES30.GL_FRAGMENT_SHADER, ColorShaderSource.fragment(defines))
         val prog = GLES30.glCreateProgram()
         GLES30.glAttachShader(prog, vs)
         GLES30.glAttachShader(prog, fs)

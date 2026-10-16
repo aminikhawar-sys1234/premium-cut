@@ -19,13 +19,60 @@ void main() {
 }
 """
 
+    /**
+     * Builds the #define block for one shader variant.
+     *
+     * PREPROCESSOR CONTRACT: the fragment shader tests most flags BY VALUE (`#if HAS_CURVES`,
+     * `#if LUT_AFTER && (HAS_LUT3D || HAS_LUT2D)`, `#if SEC_COUNT > 0`), so every value-tested
+     * flag must be defined with an explicit 0/1 (SEC_COUNT: 0/1/2) in EVERY variant: a valueless
+     * `#define HAS_CURVES` makes `#if HAS_CURVES` an empty (invalid) expression, and an undefined
+     * flag inside `#if` is an error on strict GLSL ES preprocessors (GLSL ES 3.0 §3.4). Only
+     * TEXTURE_EXTERNAL and HDR_OUTPUT are presence-tested (`#ifdef`) and are emitted conditionally.
+     * Pure Kotlin so the JVM contract test can preprocess every variant.
+     */
+    fun variantDefines(
+        externalTex: Boolean,
+        hasCurves: Boolean,
+        hasHsl: Boolean,
+        hasWheels: Boolean,
+        hasLut3d: Boolean,
+        hasLut2d: Boolean,
+        hasSplit: Boolean,
+        hasBw: Boolean,
+        secCount: Int,
+        secMask: Boolean,
+        lutBefore: Boolean,
+        rangeExpand: Boolean,
+        hdrOutput: Boolean
+    ): String {
+        val sb = StringBuilder()
+        fun flag(name: String, on: Boolean) = sb.append("#define $name ${if (on) 1 else 0}\n")
+        if (externalTex) sb.append("#define TEXTURE_EXTERNAL\n")
+        flag("HAS_CURVES", hasCurves)
+        flag("HAS_HSL", hasHsl)
+        flag("HAS_WHEELS", hasWheels)
+        flag("HAS_LUT3D", hasLut3d)
+        flag("HAS_LUT2D", hasLut2d)
+        flag("HAS_SPLIT", hasSplit)
+        flag("HAS_BW", hasBw)
+        sb.append("#define SEC_COUNT $secCount\n")
+        flag("SEC_HAS_MASK", secMask)
+        flag("LUT_BEFORE", lutBefore)
+        flag("LUT_AFTER", !lutBefore)
+        flag("RANGE_EXPAND", rangeExpand)
+        if (hdrOutput) sb.append("#define HDR_OUTPUT\n")
+        return sb.toString()
+    }
+
     fun fragment(defines: String): String = """#version 300 es
-precision highp float;
 $defines
+#ifdef TEXTURE_EXTERNAL
+#extension GL_OES_EGL_image_external_essl3 : require
+#endif
+precision highp float;
 ${com.ahstudio.color.primary.PipelineConsts.glslDefines()}
 
 #ifdef TEXTURE_EXTERNAL
-#extension GL_OES_EGL_image_external_essl3 : require
 uniform samplerExternalOES uInput;
 #else
 uniform sampler2D uInput;

@@ -151,3 +151,129 @@ so the caller takes the legacy single-texture path instead of blanking the frame
 (`ExportBlackFrameGuardTest`, also compiled by `toolchain/verify/run_logic_tests.sh`).
 `toolchain/verify/verify_black_frame_recovery.py` is the drift guard for the
 Kotlin/C++ contract above (60 checks) for sandboxes without Gradle/NDK.
+
+## Root cause found: GLES sampler-type conflict in the OES programs (0x502, all frames black)
+
+The previous repair made a black export *detectable and retryable*, but the device
+kept producing one on **both** attempts:
+
+```
+Every sampled frame of the export came out black (6/6 readable probes up to frame
+1011 of 2022; layers=1 texture=6 compositor=kotlin glErrors=[0x502]). Export
+stopped instead of muxing a black video.
+```
+
+Reading that signature precisely: the Kotlin compositor ran (`compositor=kotlin`,
+so this was already the retry without the native engine), it composited exactly
+the base video layer (`layers=1`) into a real texture (`texture=6`), the encoder
+back buffer was genuinely black at every readable probe, and exactly **one**
+`GL_INVALID_OPERATION` (0x502) was raised per frame. One failing draw per frame,
+on a path shared by the native-compositor attempt and the Kotlin retry, upstream
+of composition. That is the OES→2D conversion pass.
+
+**Root cause.** `GpuShaders.buildFragmentShader(isOes = true)` links a program
+with two samplers of *different types*:
+
+- `uniform samplerExternalOES uTexture` — the decoder frame, assigned to unit 0;
+- `uniform sampler2D uChromaBgTex` — the chroma-key background.
+
+A freshly linked program starts **every** sampler uniform at texture unit 0, and
+`bindCommonUniforms` assigned `uChromaBgTex` to its own unit (2) **only when the
+chroma key was enabled**. For every ordinary video frame — no key, no effects —
+the program therefore had a `samplerExternalOES` and a `sampler2D` both pointing
+at texture unit 0. The GLES 2.0 (§2.10.5) and 3.0 (§2.11.9) specifications define
+exactly that state as a draw-time validation failure: `glDrawArrays` raises
+`GL_INVALID_OPERATION` and writes **no fragments**. On spec-enforcing drivers
+(newer Adreno, ANGLE, SwiftShader) `processMainVideoTo2D` therefore left
+`fboMain2D` cleared — transparent black — on every frame. Both compositors then
+faithfully composited that black layer (which is why `layers=1` and a valid
+`texture` id looked healthy), the blit faithfully copied it, and every probe read
+black. Lenient drivers sample the conflict anyway, which is why the bug was
+device-dependent and survived the earlier audits.
+
+**Fix** (`GpuCompositionRenderer`):
+
+- `bindChromaBackgroundSampler(program, textureId)` now pins `uChromaBgTex` to
+  texture unit 2 on **every** draw, chroma key on or off, and is called
+  unconditionally from `bindCommonUniforms`. With the key off, unit 2 holds the
+  default 2D texture — legal, and never sampled while `uChromaBgType != 2`.
+- Targeted draw diagnostics: `checkDrawErrors(site, program, target, textureId)`
+  runs after the OES→2D conversions, each Kotlin-compositor layer, the
+  post-process passes and the encoder blit. On the first failing draw of a frame
+  it records the site, thread, current EGL context, framebuffer binding and
+  completeness, texture target/id and the program's link/**validate** status
+  (`glValidateProgram` checks the *live* sampler state, so it names exactly this
+  class of failure), logs it once per site, and attaches it to
+  `RenderReport.glErrorDetail` — which `describe()` includes, so the abort
+  message of any future black export pinpoints the failing draw instead of only
+  reporting `glErrors=[0x502]`.
+
+The black-frame validation itself is unchanged: in-flight probes
+(`ExportBlackFrameGuard`) and the post-mux decoded-frame gate
+(`ExportValidator.checkDecodedFrames`) still reject an all-black file.
+
+**Verification:**
+
+- `toolchain/verify/verify_gl_sampler_contract.py` (19 checks) — drift guard for
+  the sampler set of the OES program, the unconditional unit-2 binding and the
+  draw diagnostics.
+- `GpuSamplerContractTest` (JVM, also in `toolchain/verify/run_logic_tests.sh`)
+  pins the exact sampler sets of both shader variants so a new sampler cannot be
+  added without revisiting unit assignments.
+- `OesSamplerRegressionInstrumentedTest` (device/emulator, real GLES) feeds a
+  real OES `SurfaceTexture` frame through the production
+  `GpuCompositionRenderer.render` with the chroma key **disabled** and asserts
+  zero GL errors and non-black read-back pixels of the painted colour — the
+  exact pre-fix failure — plus the keyed path still compositing. It runs in the
+  `postpatch-verify.yml` device job, whose SwiftShader GLES is spec-enforcing.
+- The existing real-export suites (`CompositionRegressionInstrumentedTest`,
+  `ExportLookPersistenceInstrumentedTest`) remain the decoded-MP4 proof that
+  plain, filtered and adjusted exports contain the expected pictures.
+
+## Colour-grade pipeline sweep (same 0x502 class + variants that never compiled)
+
+A systematic sweep of every shader-bearing file (36 files) for the sampler-conflict class found
+the remaining offenders concentrated in the colour-grade pipeline, which `GpuCompositionRenderer`
+runs on the export path through `ColorGradeStage` for any clip with a grade:
+
+- **`uLut3d` bound only when the LUT data was loaded.** The shader variant is keyed on the
+  *state* (`state.lut` valid ⇒ `HAS_LUT3D`, so the program declares and samples
+  `uniform sampler3D uLut3d`), but `ColorGpuProcessor.render` assigned its texture unit only when
+  the *loaded data* was non-null (`key.hasLut3d && lut3d != null`). `ColorEngine.resolveLut3d`
+  legitimately returns null until the LUT file finishes loading (or after eviction) — in exactly
+  that window the sampler3D stayed on unit 0 next to `uInput`, a different-type conflict that
+  drops every draw with GL_INVALID_OPERATION and leaves the grade FBO black. Fixed: the unit is
+  pinned on every draw; missing data binds texture 0 with `uLutIntensity = 0`
+  (`applyLut` ≡ identity).
+- **`uLut2d` was never bound at all** (and `uLutSize` never set — `applyLut` divides by it, so the
+  weight-0 LUT sample would have been NaN, which `mix()` propagates). The GLES2-class fallback
+  variant now pins the unit and renders as the identity.
+- **`uSecMask[2]` bound per-element only when a mask texture existed.** A mask that is
+  unavailable this frame, or an unused second slot, stayed on unit 0 and conflicted with an
+  external-OES `uInput`. Both elements are now pinned to units 4/5 on every masked draw.
+- **No colour-grade shader variant ever compiled on a conformant preprocessor.** The shader tests
+  its feature flags BY VALUE (`#if HAS_CURVES`, `#if LUT_AFTER && (HAS_LUT3D || HAS_LUT2D)`), but
+  the variant builder emitted valueless `#define HAS_CURVES` style flags and left disabled flags
+  undefined. A valueless macro in `#if` is an empty (invalid) expression — `#if LUT_AFTER && (...)`
+  appears in EVERY variant as `#if && (...)` — and an undefined macro in `#if` is an error on
+  strict GLSL ES preprocessors (GLSL ES 3.0 §3.4). Every variant therefore failed to compile,
+  `getProgram` threw, and `ColorGradeStage` silently disabled itself: all colour grades were
+  dropped from preview and export. Verified with GNU cpp as an independent strict preprocessor:
+  the old define block errors, the new one passes. Defines are now built by the pure, JVM-tested
+  `ColorShaderSource.variantDefines` (explicit 0/1 for every value-tested flag; `SEC_COUNT`
+  always numeric; only the `#ifdef`-tested `TEXTURE_EXTERNAL`/`HDR_OUTPUT` stay presence-based).
+- **`#extension` after a non-preprocessor token.** `fragment()` emitted `precision highp float;`
+  before the OES `#extension` block, which conformant compilers reject for the external-texture
+  variant. The extension block now precedes the precision statement.
+- **`ColorGradeStage` returned the FBO texture even when the grade draw was dropped.** Its
+  documented contract is "a colour bug can never break preview or export", but a GL *error* (as
+  opposed to an exception) handed an undrawn — black — texture downstream. The stage now drains
+  pending GL errors before the draw, checks after it, and passes the ungraded picture through for
+  that frame (logged once; not a permanent disable, since the cause can be transient).
+
+Verification: `ColorVariantShaderContractTest` (JVM, in `toolchain/verify/run_logic_tests.sh`)
+preprocesses EVERY shader variant with a strict mini-preprocessor (undefined/empty `#if`
+expressions are failures, like a conformant driver) and pins the surviving sampler declarations
+to the units `ColorGpuProcessor` assigns. `verify_gl_sampler_contract.py` Contract F guards the
+unconditional unit bindings, the 0/1 define emission, the `#extension` ordering and the
+`ColorGradeStage` error passthrough against drift.

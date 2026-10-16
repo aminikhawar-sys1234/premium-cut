@@ -300,6 +300,82 @@ class GpuCompositionRenderer(private val context: Context) {
     return errors
   }
 
+  /** GL errors consumed by [checkDrawErrors] during the current [render] call. */
+  private val frameGlErrors = ArrayList<Int>(4)
+
+  /** Detailed GL state snapshot of the FIRST failing draw this frame; null when the frame is clean. */
+  private var frameGlErrorDetail: String? = null
+
+  /** Draw sites that already logged a detailed failure (log once per site, not once per frame). */
+  private val loggedGlErrorSites = HashSet<String>()
+
+  /**
+   * Targeted GL error check for one draw call. When the draw raised an error it records WHERE the
+   * frame actually broke — thread, current EGL context, framebuffer binding + completeness, the
+   * texture target/id that was sampled and the program's link/validate status — because a black
+   * export carries no other evidence (every encoder-side statistic still looks correct).
+   * The first failing site of a frame is kept and attached to the [RenderReport].
+   */
+  private fun checkDrawErrors(site: String, program: Int, textureTarget: Int, textureId: Int) {
+    var error = GLES20.glGetError()
+    if (error == GLES20.GL_NO_ERROR) return
+    val codes = ArrayList<Int>(2)
+    while (error != GLES20.GL_NO_ERROR && codes.size < 16) {
+      codes += error
+      error = GLES20.glGetError()
+    }
+    frameGlErrors += codes
+    val detail = describeGlFailure(site, program, textureTarget, textureId, codes)
+    if (frameGlErrorDetail == null) frameGlErrorDetail = detail
+    if (loggedGlErrorSites.add(site)) {
+      Log.e(TAG, "GL draw failed: $detail")
+    }
+  }
+
+  private fun describeGlFailure(
+    site: String,
+    program: Int,
+    textureTarget: Int,
+    textureId: Int,
+    codes: List<Int>
+  ): String {
+    val fbBinding = IntArray(1)
+    GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, fbBinding, 0)
+    val fbStatus = GLES20.glCheckFramebufferStatus(GLES20.GL_FRAMEBUFFER)
+    var programState = "program=0"
+    if (program > 0) {
+      val linked = IntArray(1)
+      GLES20.glGetProgramiv(program, GLES20.GL_LINK_STATUS, linked, 0)
+      // glValidateProgram checks the CURRENT sampler/texture state, so it names draw-time
+      // failures (e.g. "samplers of different types point at the same texture unit") that a
+      // successful link can never reveal.
+      GLES20.glValidateProgram(program)
+      val valid = IntArray(1)
+      GLES20.glGetProgramiv(program, GLES20.GL_VALIDATE_STATUS, valid, 0)
+      programState = "program=$program linked=${linked[0] == GLES20.GL_TRUE} validated=${valid[0] == GLES20.GL_TRUE}"
+      if (valid[0] != GLES20.GL_TRUE) {
+        val log = runCatching { GLES20.glGetProgramInfoLog(program) }.getOrNull()?.trim().orEmpty()
+        if (log.isNotEmpty()) programState += " validateLog=\"$log\""
+      }
+    }
+    // The queries above must not leave their own flags behind for the caller's error accounting.
+    drainGlErrors()
+    val eglContext = android.opengl.EGL14.eglGetCurrentContext()
+    val contextDesc =
+      if (eglContext == null || eglContext == android.opengl.EGL14.EGL_NO_CONTEXT) "NONE"
+      else "0x${java.lang.Long.toHexString(eglContext.nativeHandle)}"
+    val targetDesc = when (textureTarget) {
+      GLES20.GL_TEXTURE_2D -> "2D"
+      GLES11Ext.GL_TEXTURE_EXTERNAL_OES -> "OES"
+      0 -> "none"
+      else -> "0x${Integer.toHexString(textureTarget)}"
+    }
+    val errorsDesc = codes.joinToString(prefix = "[", postfix = "]") { "0x${Integer.toHexString(it)}" }
+    return "site=$site errors=$errorsDesc thread=${Thread.currentThread().name} " +
+      "eglContext=$contextDesc fbo=${fbBinding[0]} fboStatus=0x${Integer.toHexString(fbStatus)} " +
+      "texture=$targetDesc#$textureId $programState"
+  }
+
   fun initGl() {
     if (isInitialized) return
 
@@ -360,6 +436,8 @@ class GpuCompositionRenderer(private val context: Context) {
 
     currentFrameCounter++
     mainGeometry = null
+    frameGlErrors.clear()
+    frameGlErrorDetail = null
 
     // Resolve the keying of every layer in this frame, and upload the background the keyed main clip needs.
     // A clip's own settings always win, so keying one layer never keys the others.
@@ -866,7 +944,8 @@ class GpuCompositionRenderer(private val context: Context) {
       compositedTexture = currentInputTex,
       usedNativeCompositor = usedNativeCompositor,
       failure = composeFailure,
-      glErrors = drainGlErrors()
+      glErrors = frameGlErrors.toList() + drainGlErrors(),
+      glErrorDetail = frameGlErrorDetail
     )
   }
 
@@ -880,13 +959,16 @@ class GpuCompositionRenderer(private val context: Context) {
    * @property usedNativeCompositor whether the native C++ compositor produced this frame
    * @property failure why the first composition attempt had to be redone, if it did
    * @property glErrors GL errors raised during this frame (diagnostics; empty when clean)
+   * @property glErrorDetail GL state snapshot of the first failing draw (site, thread, EGL context,
+   *   framebuffer binding/completeness, texture target/id, program link/validate status)
    */
   data class RenderReport(
     val layersDrawn: Int,
     val compositedTexture: Int,
     val usedNativeCompositor: Boolean,
     val failure: String? = null,
-    val glErrors: List<Int> = emptyList()
+    val glErrors: List<Int> = emptyList(),
+    val glErrorDetail: String? = null
   ) {
     /** True when the frame carries no picture: the destination keeps its cleared (black) content. */
     val drewNothing: Boolean get() = layersDrawn <= 0 || compositedTexture <= 0
@@ -898,6 +980,7 @@ class GpuCompositionRenderer(private val context: Context) {
       if (glErrors.isNotEmpty()) {
         append(" glErrors=").append(glErrors.joinToString(prefix = "[", postfix = "]") { "0x${Integer.toHexString(it)}" })
       }
+      glErrorDetail?.let { append(" glErrorDetail={").append(it).append('}') }
     }
   }
 
@@ -1049,6 +1132,12 @@ class GpuCompositionRenderer(private val context: Context) {
       viewportHeight = viewportHeight
     )
     drawQuad(program)
+    checkDrawErrors(
+      site = "chromaBackgroundTo2D",
+      program = program,
+      textureTarget = if (decoded.isOes) GLES11Ext.GL_TEXTURE_EXTERNAL_OES else GLES20.GL_TEXTURE_2D,
+      textureId = decoded.textureId
+    )
     fboChromaBackground.unbind()
     return fboChromaBackground.getTextureId()
   }
@@ -1166,6 +1255,7 @@ class GpuCompositionRenderer(private val context: Context) {
       GLES20.glUniform1i(uTextureHandle, 0)
 
       drawQuad(program2D)
+      checkDrawErrors("kotlinCompositorLayer", program2D, GLES20.GL_TEXTURE_2D, layer.textureId)
     }
 
     GLES20.glDisable(GLES20.GL_BLEND)
@@ -1412,6 +1502,12 @@ class GpuCompositionRenderer(private val context: Context) {
     } finally {
       if (scissorTransition) GLES20.glDisable(GLES20.GL_SCISSOR_TEST)
     }
+    checkDrawErrors(
+      site = "mainVideoTo2D",
+      program = program,
+      textureTarget = if (isOes) GLES11Ext.GL_TEXTURE_EXTERNAL_OES else GLES20.GL_TEXTURE_2D,
+      textureId = textureId
+    )
     if (targetFbo === fboMain2D && clip != null) {
       val finalMvp = FloatArray(16)
       if (useRowWarp) Matrix.multiplyMM(finalMvp, 0, stabOuterMatrix, 0, mvpMatrix, 0)
@@ -1606,6 +1702,12 @@ class GpuCompositionRenderer(private val context: Context) {
     )
 
     drawQuad(program)
+    checkDrawErrors(
+      site = "overlayVideoTo2D",
+      program = program,
+      textureTarget = if (isOes) GLES11Ext.GL_TEXTURE_EXTERNAL_OES else GLES20.GL_TEXTURE_2D,
+      textureId = textureId
+    )
     fbo.unbind()
 
     return fbo.getTextureId()
@@ -2017,6 +2119,8 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uTexelSizeHandle >= 0) GLES20.glUniform2f(uTexelSizeHandle, 1.0f / max(1, viewportWidth), 1.0f / max(1, viewportHeight))
 
     val uChromaEnabledHandle = GLES20.glGetUniformLocation(program, "uChromaEnabled")
+    // Texture that uChromaBgTex samples on this draw; 0 unless the key composites over media.
+    var chromaBgTextureForDraw = 0
     if (uChromaEnabledHandle >= 0) {
       if (chromaKey.enabled) {
         val color = chromaKey.targetColor.toInt()
@@ -2058,6 +2162,10 @@ class GpuCompositionRenderer(private val context: Context) {
         val bgB = Color.blue(bgColor) / 255f
         val bgA = Color.alpha(bgColor) / 255f
         GLES20.glUniform4f(GLES20.glGetUniformLocation(program, "uChromaBgColor"), bgR, bgG, bgB, bgA)
+
+        if (bgMode == ChromaKeyResolver.BACKGROUND_MODE_TEXTURE) {
+          chromaBgTextureForDraw = chromaBackgroundTextureId
+        }
         GLES20.glUniform2f(
           GLES20.glGetUniformLocation(program, "uChromaBgFit"),
           chromaBackgroundFit[0],
@@ -2067,6 +2175,7 @@ class GpuCompositionRenderer(private val context: Context) {
         GLES20.glUniform1i(uChromaEnabledHandle, 0)
       }
     }
+    bindChromaBackgroundSampler(program, chromaBgTextureForDraw)
 
     // Sampler units are assigned UNCONDITIONALLY, never inside the feature branch above.
     //
@@ -2107,6 +2216,35 @@ class GpuCompositionRenderer(private val context: Context) {
         GLES20.glUniform1i(uUseColorMatrixHandle, 0)
       }
     }
+  }
+
+  /**
+   * Points the `sampler2D uChromaBgTex` uniform at its own texture unit (2) on EVERY draw,
+   * chroma key on or off. Called unconditionally from [bindCommonUniforms].
+   *
+   * This is load-bearing, not cosmetic. The OES programs ([programOes], [programStabOes]) contain
+   * two samplers of DIFFERENT types: `samplerExternalOES uTexture` (assigned to unit 0) and
+   * `sampler2D uChromaBgTex`. A freshly linked program starts every sampler uniform at unit 0,
+   * and this assignment used to happen only when the chroma key was enabled — so for every
+   * ordinary video frame (no key) the program had a samplerExternalOES and a sampler2D both
+   * pointing at texture unit 0. The GLES 2.0 (§2.10.5) and 3.0 (§2.11.9) specifications define
+   * exactly that state as a draw-time validation failure: every glDrawArrays raises
+   * GL_INVALID_OPERATION (0x502) and writes no fragments. On spec-enforcing drivers the
+   * OES->2D conversion pass therefore left its framebuffer cleared (black) every frame, which
+   * surfaced as a fully black export ("layers=1 texture=N compositor=kotlin glErrors=[0x502]")
+   * while lenient drivers happened to render it. Binding the 2D sampler to its own unit on every
+   * draw removes the conflict regardless of chroma state.
+   *
+   * [backgroundTextureId] may be 0 (unit 2 then holds the default 2D texture, which is legal and
+   * never sampled while uChromaBgType != 2).
+   */
+  private fun bindChromaBackgroundSampler(program: Int, backgroundTextureId: Int) {
+    val bgTexHandle = GLES20.glGetUniformLocation(program, "uChromaBgTex")
+    if (bgTexHandle < 0) return
+    GLES20.glActiveTexture(GLES20.GL_TEXTURE2)
+    GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, backgroundTextureId)
+    GLES20.glUniform1i(bgTexHandle, 2)
+    GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
   }
 
   private fun bindMaskUniforms(program: Int, mask: MaskSettings?) {
@@ -2164,6 +2302,7 @@ class GpuCompositionRenderer(private val context: Context) {
 
   fun onContextLost() {
     isInitialized = false
+    loggedGlErrorSites.clear()
     colorGradeStage.onContextLost()
     vfxStackStage.onContextLost()
     faceWarpStage.onContextLost()
@@ -2360,6 +2499,7 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uTextureHandle >= 0) GLES20.glUniform1i(uTextureHandle, 0)
 
     drawQuad(programBlit)
+    checkDrawErrors("blitToSurface", programBlit, GLES20.GL_TEXTURE_2D, textureId)
     GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, 0)
   }
 
@@ -2485,6 +2625,7 @@ class GpuCompositionRenderer(private val context: Context) {
     if (uTextureHandle >= 0) GLES20.glUniform1i(uTextureHandle, 0)
 
     drawQuad(programEffect)
+    checkDrawErrors("postProcessEffect", programEffect, GLES20.GL_TEXTURE_2D, inputTexId)
   }
 
   fun invalidateClip(clipId: String) {

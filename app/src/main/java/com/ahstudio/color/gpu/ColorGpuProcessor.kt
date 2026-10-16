@@ -183,46 +183,45 @@ class ColorGpuProcessor(
             GLES30.glUniform4fv(prog.loc("uHslBands[0]"), 8, arr, 0)
         }
 
-        // LUT — texture uploaded once per LUT (§34). TWO encodings of the same data: a 3D texture
-        // when this context can sample `sampler3D`, otherwise the tiled 2D atlas that
-        // `#if HAS_LUT2D` samples. Both need their sampler told which unit to read:
-        //  - an unwritten sampler keeps its default 0 and then shares unit 0 with the input
-        //    sampler — on a video frame that is samplerExternalOES + sampler2D on one unit, i.e.
-        //    GL_INVALID_OPERATION (0x502) on every draw, with a black frame as the visible result;
-        //  - `uLutSize` is divided by inside the shader. Left at 0 it produces inf/NaN atlas
-        //    coordinates, samples black and mixes the frame to black at the clip's LUT intensity.
-        // When the LUT variant is active but the data is missing, a texture of the sampler's own
-        // target is still bound and `uLutIntensity` is forced to 0, so the pass-through is exact
-        // instead of a mismatch.
-        val lutState = state.lut
-        val lutIntensity = lutState?.intensity ?: 0f
+        // LUT — texture uploaded once per LUT (§34).
+        //
+        // SAMPLER CONTRACT: when the linked variant declares `uLut3d` (key.hasLut3d), the sampler
+        // MUST be assigned its own texture unit on every draw. A sampler uniform that is never
+        // assigned stays at unit 0, where `uInput` (sampler2D or samplerExternalOES) lives, and two
+        // samplers of different types on one unit make every glDrawArrays raise
+        // GL_INVALID_OPERATION and write no fragments (GLES 2.0 §2.10.5 / 3.0 §2.11.9) — the grade
+        // output stays black. `key.hasLut3d` comes from the *state* (a valid LUT reference), while
+        // `lut3d` is the *loaded data*, which is legitimately null until the LUT file finishes
+        // loading — so the null case must still pin the unit and simply disable the LUT
+        // (uLutIntensity = 0 makes applyLut the identity: mix(c, s, 0.0) == c).
         if (key.hasLut3d) {
-            val texId = if (lut3d != null) {
-                lutTextures.getOrCreate3D(lut3d, lutState?.lutId ?: "", caps.supportsFloatTextures)
-            } else {
-                lutTextures.black3D()
-            }
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + ColorTextureUnits.LUT)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texId)
-            GLES30.glUniform1i(prog.loc("uLut3d"), ColorTextureUnits.LUT)
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
             if (lut3d != null) {
+                val texId = lutTextures.getOrCreate(lut3d, state.lut!!.lutId, caps.supportsFloatTextures)
                 val p = lutTextures.lutParams(lut3d)
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, texId)
+                GLES30.glUniform1i(prog.loc("uLut3d"), 3)
                 GLES30.glUniform3f(prog.loc("uLutScale"), p[0], p[1], p[2])
                 GLES30.glUniform3f(prog.loc("uLutOffset"), p[3], p[4], p[5])
-            }
-            GLES30.glUniform1f(prog.loc("uLutIntensity"), if (lut3d != null) lutIntensity else 0f)
-        } else if (key.hasLut2d) {
-            val texId = if (lut3d != null) {
-                lutTextures.getOrCreate2DAtlas(lut3d, lutState?.lutId ?: "")
+                GLES30.glUniform1f(prog.loc("uLutIntensity"), state.lut!!.intensity)
             } else {
-                lutTextures.white2D()
+                GLES30.glBindTexture(GLES30.GL_TEXTURE_3D, 0)
+                GLES30.glUniform1i(prog.loc("uLut3d"), 3)
+                GLES30.glUniform3f(prog.loc("uLutScale"), 1f, 1f, 1f)
+                GLES30.glUniform3f(prog.loc("uLutOffset"), 0f, 0f, 0f)
+                GLES30.glUniform1f(prog.loc("uLutIntensity"), 0f)
             }
-            GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + ColorTextureUnits.LUT)
-            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texId)
-            GLES30.glUniform1i(prog.loc("uLut2d"), ColorTextureUnits.LUT)
-            // Never 0: the shader divides by this value to walk the atlas.
-            GLES30.glUniform1f(prog.loc("uLutSize"), lutTextures.atlasSize(lut3d))
-            GLES30.glUniform1f(prog.loc("uLutIntensity"), if (lut3d != null) lutIntensity else 0f)
+        }
+        // The LUT2D variant (GLES2-class fallback) has no texture upload path in this build, so it
+        // must render as the identity. The unit still has to be pinned (see the contract above) and
+        // uLutSize must stay finite: applyLut divides by n*n, and 0 would turn the (unused, weight-0)
+        // LUT sample into NaN, which mix() propagates into the frame.
+        if (key.hasLut2d) {
+            GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+            GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+            GLES30.glUniform1i(prog.loc("uLut2d"), 3)
+            GLES30.glUniform1f(prog.loc("uLutSize"), 2f)
+            GLES30.glUniform1f(prog.loc("uLutIntensity"), 0f)
         }
 
         // Secondaries
@@ -242,16 +241,18 @@ class ColorGpuProcessor(
 
             if (key.secMask) {
                 val cfgs = FloatArray(8)
-                secs.forEachIndexed { i, s ->
-                    val unit = ColorTextureUnits.secondaryMask(i)
-                    val tex = s.maskId?.let { maskProvider?.maskTexture(clipId, it, timeMs) }
-                    // Every slot gets a unit assignment even when it has no mask this frame: an
-                    // unassigned sampler defaults to unit 0, where the OES input sampler lives.
-                    GLES30.glActiveTexture(GLES30.GL_TEXTURE0 + unit)
-                    val fallback = if (tex == null) lutTextures.white2D() else 0
-                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex ?: fallback)
-                    GLES30.glUniform1i(prog.loc("uSecMask[$i]"), unit)
-                    if (tex != null) {
+                // SAMPLER CONTRACT (same as uLut3d above): the variant declares uSecMask[2], so BOTH
+                // array elements must be pinned to their units on every draw — a mask that is
+                // unavailable this frame (provider returned null) or an unused second slot would
+                // otherwise stay on unit 0 and conflict with an external-OES uInput. An element with
+                // no mask gets texture 0 (never sampled: uSecMaskCfg[i].x stays 0).
+                for (i in 0 until 2) {
+                    val s = secs.getOrNull(i)
+                    val tex = s?.maskId?.let { maskProvider?.maskTexture(clipId, it, timeMs) }
+                    GLES30.glActiveTexture(GLES30.GL_TEXTURE4 + i)
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, tex ?: 0)
+                    GLES30.glUniform1i(prog.loc("uSecMask[$i]"), 4 + i)
+                    if (tex != null && s != null) {
                         cfgs[i * 4 + 0] = 1f; cfgs[i * 4 + 1] = if (s.invert) 1f else 0f
                     }
                 }
