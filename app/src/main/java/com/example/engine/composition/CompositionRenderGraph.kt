@@ -34,8 +34,12 @@ object CompositionRenderGraph {
   )
 
   /**
-   * Where the frame is going. Export flips for the encoder's coordinate system and waits for
-   * masks so every frame is reproducible; the preview screen does neither.
+   * Where the frame is going. The encoder input Surface and the preview Surface are both GLES
+   * BufferQueues with the same coordinate convention, so the two destinations draw the same picture
+   * with the same blit ([PREVIEW] and `export()` differ only by `deterministicMasks`, needed so every
+   * exported frame is reproducible). [flipY] stays a parameter only because the export presentation
+   * takes it from [com.example.engine.export.ExportOrientationPolicy.FLIP_Y_FOR_ENCODER] and the
+   * constant must remain comparable against this struct in tests.
    */
   data class FramePresentation(
     val flipY: Boolean,

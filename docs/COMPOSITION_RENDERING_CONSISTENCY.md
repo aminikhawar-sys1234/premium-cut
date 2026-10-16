@@ -92,11 +92,16 @@ Chroma Key or background removal on **any** layer forces Renderer A on; otherwis
 
 `AsyncFramePipelineEngine` → the **same** `CompositionRenderGraph.assemble/present` →
 the **same** `GpuCompositionRenderer.render`, differing only by
-`FramePresentation.export(flipY)` + `deterministicMasks = true`, then MediaCodec encode and
+`FramePresentation.export(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER)` (the constant is `false`, the
+same Y flip the preview uses) + `deterministicMasks = true`, then MediaCodec encode and
 `AudioExportProcessor` mux. Export never uses Renderer B.
 
 So **export ≡ Renderer A**. The consistency risk is entirely (a) inside Renderer A's caller contract
 and (b) between Renderer A/export and Renderer B.
+
+The orientation half of that caller contract is pinned by `toolchain/verify/verify_export_orientation.py`
+(68 checks, 0 failures) and measured on a device by `ExportOrientationInstrumentedTest` - see
+`docs/EXPORT_ORIENTATION_FIX.md`.
 
 ### 1.4 Effect ordering (Renderer A / export shader, `GpuShaders`)
 
