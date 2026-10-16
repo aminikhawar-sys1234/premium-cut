@@ -239,14 +239,20 @@ jobs:
             # The default ring buffer evicts the beginning of a 25-minute instrumented run, and the
             # export tests print their measurements as they go (System.out) - a 16 MB buffer keeps
             # the whole run readable, which is how the complex-project numbers reach the report.
-            adb logcat -G 16M || true
+            adb logcat -G 64M || true
             adb logcat -c || true
             ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue > gradle-connected.log 2>&1; echo $? > gradle-exit.txt
             adb logcat -d -v brief > logcat.txt 2>/dev/null || true
             wc -l logcat.txt || true
-            adb shell "run-as $APP_ID cat files/look-verification.txt" > look-verification.txt 2>/dev/null || true
-            [ -s look-verification.txt ] || adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt 2>/dev/null || true
-            wc -c look-verification.txt || true
+            # The report file is the complete record (logcat's ring buffer loses the beginning of a
+            # long run to the emulator's own chatter). Both copies are collected and whichever is
+            # longer is used, and every attempt leaves its output in look-pull-status.txt so a failed
+            # transfer is diagnosable from the pull request instead of silently falling back.
+            adb exec-out "run-as $APP_ID cat files/look-verification.txt" > look-internal.txt 2> look-pull-status.txt || true
+            adb shell "run-as $APP_ID ls -l files/" >> look-pull-status.txt 2>&1 || true
+            adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt >> look-pull-status.txt 2>&1 || true
+            [ -s look-verification.txt ] || adb shell "cat /sdcard/Android/data/$APP_ID/files/look-verification.txt" > look-verification.txt 2>> look-pull-status.txt || true
+            wc -c look-verification.txt look-internal.txt >> look-pull-status.txt 2>&1 || true
             tail -c 8000 gradle-connected.log || true
             true
 
@@ -291,9 +297,15 @@ jobs:
                       "\n\n".join(failures[:20])[:24000], "```"]
           else:
               out += ["", "No failing device test."]
-          if os.path.exists("look-verification.txt") and os.path.getsize("look-verification.txt") > 0:
-              text = open("look-verification.txt", errors="replace").read()
-              out += ["", "### Measured pixels (written by the device tests)", "", "```", text.strip()[:15000], "```"]
+          report_candidates = [
+              path for path in ("look-verification.txt", "look-internal.txt")
+              if os.path.exists(path) and os.path.getsize(path) > 0
+          ]
+          if report_candidates:
+              path = max(report_candidates, key=lambda p: os.path.getsize(p))
+              text = open(path, errors="replace").read()
+              out += ["", f"### Measured pixels (written by the device tests — `{path}`)", "", "```",
+                      text.strip()[:15000], "```"]
           else:
               # Fall back to the stdout Gradle captured for the tests: every report line is also
               # printed, so the measurements survive a failed pull and a crashed run.
@@ -319,41 +331,6 @@ jobs:
                           "\n".join(scraped)[:30000], "```"]
               else:
                   out += ["", "`look-verification.txt` was not produced and the device stdout was empty."]
-          # The export tests print one line per measured fact. Those lines are the deliverable
-          # (they are what "the MP4 is valid and visually correct" is checked against), so they get
-          # their own section instead of competing with the engine log for characters.
-          measurements = []
-          for source in ("logcat.txt",):
-              if not os.path.exists(source):
-                  continue
-              with open(source, errors="replace") as handle:
-                  for raw in handle:
-                      line = raw.rstrip("\n")
-                      if "System.out" in line and "): " in line:
-                          line = line.split("): ", 1)[1]
-                      if any(
-                          marker in line
-                          for marker in (">>> START", " took ", "validation:", "dimensions:",
-                                         "frames:", "export delta", "report written", "==", "EXPECT",
-                                         "skipped on this device", "detected", "luma")
-                      ):
-                          measurements.append(line.strip())
-          # logcat is newest-last; the report is a narrative, so keep it in run order and drop the
-          # noisy colour-pipeline duplicates.
-          deduped, seen = [], set()
-          for line in measurements:
-              if not line or line in seen:
-                  continue
-              seen.add(line)
-              deduped.append(line)
-          if deduped:
-              body = "\n".join(deduped)
-              window = body if len(body) <= 20000 else (
-                  body[:6000] + "\n... [measurements truncated] ...\n" + body[-14000:]
-              )
-              out += ["", "### Export measurements (printed by the tests as they ran)", "", "```",
-                      window, "```"]
-
           # Filtered logcat: the engine names its failures there (`HwVideoTextureSource`,
           # `AsyncFramePipeline`, decoder/EGL/muxer lines), and the artifact zip that holds the full
           # log is not downloadable from the reviewing workstation, so the decisive lines travel in
@@ -450,6 +427,13 @@ jobs:
               report = shrink_section(report, title, keep)
           if len(report) > 62000:
               report = report[:62000] + "\n\n_report truncated at 62000 characters_\n"
+          if os.path.exists("look-pull-status.txt"):
+              status = open("look-pull-status.txt", errors="replace").read().strip()
+              if status:
+                  out = out + ["", "### How the report file was collected", "", "```", status[:2000], "```"]
+                  report = "\n".join(out) + "\n"
+                  if len(report) > COMMENT_BUDGET:
+                      report = shrink_section(report, "### Measured pixels", 1500)
           open("device-report.md", "w").write(report)
           PY
 
@@ -514,6 +498,8 @@ jobs:
           path: |
             device-report.md
             look-verification.txt
+            look-internal.txt
+            look-pull-status.txt
             logcat.txt
             gradle-connected.log
             gradle-exit.txt
