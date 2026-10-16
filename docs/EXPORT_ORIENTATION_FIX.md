@@ -125,18 +125,46 @@ claimed for them**:
 
 `main.yml` / `postpatch-verify.yml` run these on a runner with JDK 21 + NDK 28.2.13676358.
 
-### What CI has since executed (first push of this PR, run 38856757586)
+### What CI has executed (run 38859082334, commit c8fab13)
 
 | Job | Result |
 | --- | --- |
-| `Android CI/CD Build and Test` | **pass** (17m15s) |
-| *Build, unit tests, lint* -> Gradle unit tests | **pass**: 196 suites, **1560 cases, 0 failed/errored** - so `ExportOrientationPolicyTest` and the updated `ExportOrientationAndPipelineTest` / `CompositionRenderGraphTest` really ran and passed |
-| *Build, unit tests, lint* -> `:app:assembleDebugAndroidTest` | **fail**: `ExportOrientationInstrumentedTest.kt:194:63 Unresolved reference 'PREVIEW'` - the new device test itself did not compile (a wrong qualified name, not a failing assertion) |
-| *Device tests (emulator, real GLES)* | skipped (depends on the job above) |
+| `Build, unit tests, lint` | **pass** - 196 suites, **1560 cases, 0 failed/errored** (`ExportOrientationPolicyTest` and the updated `ExportOrientationAndPipelineTest` / `CompositionRenderGraphTest` included) |
+| `Build, Test & Quality Checks` | **pass** |
+| `Device tests (emulator, real GLES)` | **pass** - 39 instrumented cases, 0 failures, including `ExportOrientationInstrumentedTest` (1 test, 62.97 s) |
+| `Publish results on the pull request` | **pass** |
 
-That one compile error is fixed (`CompositionRenderGraph.FramePresentation.PREVIEW`) and Part 4 of the
-guard now catches this class of mistake before CI does. The device tests are still **not executed** -
-they need the re-run of this PR to be green first.
+The first push of this PR failed the build + unit test job on ONE compile error in the new device test
+(`ExportOrientationInstrumentedTest.kt:194:63 Unresolved reference 'PREVIEW'` - the two-level name
+`CompositionRenderGraph.PREVIEW` instead of `CompositionRenderGraph.FramePresentation.PREVIEW`; unit
+tests themselves passed in that run too). Fixed in `096c837`, and Part 4 of the guard now catches that
+class of mistake locally.
+
+### Measured on the emulator (SwiftShader GLES 3.0), scraped from the run above
+
+Every case exported through the real pipeline, re-decoded and classified from the Y plane. The four
+quadrant levels are 30/90/150/220, so `[30,90,149,219]` is the source exactly as shot; a mirrored
+export cannot produce that ordering.
+
+| Case | Container | Measured quadrants | Classified | Expected |
+| --- | --- | --- | --- | --- |
+| portrait 9:16, metadata 0 | 288x512, rot 0 | `[30,90,149,219]` | rot0 | rot0 |
+| portrait 9:16, metadata 180 | 288x512, rot 0 | `[219,149,90,30]` | rot180 | rot180 |
+| landscape 16:9, metadata 0 | 512x288, rot 0 | `[30,90,149,219]` | rot0 | rot0 |
+| landscape 16:9, metadata 180 | 512x288, rot 0 | `[219,149,90,30]` | rot180 | rot180 |
+| landscape source + metadata 90, portrait canvas | 288x512, rot 0 | `[149,30,219,90]` | rot90 | rot90 |
+| landscape source + metadata 270, portrait canvas | 288x512, rot 0 | `[90,219,30,149]` | rot270 | rot270 |
+| portrait source + metadata 90, landscape canvas | 512x288, rot 0 | `[149,30,219,90]` | rot90 | rot90 |
+| portrait source + metadata 270, landscape canvas | 512x288, rot 0 | `[90,219,30,149]` | rot270 | rot270 |
+| square 1:1, metadata 0 / 90 / 180 / 270 | 320x320, rot 0 | `[30,90,149,219]` / `[149,30,219,90]` / `[219,149,90,30]` / `[90,219,30,149]` | rot0 / rot90 / rot180 / rot270 | same |
+| portrait source into landscape canvas (letterbox) | 512x288, rot 0 | `[30,90,149,219]` | rot0 | rot0 |
+| portrait source, mirrored clip | 288x512, rot 0 | `[90,30,219,149]` | rot0+mirrorX | rot0+mirrorX |
+
+All 14 cases matched their expected transform (distance 2 on a 0-255 scale, i.e. the colour round
+trip), and every container reported the export dimensions with **rotation = 0**. So on a real Android
+emulator: the exported MP4 is upright, carries the source rotation in the pixels exactly once, is not
+mirrored (except where the clip is explicitly mirrored), keeps portrait/landscape/square shape, and
+does not carry a rotation hint that a player would apply on top.
 
 ## 4. Tests added / updated
 
@@ -166,8 +194,9 @@ they need the re-run of this PR to be green first.
 
 ## 5. Still unverified / residual risk
 
-* **Nothing ran on a device or on real hardware GPUs.** The device numbers above do not exist yet;
-  `ExportOrientationInstrumentedTest` has never been executed.
+* **No physical device / hardware GPU.** The device evidence above comes from the emulator's
+  SwiftShader GLES 3.0, not from a phone GPU; the compositor's own GPU tests are already limited the
+  same way.
 * **The native compositor path was not read in this pass.** `AsyncFramePipelineEngine.kt:581–585`
   drives `nativeCompositorEnabled` *and* `shaderTransitionsEnabled` from
   `ExportBlackFrameGuard.useNativeCompositor(attemptNo)` (native on attempt 1, Kotlin on the retry).
