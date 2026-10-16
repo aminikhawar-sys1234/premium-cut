@@ -165,7 +165,8 @@ class OesSamplerRegressionInstrumentedTest {
       sourceEndMs = 1000L,
       sourceTotalDurationMs = 1000L
     )
-    // Same presentation as the export encoder path: flip for the encoder, deterministic masks.
+    // Same presentation as the export encoder path: the encoder blit takes the frame in the same
+    // orientation the preview shows it (ExportOrientationPolicy.FLIP_Y_FOR_ENCODER), with deterministic masks.
     return renderer.render(
       frame = composedFrame(clip),
       mainTextureId = oesTexture,
@@ -176,7 +177,7 @@ class OesSamplerRegressionInstrumentedTest {
       timelineAdjustments = VideoAdjustments(),
       timelineFilter = FilterSettings(),
       chromaKey = chromaKey,
-      flipYForEncoder = true,
+      flipYForEncoder = ExportOrientationPolicy.FLIP_Y_FOR_ENCODER,
       deterministicMasks = true
     )
   }
