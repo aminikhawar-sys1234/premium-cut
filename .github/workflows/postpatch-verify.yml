@@ -240,8 +240,9 @@ jobs:
             ./gradlew :app:connectedDebugAndroidTest --stacktrace --continue > gradle-connected.log 2>&1; echo $? > gradle-exit.txt
             adb logcat -d -v brief > logcat.txt 2>/dev/null || true
             wc -l logcat.txt || true
-            adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt 2>/dev/null || true
-            [ -s look-verification.txt ] || adb shell "run-as $APP_ID cat files/look-verification.txt" > look-verification.txt 2>/dev/null || true
+            adb shell "run-as $APP_ID cat files/look-verification.txt" > look-verification.txt 2>/dev/null || true
+            [ -s look-verification.txt ] || adb pull "/sdcard/Android/data/$APP_ID/files/look-verification.txt" look-verification.txt 2>/dev/null || true
+            wc -c look-verification.txt || true
             tail -c 8000 gradle-connected.log || true
             true
 
@@ -271,12 +272,19 @@ jobs:
                   for kind in ("failure", "error"):
                       node = case.find(kind)
                       if node is not None:
-                          msg = (node.get("message") or (node.text or "")).strip().replace("\n", " ")[:700]
-                          failures.append(f"{case.get('classname')}.{case.get('name')}: {msg}")
+                          message = (node.get("message") or "").strip().replace("\n", " ")
+                          trace = (node.text or "").strip()
+                          detail = message if not trace else f"{message}\n{trace}"
+                          failures.append(
+                              f"{case.get('classname')}.{case.get('name')}:\n{detail[:3000]}"
+                          )
           out.append(f"- total instrumented cases: **{total}**")
           if failures:
-              out += ["", "### Failing device cases", ""]
-              out += [f"- `{f}`" for f in failures[:30]]
+              # The full message and stack trace, not a 700-character preview: this comment is the
+              # only channel that reaches the reviewing workstation (runner logs and artifact
+              # downloads both redirect to a host that is unreachable from there).
+              out += ["", "### Failing device cases", "", "```",
+                      "\n\n".join(failures[:20])[:24000], "```"]
           else:
               out += ["", "No failing device test."]
           if os.path.exists("look-verification.txt") and os.path.getsize("look-verification.txt") > 0:
@@ -304,9 +312,41 @@ jobs:
               scraped = [line for line in scraped if line.strip()]
               if scraped:
                   out += ["", "### Measured pixels (scraped from the device stdout / logcat)", "", "```",
-                          "\n".join(scraped[-300:])[:15000], "```"]
+                          "\n".join(scraped)[:30000], "```"]
               else:
                   out += ["", "`look-verification.txt` was not produced and the device stdout was empty."]
+          # Filtered logcat: the engine names its failures there (`HwVideoTextureSource`,
+          # `AsyncFramePipeline`, decoder/EGL/muxer lines), and the artifact zip that holds the full
+          # log is not downloadable from the reviewing workstation, so the decisive lines travel in
+          # this comment instead.
+          if os.path.exists("logcat.txt"):
+              hits = []
+              with open("logcat.txt", errors="replace") as handle:
+                  for raw in handle:
+                      line = raw.rstrip("\n")
+                      # Engine tags plus the platform tags that name codec/resource failures:
+                      # ACodec/CCodec print the OMX/c2 error (e.g. "Failed to allocate component
+                      # instance" = codec instance limit, exactly what a many-decoder export hits),
+                      # and the native-compositor tags say whether libah_engine was used at all.
+                      if any(word in line for word in ("AsyncFramePipeline", "HwVideoTextureSource",
+                                                       "ExportPipeline", "GpuCompositionRenderer",
+                                                       "ExportValidator", "ComplexProjectExport",
+                                                       "DecoderManager", "VideoExporter", "EglCore",
+                                                       "MediaCodec", "ExportDiagnostics", "CodecException",
+                                                       "NativeRenderBridge", "NativeEngineLoader",
+                                                       "MediaMuxer", "MPEG4Writer", "ACodec", "CCodec",
+                                                       "OMXClient", "MediaCodecList", "AudioExportProcessor",
+                                                       "VideoCompositionEngine", "CompositionRenderGraph")):
+                          hits.append(line)
+              # Head *and* tail: a complex-export failure can happen in the first test of the
+              # instrumented run (engine setup) or the last one (resource pressure), and the whole
+              # log does not fit in a comment.
+              body = "\n".join(hits)
+              window = body if len(body) <= 24000 else (
+                  body[:8000] + "\n... [device log truncated] ...\n" + body[-16000:]
+              )
+              out += ["", f"### Device log — engine/render/codec lines ({len(hits)} matched)", "", "```",
+                      window, "```"]
           gradle_exit = None
           if os.path.exists("gradle-exit.txt"):
               try:
@@ -330,7 +370,19 @@ jobs:
               else:
                   out += ["", "_gradle-connected.log was not produced_"]
 
-          open("device-report.md", "w").write("\n".join(out) + "\n")
+          report = "\n".join(out) + "\n"
+          # A GitHub comment body is capped at 65536 characters and the publish job cats this file
+          # into one. If the report is too long, drop the measured-pixel block first: the same
+          # stdout travels inside the device-log section, which is the section that carries the
+          # engine's own failure lines.
+          if len(report) > 56000:
+              marker = "### Measured pixels"
+              idx = report.find(marker)
+              if idx >= 0:
+                  report = report[:idx] + marker + " (dropped to keep the comment postable)\n"
+          if len(report) > 56000:
+              report = report[:56000] + "\n\n_report truncated at 56000 characters_\n"
+          open("device-report.md", "w").write(report)
           PY
 
       - name: Gate on the instrumented reports
@@ -341,6 +393,7 @@ jobs:
           expected = [
               "com.example.ExampleInstrumentedTest",
               "com.example.engine.effects.ColorPipelineGpuInstrumentedTest",
+              "com.example.engine.export.ComplexProjectExportInstrumentedTest",
               "com.example.engine.export.CompositionRegressionInstrumentedTest",
               "com.example.engine.export.ExportLookPersistenceInstrumentedTest",
               "com.example.engine.export.ExportValidatorInstrumentedTest",

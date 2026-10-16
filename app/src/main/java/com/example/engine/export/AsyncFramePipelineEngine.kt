@@ -187,6 +187,9 @@ private class HardwareClipDecoder(
   val effectiveHeight: Int get() = textureSource.effectiveHeight
   val rotationDegrees: Int get() = textureSource.rotationDegrees
 
+  /** Why the last decode attempt failed (null when it produced a picture); reported to the user. */
+  val lastError: String? get() = textureSource.lastError
+
   fun release() {
     textureSource.release()
   }
@@ -786,6 +789,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       val maxConcurrentDecoders = DecoderManager.MAX_RECOMMENDED_HARDWARE_DECODERS
 
+      /**
+       * Why the last decode of a clip produced no picture. Written by the decoder pre-open (this
+       * thread) and by the render loop (GL thread), read by the render loop; carried into the export
+       * exception, so "Could not decode a video frame" names the codec-level reason instead of
+       * leaving the user with a bare failure.
+       */
+      val decodeFailures = java.util.concurrent.ConcurrentHashMap<String, String>()
+
       fun getOrCreateDecoder(clip: VideoClip, currentActiveIds: Set<String>): HardwareClipDecoder? {
         decoders[clip.id]?.let { return it }
         if (decoders.size >= maxConcurrentDecoders) {
@@ -800,6 +811,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
           decoders[clip.id] = newDecoder
           newDecoder
         } else {
+          decodeFailures[clip.id] = newDecoder.lastError
+            ?: "the decoder for '${clip.name}' could not be opened (${clip.uri})"
           newDecoder.release()
           null
         }
@@ -827,13 +840,19 @@ class AsyncFramePipelineEngine(private val context: Context) {
             val t0 = System.nanoTime()
             val ok = dec.decodeFrame(srcPosMs * 1000L, stop)
             metrics.decodeTimeNs.addAndGet(System.nanoTime() - t0)
-            if (!ok) return null
+            if (!ok) {
+              decodeFailures[clip.id] = dec.lastError
+                ?: "the decoder for '${clip.name}' returned no picture for ${srcPosMs}ms"
+              return null
+            }
             dec.updateTexImageOnGl()
             metrics.decodedFrames.incrementAndGet()
             metrics.zeroCopyFrames.incrementAndGet()
             return dec
           } catch (e: IllegalStateException) {
             Log.w(tag, "Decoder error for clip ${clip.name} at ${srcPosMs}ms (try ${tryNo + 1}): ${e.message}", e)
+            decodeFailures[clip.id] = "try ${tryNo + 1}: ${e.message}" +
+              (dec.lastError?.let { " (${it})" } ?: "")
             decoders.remove(clip.id)?.release()
             decoderManager.triggerSoftwareFallback("Runtime decoder error: ${e.message}")
           }
@@ -948,9 +967,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
             }
 
             if (activeClip != null && activeClip.isVideo && activeClip.uri.isNotBlank() && activeClip.id !in decoded) {
+              val reason = decodeFailures[activeClip.id]
               throw ExportPipelineException(
                 "Could not decode a video frame from '${activeClip.name}' at ${frame.clipSourcePosMs} ms " +
-                  "(timeline ${timelinePosMs} ms). Export stopped instead of writing black frames.",
+                  "(timeline ${timelinePosMs} ms)" +
+                  (reason?.let { "; decoder reported: $it" } ?: "") +
+                  ". Export stopped instead of writing black frames.",
                 retryable = false
               )
             }

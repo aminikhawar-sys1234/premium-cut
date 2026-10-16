@@ -28,6 +28,7 @@ import com.example.domain.model.Transition
 import com.example.domain.model.TransitionType
 import com.example.domain.model.VideoAdjustments
 import com.example.domain.model.VideoClip
+import com.example.engine.composition.ChromaKeyResolver
 import com.example.engine.effects.AndroidTestContextHolder
 import com.example.engine.effects.LookVerificationReport
 import kotlinx.coroutines.runBlocking
@@ -35,8 +36,10 @@ import org.junit.After
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeNoException
 import org.junit.Before
+import org.junit.FixMethodOrder
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.junit.runners.MethodSorters
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
@@ -54,9 +57,17 @@ import kotlin.math.abs
  * exception, the render report and the measured frame statistics instead of only a red cross.
  */
 @RunWith(AndroidJUnit4::class)
+@FixMethodOrder(MethodSorters.NAME_ASCENDING)
 class ComplexProjectExportInstrumentedTest {
 
   private lateinit var dir: File
+  /**
+   * Fixtures live in their own directory: the export deletes whatever sits at its output path
+   * (`outputFile.delete()` before the muxer opens it), so a fixture that shares a directory *and*
+   * name with an output file is destroyed by the export that is supposed to read it. That is
+   * exactly what made this suite's control case fail its first CI run.
+   */
+  private val sourceDir: File get() = File(dir, "sources")
   private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
 
   private val portraitConfig = ExportConfig(resolution = Resolution.RES_720P, frameRate = FrameRate.FPS_30)
@@ -66,6 +77,7 @@ class ComplexProjectExportInstrumentedTest {
   fun setUp() {
     AndroidTestContextHolder.context = context
     dir = File(context.cacheDir, "complex-export-${System.nanoTime()}").also { it.mkdirs() }
+    sourceDir.mkdirs()
     LookVerificationReport.section("Complex project export (multi-track, all features)")
     LookVerificationReport.line("stamp=${LookVerificationReport.stamp()} dir=$dir")
   }
@@ -78,7 +90,8 @@ class ComplexProjectExportInstrumentedTest {
   // ------------------------------------------------------------------ helpers
 
   private fun source(name: String, picture: TestMp4Factory.Picture, ms: Long): File {
-    val file = File(dir, name)
+    val file = File(sourceDir, name)
+    file.parentFile?.mkdirs()
     try {
       TestMp4Factory.write(file, videoMs = ms, audioMs = ms, picture = picture)
     } catch (t: Throwable) {
@@ -89,7 +102,8 @@ class ComplexProjectExportInstrumentedTest {
   }
 
   private fun png(name: String, color: Int): File {
-    val file = File(dir, name)
+    val file = File(sourceDir, name)
+    file.parentFile?.mkdirs()
     val bitmap = Bitmap.createBitmap(320, 240, Bitmap.Config.ARGB_8888)
     Canvas(bitmap).drawRect(0f, 0f, 320f, 240f, Paint().apply { this.color = color })
     FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
@@ -147,13 +161,42 @@ class ComplexProjectExportInstrumentedTest {
 
   private fun export(timeline: Timeline, config: ExportConfig, name: String): File {
     val out = File(dir, name)
+    // The export deletes the file at its output path before muxing. Writing over a source would
+    // silently destroy the very clip the export has to decode, so make that a test error.
+    val sources = (timeline.videoClips + timeline.overlayClips).mapNotNull { clip ->
+      android.net.Uri.parse(clip.uri).path?.let { File(it).canonicalPath }
+    }
+    assertTrue(
+      "the export output '$name' overwrites a source clip of the same test",
+      sources.none { it == out.canonicalPath }
+    )
     val started = System.currentTimeMillis()
+    val engine = AsyncFramePipelineEngine(context)
     try {
-      runBlocking { AsyncFramePipelineEngine(context).export(timeline, config, out) }
+      runBlocking { engine.export(timeline, config, out) }
     } catch (t: Throwable) {
       LookVerificationReport.line(
-        "EXPORT FAILED $name: ${t.javaClass.name}: ${t.message}"
+        "engine metrics: ${engine.metrics.describe()} plan=${engine.activePlan?.describe()}"
       )
+      // Diagnostics that decide *what* failed: the whole cause chain (a MediaCodec failure usually
+      // sits under an ExportPipelineException), what the device's decoders are, and whether the
+      // very first video source can be decoded outside the pipeline at all. Without this the test
+      // report only says "Could not decode a video frame from X".
+      LookVerificationReport.line("EXPORT FAILED $name: ${t.javaClass.name}: ${t.message}")
+      LookVerificationReport.line("cause chain:\n" + t.causeChain())
+      LookVerificationReport.line("decoders on this device: " + decoderInventory())
+      (timeline.videoClips + timeline.overlayClips)
+        .firstOrNull { it.isVideo && it.uri.isNotBlank() }
+        ?.let { clip ->
+          val path = android.net.Uri.parse(clip.uri).path
+          if (path == null) {
+            LookVerificationReport.line("source '${clip.name}' is not a local file (${clip.uri})")
+          } else {
+            val file = File(path)
+            LookVerificationReport.line("source '${clip.name}' tracks: " + describeTracks(file))
+            LookVerificationReport.line("source '${clip.name}' direct decode: " + probeDecodeOnce(file))
+          }
+        }
       LookVerificationReport.line(t.stackTraceToString().lineSequence().take(40).joinToString("\n"))
       throw AssertionError(
         "the export pipeline could not produce $name (${timeline.describeShape()}): ${t.message}",
@@ -171,6 +214,112 @@ class ComplexProjectExportInstrumentedTest {
     "video=${videoClips.size} overlay=${overlayClips.size} text=${textClips.size} " +
       "sticker=${stickerClips.size} effect=${effectClips.size} audio=${audioClips.size} " +
       "transitions=${transitions.size} duration=${totalDurationMs}ms aspect=$aspectRatio"
+
+  // ------------------------------------------------------------------ failure diagnostics
+
+  /** `ExportPipelineException -> MediaCodec.CodecException -> ...` flattened into one string. */
+  private fun Throwable.causeChain(): String {
+    val parts = mutableListOf<String>()
+    var current: Throwable? = this
+    while (current != null && parts.size < 8) {
+      val message = current.message?.replace('\n', ' ')?.take(400)
+      parts.add("${current.javaClass.name}: $message")
+      current = current.cause?.takeIf { it !== current }
+    }
+    return parts.joinToString("\n  caused by ")
+  }
+
+  /** Which video decoders this device advertises (a codec-instance limit shows up here first). */
+  private fun decoderInventory(): String = try {
+    val infos = android.media.MediaCodecList(android.media.MediaCodecList.ALL_CODECS).codecInfos
+    infos
+      .filter { info -> info.supportedTypes.any { it.startsWith("video/") } }
+      .joinToString("; ") { info ->
+        val hw = if (android.os.Build.VERSION.SDK_INT >= 29 && info.isHardwareAccelerated) "hw" else "sw"
+        "${info.name}[$hw]"
+      }
+  } catch (t: Throwable) {
+    "unavailable: ${t.javaClass.simpleName}: ${t.message}"
+  }
+
+  /** MediaExtractor's view of a fixture: proves the file is a real, complete MP4. */
+  private fun describeTracks(file: File): String = try {
+    val extractor = MediaExtractor()
+    try {
+      extractor.setDataSource(file.absolutePath)
+      (0 until extractor.trackCount).joinToString("; ") { index ->
+        val format = extractor.getTrackFormat(index)
+        val mime = format.getString(MediaFormat.KEY_MIME) ?: "?"
+        val duration = if (format.containsKey(MediaFormat.KEY_DURATION)) {
+          format.getLong(MediaFormat.KEY_DURATION)
+        } else -1L
+        val w = if (format.containsKey(MediaFormat.KEY_WIDTH)) format.getInteger(MediaFormat.KEY_WIDTH) else -1
+        val h = if (format.containsKey(MediaFormat.KEY_HEIGHT)) format.getInteger(MediaFormat.KEY_HEIGHT) else -1
+        "#$index $mime ${w}x$h ${duration / 1000}ms"
+      }
+    } finally {
+      runCatching { extractor.release() }
+    }
+  } catch (t: Throwable) {
+    "unreadable: ${t.javaClass.simpleName}: ${t.message}"
+  }
+
+  /**
+   * Decodes one frame of [file] with a fresh MediaCodec, outside the export pipeline. "ok" with the
+   * pipeline failing means the engine's decode path failed, not the file; a codec error here names
+   * the device-side reason (instance limit, unsupported profile, dead decoder).
+   */
+  private fun probeDecodeOnce(file: File): String {
+    val extractor = MediaExtractor()
+    var codec: android.media.MediaCodec? = null
+    return try {
+      extractor.setDataSource(file.absolutePath)
+      val trackIndex = (0 until extractor.trackCount).firstOrNull { index ->
+        extractor.getTrackFormat(index).getString(MediaFormat.KEY_MIME)?.startsWith("video/") == true
+      }
+      if (trackIndex == null) {
+        "no video track"
+      } else {
+        val format = extractor.getTrackFormat(trackIndex)
+        extractor.selectTrack(trackIndex)
+        val decoder = android.media.MediaCodec.createDecoderByType(
+          format.getString(MediaFormat.KEY_MIME) ?: MediaFormat.MIMETYPE_VIDEO_AVC
+        )
+        codec = decoder
+        decoder.configure(format, null, null, 0)
+        decoder.start()
+        val info = android.media.MediaCodec.BufferInfo()
+        val deadline = android.os.SystemClock.elapsedRealtime() + 5_000L
+        var result = "no output within 5s (decoder produced nothing)"
+        while (android.os.SystemClock.elapsedRealtime() < deadline) {
+          val input = decoder.dequeueInputBuffer(2_000L)
+          if (input >= 0) {
+            val buffer = decoder.getInputBuffer(input)
+            val size = if (buffer != null) extractor.readSampleData(buffer, 0) else -1
+            if (size < 0) {
+              decoder.queueInputBuffer(input, 0, 0, 0L, android.media.MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+            } else {
+              decoder.queueInputBuffer(input, 0, size, extractor.sampleTime, 0)
+              extractor.advance()
+            }
+          }
+          val output = decoder.dequeueOutputBuffer(info, 2_000L)
+          if (output >= 0) {
+            decoder.releaseOutputBuffer(output, false)
+            result = "ok frame pts=${info.presentationTimeUs}us size=${info.size}"
+            break
+          }
+        }
+        result
+      }
+    } catch (t: Throwable) {
+      "${t.javaClass.name}: ${t.message}"
+    } finally {
+      runCatching { codec?.stop() }
+      runCatching { codec?.release() }
+      runCatching { extractor.release() }
+    }
+  }
 
   private fun frameAt(file: File, timeUs: Long): Bitmap {
     val retriever = MediaMetadataRetriever()
@@ -250,7 +399,7 @@ class ComplexProjectExportInstrumentedTest {
       similarity = 0.5f,
       smoothness = 0.1f,
       spillSuppression = 0.4f,
-      backgroundType = ChromaKeyResolverNames.BACKGROUND_VIDEO,
+      backgroundType = ChromaKeyResolver.BACKGROUND_VIDEO,
       backgroundColor = 0xFF0000FF,
       backgroundUri = android.net.Uri.fromFile(keyBg).toString()
     )
@@ -438,15 +587,11 @@ class ComplexProjectExportInstrumentedTest {
     )
   }
 
-  /** Mirrors ChromaKeyResolver's background-type constants without importing the engine into androidTest. */
-  private object ChromaKeyResolverNames {
-    const val BACKGROUND_VIDEO = "Video"
-  }
-
   // ------------------------------------------------------------------ tests
 
   @Test
-  fun complexProjectExportsAValidPortraitVideo() {
+  fun b01_complexProjectExportsAValidPortraitVideo() {
+    LookVerificationReport.line(">>> START b01_complexProjectExportsAValidPortraitVideo")
     val timeline = complexProject(AspectRatio.RATIO_9_16)
     val out = export(timeline, portraitConfig, "complex-portrait.mp4")
 
@@ -483,7 +628,8 @@ class ComplexProjectExportInstrumentedTest {
   }
 
   @Test
-  fun complexProjectExportsAValidLandscapeVideo() {
+  fun b02_complexProjectExportsAValidLandscapeVideo() {
+    LookVerificationReport.line(">>> START b02_complexProjectExportsAValidLandscapeVideo")
     val timeline = complexProject(AspectRatio.RATIO_16_9)
     val out = export(timeline, landscapeConfig, "complex-landscape.mp4")
 
@@ -505,7 +651,8 @@ class ComplexProjectExportInstrumentedTest {
   }
 
   @Test
-  fun manySimultaneousLayersStillExport() {
+  fun c01_manySimultaneousLayersStillExport() {
+    LookVerificationReport.line(">>> START c01_manySimultaneousLayersStillExport")
     // Resource-shaped stress: several decoders, several textures, several full-viewport passes at
     // once. This is the shape that separates a 1-30 s single-clip export from a real project.
     val ms = 900L
@@ -579,7 +726,8 @@ class ComplexProjectExportInstrumentedTest {
   }
 
   @Test
-  fun simpleSingleClipExportStillWorks() {
+  fun a01_simpleSingleClipExportStillWorks() {
+    LookVerificationReport.line(">>> START a01_simpleSingleClipExportStillWorks")
     // The control case from the report: one clip, no other layers. It must keep working.
     val ms = 900L
     val file = source("simple.mp4", TestMp4Factory.Picture.COLORFUL, ms)
@@ -595,5 +743,29 @@ class ComplexProjectExportInstrumentedTest {
     LookVerificationReport.line("simple validation: valid=${validation.valid} '${validation.message}'")
     assertTrue("the simple control export broke: ${validation.message}", validation.valid)
     assertTrue("the simple export is black", luma(frameAt(out, 400_000L)) > 0.05f)
+  }
+
+  @Test
+  fun d01_simpleProjectStillExportsAfterHeavyProjects() {
+    LookVerificationReport.line(">>> START d01_simpleProjectStillExportsAfterHeavyProjects")
+    // The report the bug is about is *comparative*: a simple project exports, a complex one does
+    // not. This runs the simple project again, at the end, after four heavy exports have opened
+    // dozens of decoders, EGL contexts, FBOs and textures in this process. If a resource the export
+    // does not release is what breaks the complex case, this control fails where the first one did
+    // not - and the engine metrics printed by `export()` show how far it got.
+    val ms = 900L
+    val file = source("after-heavy.mp4", TestMp4Factory.Picture.COLORFUL, ms)
+    val timeline = Timeline(
+      videoClips = listOf(video("after-heavy", file, durationMs = ms)),
+      aspectRatio = AspectRatio.RATIO_9_16
+    )
+    val out = export(timeline, portraitConfig, "after-heavy-out.mp4")
+    val expected = ExportDimensionResolver.resolve(portraitConfig.resolution, timeline.aspectRatio)
+    val validation = ExportValidator.validate(
+      out, portraitConfig, ms, requireAudio = true, expectedDimensions = expected, sampleFrames = true
+    )
+    LookVerificationReport.line("post-heavy simple validation: valid=${validation.valid} '${validation.message}'")
+    assertTrue("a simple export broke after the heavy ones: ${validation.message}", validation.valid)
+    assertTrue("the post-heavy simple export is black", luma(frameAt(out, 400_000L)) > 0.05f)
   }
 }
