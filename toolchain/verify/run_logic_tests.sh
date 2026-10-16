@@ -44,12 +44,14 @@ SOURCES=(
   "$MAIN/com/example/engine/preview/PreviewCompositionPolicy.kt"
   "$MAIN/com/example/engine/export/ExportSurfaceSize.kt"
   "$MAIN/com/example/engine/export/ExportBlackFrameGuard.kt"
+  "$MAIN/com/example/engine/export/ExportOrientationPolicy.kt"
   "$MAIN/com/example/engine/composition/gpu/GpuShaders.kt"
   "$MAIN/com/ahstudio/color/primary/PipelineConsts.kt"
   "$MAIN/com/ahstudio/color/gpu/ColorShaderSource.kt"
   # tests
   "$TEST/com/example/engine/export/ExportSurfaceSizeTest.kt"
   "$TEST/com/example/engine/export/ExportBlackFrameGuardTest.kt"
+  "$TEST/com/example/engine/export/ExportOrientationPolicyTest.kt"
   "$TEST/com/example/engine/composition/gpu/GpuSamplerContractTest.kt"
   "$TEST/com/ahstudio/color/gpu/ColorVariantShaderContractTest.kt"
   "$TEST/com/example/engine/composition/ChromaKeyMathTest.kt"
@@ -85,5 +87,6 @@ echo "== running tests"
   com.example.engine.preview.PreviewCompositionPolicyTest \
   com.example.engine.export.ExportSurfaceSizeTest \
   com.example.engine.export.ExportBlackFrameGuardTest \
+  com.example.engine.export.ExportOrientationPolicyTest \
   com.example.engine.composition.gpu.GpuSamplerContractTest \
   com.ahstudio.color.gpu.ColorVariantShaderContractTest

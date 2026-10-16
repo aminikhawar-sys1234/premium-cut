@@ -213,7 +213,7 @@ So a clip whose decoder cannot be created is re-initialised on every frame. Each
 
 ### R-3 (Medium) — Synchronous tracking on every export frame
 
-- `GpuCompositionRenderer.kt:372`: `trackedBlocking = flipYForEncoder || deterministicMasks`. This is true on the export path. The same flag is passed as `blocking` to the face-warp, body-warp, AR, and subject-cutout stages (`:379`, `:390`, `:401`, `:417`, `:429`, `:491`, `:514`).
+- `GpuCompositionRenderer.kt:518`: `trackedBlocking = flipYForEncoder || deterministicMasks`. This is true on the export path. Since `FLIP_Y_FOR_ENCODER` became `false` (see `docs/EXPORT_ORIENTATION_FIX.md`) the export path is blocking because `deterministicMasks = true`, not because of the flip flag - preview and export still differ exactly as described here. The same flag is passed as `blocking` to the face-warp, body-warp, AR, and subject-cutout stages (`:525`, `:536`, `:584`, `:651`, and the look/effect stages below them).
 - `ClipFaceTracker.kt:35–38`: with `blocking`, `facesAt` waits for the exact result for that frame, up to `EXPORT_TIMEOUT_MS = 20_000L` (`:60`). On timeout it throws, which fails the export.
 
 This is a deliberate choice for determinism, and it is documented in the code. Its cost is that export throughput is bounded by the tracker's per-frame latency for any project that uses face-warp, pose, or AR. The tracker latency has not been measured.
@@ -223,7 +223,7 @@ This is a deliberate choice for determinism, and it is documented in the code. I
 ### Verified OK in the render path
 
 - The EGL swap error is reported with the EGL code (`fa3fb05`).
-- The per-clip texture pipeline and the flip-Y blit (`blitToSurface`, `:1921`) are in place and unchanged by this audit.
+- The per-clip texture pipeline is in place and unchanged by this audit. The single final blit into the destination is `blitToSurface(currentInputTex, flipY = flipYForEncoder, flipX = flipXForEncoder)` (`GpuCompositionRenderer.kt:940`, helper at `:2445`); every other blit in the compositor is FBO-to-FBO and stays `flipY = false`. `ExportOrientationPolicy.FLIP_Y_FOR_ENCODER` is **`false`** as of the upside-down-export fix, so the encoder blit is identical to the preview blit - it used to be `true`, which mirrored every exported frame vertically relative to the preview. See `docs/EXPORT_ORIENTATION_FIX.md` for the evidence and for the guard that pins it (`toolchain/verify/verify_export_orientation.py`).
 
 ---
 

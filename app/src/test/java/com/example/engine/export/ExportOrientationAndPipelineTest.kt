@@ -3,6 +3,7 @@ package com.example.engine.export
 import android.media.MediaFormat
 import androidx.test.core.app.ApplicationProvider
 import com.example.domain.model.*
+import com.example.engine.composition.CompositionRenderGraph
 import org.junit.Assert.*
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -117,10 +118,16 @@ class ExportOrientationAndPipelineTest {
   }
 
   @Test
-  fun testExportOrientationPolicy_EncoderBlitFlipsYAndMuxerHintIsZero() {
+  fun testExportOrientationPolicy_EncoderBlitMatchesPreviewAndMuxerHintIsZero() {
     assertEquals(0, ExportOrientationPolicy.MUXER_ORIENTATION_HINT_DEGREES)
     assertEquals(0, ExportOrientationPolicy.DECODER_KEY_ROTATION_DEGREES)
-    assertTrue(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER)
+    // The encoder Surface and the preview surface share the GLES orientation: no Y flip on either.
+    // A flip here mirrored every exported frame vertically (the upside-down export bug).
+    assertFalse("the encoder blit must not flip Y", ExportOrientationPolicy.FLIP_Y_FOR_ENCODER)
+    assertFalse(
+      "preview and export must blit with the same orientation",
+      CompositionRenderGraph.FramePresentation.export(ExportOrientationPolicy.FLIP_Y_FOR_ENCODER).flipY
+    )
     assertEquals(-90f, ExportOrientationPolicy.glRotationDegrees(90f), 0.01f)
     assertEquals(-180f, ExportOrientationPolicy.glRotationDegrees(180f), 0.01f)
     assertEquals(-270f, ExportOrientationPolicy.glRotationDegrees(270f), 0.01f)

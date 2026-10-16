@@ -131,11 +131,16 @@ class CompositionRenderGraphTest {
   @Test
   fun presentationIsTheOnlyPreviewExportDifferenceInTheBlit() {
     val preview = CompositionRenderGraph.FramePresentation.PREVIEW
-    val export = CompositionRenderGraph.FramePresentation.export(flipY = true)
+    // The export passes the policy's encoder flip. It must be the preview's: both destinations are
+    // GLES-fed BufferQueues with the same orientation, so a differing Y flip rotates the export.
+    val export = CompositionRenderGraph.FramePresentation.export(
+      flipY = com.example.engine.export.ExportOrientationPolicy.FLIP_Y_FOR_ENCODER
+    )
     assertFalse(preview.flipY)
     assertFalse(preview.deterministicMasks)
-    assertTrue(export.flipY)
+    assertFalse("the export blit must not flip Y", export.flipY)
     assertFalse(export.flipX)
     assertTrue(export.deterministicMasks)
+    assertEquals("only the mask determinism may differ", preview.flipY, export.flipY)
   }
 }

@@ -16,7 +16,15 @@ object TestMp4Factory {
   const val H = 240
   const val FPS = 15
 
-  enum class Picture { COLORFUL, BLACK, DARK_NIGHT, GREEN_SCREEN }
+  enum class Picture { COLORFUL, BLACK, DARK_NIGHT, GREEN_SCREEN, ORIENTATION_QUADRANTS }
+
+  /**
+   * Luma of the four quadrants of [Picture.ORIENTATION_QUADRANTS], in coded-frame order
+   * (top-left, top-right, bottom-left, bottom-right). Four distinct levels: every one of the eight
+   * dihedral transforms of the frame produces a different arrangement, so an exported frame can be
+   * classified (rotation, mirror, upside down) from its quadrant luma alone.
+   */
+  val ORIENTATION_LUMA = intArrayOf(30, 90, 150, 220)
 
   private class Sample(val data: ByteArray, val info: MediaCodec.BufferInfo)
   private class Encoded(val format: MediaFormat, val samples: List<Sample>)
@@ -32,9 +40,11 @@ object TestMp4Factory {
     audioMs: Long? = 2_000L,
     picture: Picture = Picture.COLORFUL,
     rotation: Int = 0,
+    width: Int = W,
+    height: Int = H,
   ): File {
     val video = videoMs?.let { ms ->
-      val e = encodeVideo(ms, picture)
+      val e = encodeVideo(ms, picture, width, height)
       // videoMs <= 0 builds a video track that has a format but no samples (zero-frame output).
       if (ms <= 0L) Encoded(e.format, emptyList()) else e
     }
@@ -50,26 +60,29 @@ object TestMp4Factory {
     return file
   }
 
-  private fun lumaAt(picture: Picture, frame: Int, x: Int, y: Int, rnd: Random): Int = when (picture) {
+  private fun lumaAt(picture: Picture, frame: Int, x: Int, y: Int, w: Int, h: Int, rnd: Random): Int = when (picture) {
     Picture.BLACK -> 16
-    Picture.COLORFUL -> 40 + ((x * 180 / W + y * 20 / H + frame * 6) % 180)
+    Picture.ORIENTATION_QUADRANTS ->
+      // top-left, top-right, bottom-left, bottom-right - four distinct, video-legal levels.
+      ORIENTATION_LUMA[(if (y < h / 2) 0 else 2) + (if (x < w / 2) 0 else 1)]
+    Picture.COLORFUL -> 40 + ((x * 180 / w + y * 20 / h + frame * 6) % 180)
     Picture.DARK_NIGHT ->
       if (x in 20..60 && y in 20..60) 210                // a street lamp, ~3% of the frame
       else 20 + rnd.nextInt(0, 22)                       // dark but noisy sensor
-    Picture.GREEN_SCREEN -> if (x < W / 2) 145 else 106  // chroma key subject on the left
+    Picture.GREEN_SCREEN -> if (x < w / 2) 145 else 106  // chroma key subject on the left
   }
 
   /**
    * BT.601 limited-range chroma for [picture] at (x, y). Every older picture keeps 128/128, so the
    * grey sources the validator tests rely on are unchanged.
    */
-  private fun chromaAt(picture: Picture, x: Int): Pair<Int, Int> = when (picture) {
-    Picture.GREEN_SCREEN -> if (x < W / 2) 54 to 34 else 202 to 222 // green left, magenta right
+  private fun chromaAt(picture: Picture, x: Int, w: Int): Pair<Int, Int> = when (picture) {
+    Picture.GREEN_SCREEN -> if (x < w / 2) 54 to 34 else 202 to 222 // green left, magenta right
     else -> 128 to 128
   }
 
-  private fun encodeVideo(durationMs: Long, picture: Picture): Encoded {
-    val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, W, H).apply {
+  private fun encodeVideo(durationMs: Long, picture: Picture, w: Int = W, h: Int = H): Encoded {
+    val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, w, h).apply {
       setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
       setInteger(MediaFormat.KEY_BIT_RATE, 800_000)
       setInteger(MediaFormat.KEY_FRAME_RATE, FPS)
@@ -93,15 +106,15 @@ object TestMp4Factory {
           } else {
             val img = codec.getInputImage(i)!!
             val yP = img.planes[0]; val uP = img.planes[1]; val vP = img.planes[2]
-            for (y in 0 until H) for (x in 0 until W) {
-              yP.buffer.put(y * yP.rowStride + x * yP.pixelStride, lumaAt(picture, fed, x, y, rnd).toByte())
+            for (y in 0 until h) for (x in 0 until w) {
+              yP.buffer.put(y * yP.rowStride + x * yP.pixelStride, lumaAt(picture, fed, x, y, w, h, rnd).toByte())
             }
-            for (y in 0 until H / 2) for (x in 0 until W / 2) {
-              val (u, v) = chromaAt(picture, x * 2)
+            for (y in 0 until h / 2) for (x in 0 until w / 2) {
+              val (u, v) = chromaAt(picture, x * 2, w)
               uP.buffer.put(y * uP.rowStride + x * uP.pixelStride, u.toByte())
               vP.buffer.put(y * vP.rowStride + x * vP.pixelStride, v.toByte())
             }
-            codec.queueInputBuffer(i, 0, W * H * 3 / 2, fed * 1_000_000L / FPS, 0)
+            codec.queueInputBuffer(i, 0, w * h * 3 / 2, fed * 1_000_000L / FPS, 0)
           }
           fed++
         }
