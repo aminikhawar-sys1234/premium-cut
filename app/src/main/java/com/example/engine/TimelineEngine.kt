@@ -960,7 +960,11 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     frameRate: Float = 30f,
     mimeType: String = "video/mp4",
     hasAudio: Boolean = true
-  ) {
+  ) = withStateLock {
+    // Entire mutation under the state lock: this variant is invoked from UI coroutines on
+    // Dispatchers.Default while other mutators run on Main - the unlocked read-modify-write
+    // of overlayClips raced and could drop/duplicate overlay tracks when several overlays
+    // were added at once.
     recordHistory()
     val currentOverlays = _timeline.value.overlayClips.toMutableList()
     val nextOverlayTrack = com.example.engine.timeline.TimelineTrackManager.allocateOverlayTrackIndex(_timeline.value)
@@ -1203,14 +1207,36 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     rippleDelete(setOf(clipId))
   }
 
-  fun addOverlayClip(clip: VideoClip) = withStateLock {
+  fun addOverlayClip(clip: VideoClip) {
+    addOverlayClips(listOf(clip))
+  }
+
+  /**
+   * Batch append for multi-file overlay imports: ONE undo step and ONE timeline emission
+   * for the whole batch instead of N (N history snapshots + N recomposition storms used to
+   * freeze the editor when several overlay tracks were added at once). Clips with unset
+   * trackIndex (>0 means caller-specified) and timelineStartMs (<0 means playhead) get the
+   * authoritative values; each clip lands on its own overlay lane.
+   */
+  fun addOverlayClips(clips: List<VideoClip>): List<String> = withStateLock {
+    if (clips.isEmpty()) return@withStateLock emptyList()
     recordHistory()
     val currentOverlays = _timeline.value.overlayClips.toMutableList()
-    val nextTrack = if (clip.trackIndex > 0) clip.trackIndex else com.example.engine.timeline.TimelineTrackManager.allocateOverlayTrackIndex(_timeline.value)
-    val effectiveStart = if (clip.timelineStartMs >= 0) clip.timelineStartMs else com.example.engine.timeline.TimelineTrackManager.getAuthoritativeInsertionTime(_currentPositionMs.value)
-    val finalClip = clip.copy(trackIndex = nextTrack, timelineStartMs = effectiveStart)
-    currentOverlays.add(finalClip)
+    var working = _timeline.value
+    val ids = ArrayList<String>(clips.size)
+    for (clip in clips) {
+      val nextTrack = if (clip.trackIndex > 0) clip.trackIndex else com.example.engine.timeline.TimelineTrackManager.allocateOverlayTrackIndex(working)
+      val effectiveStart = if (clip.timelineStartMs >= 0) clip.timelineStartMs else com.example.engine.timeline.TimelineTrackManager.getAuthoritativeInsertionTime(_currentPositionMs.value)
+      val finalClip = clip.copy(trackIndex = nextTrack, timelineStartMs = effectiveStart)
+      currentOverlays.add(finalClip)
+      // Keep the snapshot evolving so a batch never allocates the same lane twice.
+      working = working.copy(overlayClips = currentOverlays.toList())
+      ids.add(finalClip.id)
+    }
+    currentOverlays.sortBy { it.timelineStartMs }
     _timeline.value = _timeline.value.copy(overlayClips = currentOverlays)
+    _selectedElement.value = SelectedTrackElement.Overlay(ids.last())
+    ids
   }
 
   // --- Advanced Clip Editing & Multi-Track Operations ---

@@ -205,25 +205,3 @@ fun ExportConfigurationDialog(
 
 internal fun calculateExportDimensions(res: Resolution, aspect: AspectRatio): Pair<Int, Int> =
   com.example.engine.export.ExportDimensionResolver.resolve(res, aspect)
-
-/**
- * Computes estimated file size in bytes based on duration and export config.
- */
-internal fun calculateEstimatedSize(durationMs: Long, config: ExportConfig): Long {
-  val durationSec = (durationMs / 1000f).coerceAtLeast(1f)
-  val effectiveBitrate = if (config.quality == ExportQuality.CUSTOM && config.customBitrateKbps > 0) {
-    config.customBitrateKbps * 1000L
-  } else {
-    val baseBitrate = when (config.resolution) {
-      Resolution.RES_480P -> 2_500_000L
-      Resolution.RES_720P -> 5_000_000L
-      Resolution.RES_1080P -> 10_000_000L
-      Resolution.RES_2K, Resolution.RES_VERTICAL_2K -> 18_000_000L
-      Resolution.RES_4K, Resolution.RES_VERTICAL_4K -> 35_000_000L
-      Resolution.RES_SQUARE_2K -> 22_000_000L
-    }
-    val codecMultiplier = if (config.codecProfile == CodecProfile.H265_HEVC) 0.75f else 1.0f
-    (baseBitrate * config.quality.bitrateMultiplier * (config.frameRate.fps / 30f) * codecMultiplier).toLong()
-  }
-  return (effectiveBitrate * durationSec / 8).toLong()
-}

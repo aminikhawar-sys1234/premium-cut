@@ -3,7 +3,6 @@ package com.example.ui.screens
 import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.net.Uri
-import android.provider.OpenableColumns
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -83,6 +82,7 @@ import com.example.engine.SelectedTrackElement
 import com.example.engine.export.ExportState
 import com.example.engine.text.TextLayerRenderer
 import com.example.ui.components.InteractiveTransformOverlay
+import com.example.ui.components.formatDurationShort
 import com.example.ui.components.player.PreviewVideoSurfaceRegistry
 import com.example.ui.AppScreen
 import com.example.ui.EditorToolbarTab
@@ -230,21 +230,7 @@ fun EditorScreen(
       coroutineScope.launch(Dispatchers.Default) {
         uris.forEach { uri ->
           try {
-            val fileName = try {
-              var result: String? = null
-              if (uri.scheme == "content") {
-                val cursor = context.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                  if (it.moveToFirst()) {
-                    val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (index != -1) result = it.getString(index)
-                  }
-                }
-              }
-              result ?: uri.lastPathSegment ?: "Imported Media"
-            } catch (e: Exception) {
-              uri.lastPathSegment ?: "Imported Media"
-            }
+            val fileName = getFileNameFromUri(context, uri) ?: uri.lastPathSegment ?: "Imported Media"
 
             val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
               context = context,
@@ -296,21 +282,7 @@ fun EditorScreen(
       coroutineScope.launch(Dispatchers.Default) {
         uris.forEach { uri ->
           try {
-            val fileName = try {
-              var result: String? = null
-              if (uri.scheme == "content") {
-                val cursor = context.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                  if (it.moveToFirst()) {
-                    val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (index != -1) result = it.getString(index)
-                  }
-                }
-              }
-              result ?: uri.lastPathSegment ?: "Imported Media"
-            } catch (e: Exception) {
-              uri.lastPathSegment ?: "Imported Media"
-            }
+            val fileName = getFileNameFromUri(context, uri) ?: uri.lastPathSegment ?: "Imported Media"
 
             val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
               context = context,
@@ -377,21 +349,7 @@ fun EditorScreen(
       coroutineScope.launch(Dispatchers.Default) {
         uris.forEach { uri ->
           try {
-            val fileName = try {
-              var result: String? = null
-              if (uri.scheme == "content") {
-                val cursor = context.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                  if (it.moveToFirst()) {
-                    val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (index != -1) result = it.getString(index)
-                  }
-                }
-              }
-              result ?: uri.lastPathSegment ?: "Overlay Media"
-            } catch (e: Exception) {
-              uri.lastPathSegment ?: "Overlay Media"
-            }
+            val fileName = getFileNameFromUri(context, uri) ?: uri.lastPathSegment ?: "Overlay Media"
 
             val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
               context = context,
@@ -435,21 +393,7 @@ fun EditorScreen(
       coroutineScope.launch(Dispatchers.Default) {
         uris.forEach { uri ->
           try {
-            val fileName = try {
-              var result: String? = null
-              if (uri.scheme == "content") {
-                val cursor = context.contentResolver.query(uri, null, null, null, null)
-                cursor?.use {
-                  if (it.moveToFirst()) {
-                    val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                    if (index != -1) result = it.getString(index)
-                  }
-                }
-              }
-              result ?: uri.lastPathSegment ?: "Overlay Media"
-            } catch (e: Exception) {
-              uri.lastPathSegment ?: "Overlay Media"
-            }
+            val fileName = getFileNameFromUri(context, uri) ?: uri.lastPathSegment ?: "Overlay Media"
 
             val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
               context = context,
@@ -507,21 +451,7 @@ fun EditorScreen(
     // Dispatchers.Default: blocking media work must not run on the main dispatcher.
     coroutineScope.launch(Dispatchers.Default) {
       try {
-        val fileName = try {
-          var result: String? = null
-          if (uri.scheme == "content") {
-            val cursor = context.contentResolver.query(uri, null, null, null, null)
-            cursor?.use {
-              if (it.moveToFirst()) {
-                val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
-                if (index != -1) result = it.getString(index)
-              }
-            }
-          }
-          result ?: uri.lastPathSegment ?: "Overlay Image"
-        } catch (e: Exception) {
-          uri.lastPathSegment ?: "Overlay Image"
-        }
+        val fileName = getFileNameFromUri(context, uri) ?: uri.lastPathSegment ?: "Overlay Image"
         val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
           context = context,
           sourceUriString = uri.toString(),
@@ -3563,13 +3493,6 @@ private fun applyTextureViewAspectFit(
   val matrix = Matrix()
   matrix.setScale(scaleX, scaleY, viewW / 2f, viewH / 2f)
   tv.setTransform(matrix)
-}
-
-private fun formatDurationShort(timeMs: Long): String {
-  val totalSeconds = (timeMs / 1000).coerceAtLeast(0)
-  val minutes = totalSeconds / 60
-  val seconds = totalSeconds % 60
-  return String.format("%02d:%02d", minutes, seconds)
 }
 
 @Composable

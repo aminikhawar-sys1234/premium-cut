@@ -388,7 +388,10 @@ fun InteractiveTransformOverlay(
           }
         }
 
-        val isRealVideoOverlay = overlay.isVideo && MediaRelinkManager.isRealPlayableMedia(context, overlay.uri)
+        // Disk I/O (exists/canRead/openFileDescriptor) per overlay PER RECOMPOSITION froze the
+        // editor with several overlays; cache the verdict per URI instead.
+        val isRealPlayable = remember(overlay.uri) { MediaRelinkManager.isRealPlayableMedia(context, overlay.uri) }
+        val isRealVideoOverlay = overlay.isVideo && isRealPlayable
         val overlayPlayer = if (isRealVideoOverlay && overlay.id in overlayPlayerIds) {
           getOverlayPlayer?.invoke(overlay.id)
         } else null

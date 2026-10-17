@@ -367,6 +367,12 @@ class PlaybackController(
   // Internal ExoPlayer Reconciliation
   // =========================================================================
 
+  // Last (clipId, sourcePosMs) an exact/fast seek was issued for while paused. A timeline
+  // refresh (overlay import, filter slider, undo) must not re-seek the decoder to the frame
+  // it is already showing: N rapid timeline emissions used to run N exact seeks and freeze
+  // the paused editor.
+  private var lastPausedExactSeek: Pair<String, Long>? = null
+
   private fun syncExoPlayerToTimelineState(exact: Boolean) {
     if (disposed) return
     // The Trimming tool owns the player while it is open (it loaded its own clipped item).
@@ -387,16 +393,23 @@ class PlaybackController(
       playbackManager.setPlaybackSpeed(clip.speed)
       playbackManager.setVolume(mainVideoGain(clip))
 
-      internalPlayerSeeking = true
-      try {
-        if (exact) {
-          playbackManager.seekToExact(sourcePos)
-        } else {
-          playbackManager.seekToFast(sourcePos)
+      val seekKey = clip.id to sourcePos
+      val skipRedundantSeek = !needsReload &&
+        !state.isPlaying && !state.isScrubbing &&
+        seekKey == lastPausedExactSeek
+      lastPausedExactSeek = seekKey
+      if (!skipRedundantSeek) {
+        internalPlayerSeeking = true
+        try {
+          if (exact) {
+            playbackManager.seekToExact(sourcePos)
+          } else {
+            playbackManager.seekToFast(sourcePos)
+          }
+          lastDriftCorrectionElapsedMs = SystemClock.elapsedRealtime()
+        } finally {
+          internalPlayerSeeking = false
         }
-        lastDriftCorrectionElapsedMs = SystemClock.elapsedRealtime()
-      } finally {
-        internalPlayerSeeking = false
       }
 
       if (state.isPlaying && !state.isScrubbing) {

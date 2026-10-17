@@ -38,6 +38,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import com.example.domain.model.ClipKeyframe
 import com.example.engine.KeyframeInterpolator
 import com.example.engine.audio.AudioWaveformManager
@@ -119,14 +121,28 @@ fun TimelineClipView(
 
   // Waveform analysis & dynamic slicing for trimmed clips
   val sourceSpanMs = maxOf(sourceEndMs, sourceStartMs + durationMs, durationMs, 1L)
-  val effectiveWaveform = remember(clipId, waveformData, durationMs, sourceStartMs, sourceEndMs, sourceSpanMs, hasAudio) {
+
+  // Waveform GENERATION (512 KB file peek + cache lookup) runs on a worker thread: it used
+  // to execute inside remember{} on the main thread and froze composition every time a new
+  // audio-bearing clip was added (e.g. several overlay tracks at once). Video clips never
+  // draw a waveform (layer 1 below is !isVideoClip), so they skip generation entirely.
+  var generatedWaveform by remember(clipId, uri, title, durationMs, hasAudio, isVideoClip) {
+    mutableStateOf(emptyList<Float>())
+  }
+  LaunchedEffect(clipId, uri, title, durationMs, hasAudio, isVideoClip) {
+    if (hasAudio && !isVideoClip) {
+      generatedWaveform = withContext(Dispatchers.Default) {
+        // Generated envelopes are already sized to this clip's timeline duration.
+        AudioWaveformManager.getOrGenerateWaveform(clipId, uri.ifBlank { clipId }, title, durationMs)
+      }
+    }
+  }
+
+  val effectiveWaveform = remember(waveformData, generatedWaveform, durationMs, sourceStartMs, sourceEndMs, sourceSpanMs) {
     if (waveformData.isNotEmpty()) {
       AudioWaveformManager.sliceForTrim(waveformData, sourceStartMs, sourceEndMs, sourceSpanMs)
-    } else if (hasAudio) {
-      // Generated envelopes are already sized to this clip's timeline duration.
-      AudioWaveformManager.getOrGenerateWaveform(clipId, uri.ifBlank { clipId }, title, durationMs)
     } else {
-      emptyList()
+      generatedWaveform
     }
   }
 

@@ -111,6 +111,10 @@ class CustomVideoEngineController(
     }
   }
 
+  // See updateTimeline: last paused exact-seek target (skip redundant re-seeks on timeline refreshes).
+  private var lastPausedSeekClipId: String? = null
+  private var lastPausedSeekSourceMs: Long = Long.MIN_VALUE
+
   fun updateTimeline(timeline: Timeline) {
     currentTimeline = timeline
     timelineSyncManager.updateTimeline(timeline)
@@ -141,7 +145,16 @@ class CustomVideoEngineController(
       val rel = (currentPosMs - clip.timelineStartMs).coerceAtLeast(0L)
       playbackController.setVolume(PreviewMixPolicy.clipGainAt(clip, timeline, TrackType.MAIN_VIDEO, rel))
       if (!isPlaying) {
-        playbackController.seekTo(clip.timelineToSourceMs(currentPosMs), resumeAfter = false, exact = true)
+        // Skip the exact seek when the player already shows this exact frame: every timeline
+        // emission (overlay import, slider, undo) used to re-seek and freeze the paused editor.
+        val sourceTarget = clip.timelineToSourceMs(currentPosMs)
+        val redundant = !needsReload &&
+          lastPausedSeekClipId == clip.id && lastPausedSeekSourceMs == sourceTarget
+        if (!redundant) {
+          playbackController.seekTo(sourceTarget, resumeAfter = false, exact = true)
+        }
+        lastPausedSeekClipId = clip.id
+        lastPausedSeekSourceMs = sourceTarget
       }
       _engineState.value = _engineState.value.copy(isReady = true)
     } else {

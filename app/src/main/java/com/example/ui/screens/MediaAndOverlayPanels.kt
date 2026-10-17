@@ -3,7 +3,9 @@ package com.example.ui.screens
 import android.content.Context
 import android.net.Uri
 import android.provider.OpenableColumns
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -66,64 +68,103 @@ fun MediaImportPanel(
   var imageDurationSec by remember { mutableFloatStateOf(3.0f) }
   var insertAtPlayhead by remember { mutableStateOf(true) }
 
+  // ---------------------------------------------------------------------------
+  // Consolidated importer for every launcher below.
+  //
+  // Runs on Dispatchers.Default: getFileNameFromUri (content-resolver query),
+  // persistMedia (file copy) and extractMetadata (MediaMetadataRetriever) each block
+  // for hundreds of ms PER FILE - on the main dispatcher they froze the editor whenever
+  // multiple overlay tracks / media were picked at once. Overlay imports are appended
+  // as ONE engine batch: one undo step, one timeline emission for the whole selection.
+  // ---------------------------------------------------------------------------
+  suspend fun importPickedMedia(
+    uris: List<Uri>,
+    fallbackName: String,
+    defaultImageDurationMs: Long = 3000L,
+    forceIsVideo: Boolean? = null,
+    forceHasAudio: Boolean? = null
+  ) {
+    val overlayBatch = ArrayList<VideoClip>()
+    withContext(Dispatchers.Default) {
+      for (uri in uris) {
+        try {
+          val fileName = getFileNameFromUri(context, uri) ?: fallbackName
+          val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
+            context = context,
+            sourceUriString = uri.toString(),
+            suggestedName = fileName
+          )
+          val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadataAsync(
+            context,
+            persistentPath,
+            defaultImageDurationMs
+          )
+          val isVideo = forceIsVideo ?: metadata.isVideo
+          val hasAudio = forceHasAudio ?: metadata.hasAudio
+          if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
+            viewModel.checkAndAutoConfigureCanvasFromMedia(
+              width = metadata.width,
+              height = metadata.height,
+              rotationDegrees = metadata.rotationDegrees,
+              frameRate = metadata.frameRate
+            )
+            viewModel.timelineEngine.addVideoClip(
+              uri = persistentPath,
+              name = fileName,
+              isVideo = isVideo,
+              durationMs = metadata.durationMs,
+              atPlayhead = insertAtPlayhead,
+              width = metadata.width,
+              height = metadata.height,
+              rotationDegrees = metadata.rotationDegrees,
+              frameRate = metadata.frameRate,
+              mimeType = metadata.mimeType,
+              hasAudio = hasAudio
+            )
+          } else {
+            overlayBatch.add(
+              VideoClip(
+                uri = persistentPath,
+                name = fileName,
+                isVideo = isVideo,
+                timelineStartMs = -1L, // engine resolves the authoritative playhead time
+                durationMs = metadata.durationMs,
+                sourceStartMs = 0L,
+                sourceEndMs = metadata.durationMs,
+                sourceTotalDurationMs = if (isVideo) metadata.durationMs else 0L,
+                cropScale = 0.45f,
+                cropOffsetX = 0.25f,
+                cropOffsetY = -0.25f,
+                width = metadata.width,
+                height = metadata.height,
+                naturalRotation = metadata.rotationDegrees,
+                frameRate = metadata.frameRate,
+                mimeType = metadata.mimeType,
+                hasAudio = hasAudio
+              )
+            )
+          }
+        } catch (e: Throwable) {
+          android.util.Log.e("MediaImportPanel", "Error importing media", e)
+        }
+      }
+      if (selectedTarget == MediaImportTarget.OVERLAY_PIP && overlayBatch.isNotEmpty()) {
+        viewModel.timelineEngine.addOverlayClips(overlayBatch)
+      }
+    }
+  }
+
   // Fallback GetMultipleContents launcher
   val fallbackMediaLauncher = rememberLauncherForActivityResult(
     contract = ActivityResultContracts.GetMultipleContents()
   ) { uris: List<Uri> ->
     if (uris.isNotEmpty()) {
       coroutineScope.launch {
-        uris.forEach { uri ->
-          try {
-            val fileName = getFileNameFromUri(context, uri) ?: "Imported Media"
-            val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
-              context = context,
-              sourceUriString = uri.toString(),
-              suggestedName = fileName
-            )
-            val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
-              context,
-              persistentPath,
-              defaultImageDurationMs = (imageDurationSec * 1000).toLong()
-            )
-
-            if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
-              viewModel.checkAndAutoConfigureCanvasFromMedia(
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate
-              )
-              viewModel.timelineEngine.addVideoClip(
-                uri = persistentPath,
-                name = fileName,
-                isVideo = metadata.isVideo,
-                durationMs = metadata.durationMs,
-                atPlayhead = insertAtPlayhead,
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate,
-                mimeType = metadata.mimeType,
-                hasAudio = metadata.hasAudio
-              )
-            } else {
-              viewModel.timelineEngine.addOverlayClip(
-                uri = persistentPath,
-                name = fileName,
-                isVideo = metadata.isVideo,
-                durationMs = metadata.durationMs,
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate,
-                mimeType = metadata.mimeType,
-                hasAudio = metadata.hasAudio
-              )
-            }
-          } catch (e: Throwable) {
-            android.util.Log.e("MediaImportPanel", "Error in fallback import", e)
-          }
-        }
+        importPickedMedia(
+          uris = uris,
+          fallbackName = "Imported Media",
+          defaultImageDurationMs = (imageDurationSec * 1000).toLong()
+        )
         onDismiss()
       }
     }
@@ -135,58 +176,11 @@ fun MediaImportPanel(
   ) { uris: List<Uri> ->
     if (uris.isNotEmpty()) {
       coroutineScope.launch {
-        uris.forEach { uri ->
-          try {
-            val fileName = getFileNameFromUri(context, uri) ?: "Imported Media"
-            val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
-              context = context,
-              sourceUriString = uri.toString(),
-              suggestedName = fileName
-            )
-            val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
-              context,
-              persistentPath,
-              defaultImageDurationMs = (imageDurationSec * 1000).toLong()
-            )
-
-            if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
-              viewModel.checkAndAutoConfigureCanvasFromMedia(
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate
-              )
-              viewModel.timelineEngine.addVideoClip(
-                uri = persistentPath,
-                name = fileName,
-                isVideo = metadata.isVideo,
-                durationMs = metadata.durationMs,
-                atPlayhead = insertAtPlayhead,
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate,
-                mimeType = metadata.mimeType,
-                hasAudio = metadata.hasAudio
-              )
-            } else {
-              viewModel.timelineEngine.addOverlayClip(
-                uri = persistentPath,
-                name = fileName,
-                isVideo = metadata.isVideo,
-                durationMs = metadata.durationMs,
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate,
-                mimeType = metadata.mimeType,
-                hasAudio = metadata.hasAudio
-              )
-            }
-          } catch (e: Throwable) {
-            android.util.Log.e("MediaImportPanel", "Error importing media", e)
-          }
-        }
+        importPickedMedia(
+          uris = uris,
+          fallbackName = "Imported Media",
+          defaultImageDurationMs = (imageDurationSec * 1000).toLong()
+        )
         onDismiss()
       }
     }
@@ -201,50 +195,12 @@ fun MediaImportPanel(
     if (recorded && file != null && file.length() > 0L) {
       coroutineScope.launch {
         try {
-          val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
-            context = context,
-            sourceUriString = Uri.fromFile(file).toString(),
-            suggestedName = file.name
+          importPickedMedia(
+            uris = listOf(Uri.fromFile(file)),
+            fallbackName = "Recording",
+            defaultImageDurationMs = (imageDurationSec * 1000).toLong(),
+            forceIsVideo = true
           )
-          val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
-            context,
-            persistentPath,
-            defaultImageDurationMs = (imageDurationSec * 1000).toLong()
-          )
-          if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
-            viewModel.checkAndAutoConfigureCanvasFromMedia(
-              width = metadata.width,
-              height = metadata.height,
-              rotationDegrees = metadata.rotationDegrees,
-              frameRate = metadata.frameRate
-            )
-            viewModel.timelineEngine.addVideoClip(
-              uri = persistentPath,
-              name = "Recording",
-              isVideo = true,
-              durationMs = metadata.durationMs,
-              atPlayhead = insertAtPlayhead,
-              width = metadata.width,
-              height = metadata.height,
-              rotationDegrees = metadata.rotationDegrees,
-              frameRate = metadata.frameRate,
-              mimeType = metadata.mimeType,
-              hasAudio = metadata.hasAudio
-            )
-          } else {
-            viewModel.timelineEngine.addOverlayClip(
-              uri = persistentPath,
-              name = "Recording",
-              isVideo = true,
-              durationMs = metadata.durationMs,
-              width = metadata.width,
-              height = metadata.height,
-              rotationDegrees = metadata.rotationDegrees,
-              frameRate = metadata.frameRate,
-              mimeType = metadata.mimeType,
-              hasAudio = metadata.hasAudio
-            )
-          }
           file.delete()
           onDismiss()
         } catch (e: Throwable) {
@@ -278,53 +234,11 @@ fun MediaImportPanel(
   ) { uris: List<Uri> ->
     if (uris.isNotEmpty()) {
       coroutineScope.launch {
-        uris.forEach { uri ->
-          try {
-            val fileName = getFileNameFromUri(context, uri) ?: "Imported Video"
-            val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
-              context = context,
-              sourceUriString = uri.toString(),
-              suggestedName = fileName
-            )
-            val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(context, persistentPath)
-            if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
-              viewModel.checkAndAutoConfigureCanvasFromMedia(
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate
-              )
-              viewModel.timelineEngine.addVideoClip(
-                uri = persistentPath,
-                name = fileName,
-                isVideo = true,
-                durationMs = metadata.durationMs,
-                atPlayhead = insertAtPlayhead,
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate,
-                mimeType = metadata.mimeType,
-                hasAudio = metadata.hasAudio
-              )
-            } else {
-              viewModel.timelineEngine.addOverlayClip(
-                uri = persistentPath,
-                name = fileName,
-                isVideo = true,
-                durationMs = metadata.durationMs,
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate,
-                mimeType = metadata.mimeType,
-                hasAudio = metadata.hasAudio
-              )
-            }
-          } catch (e: Throwable) {
-            android.util.Log.e("MediaImportPanel", "Error importing video", e)
-          }
-        }
+        importPickedMedia(
+          uris = uris,
+          fallbackName = "Imported Video",
+          forceIsVideo = true
+        )
         onDismiss()
       }
     }
@@ -335,57 +249,13 @@ fun MediaImportPanel(
   ) { uris: List<Uri> ->
     if (uris.isNotEmpty()) {
       coroutineScope.launch {
-        uris.forEach { uri ->
-          try {
-            val fileName = getFileNameFromUri(context, uri) ?: "Imported Photo"
-            val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
-              context = context,
-              sourceUriString = uri.toString(),
-              suggestedName = fileName
-            )
-            val metadata = com.example.engine.media.MediaMetadataHelper.extractMetadata(
-              context,
-              persistentPath,
-              defaultImageDurationMs = (imageDurationSec * 1000).toLong()
-            )
-            if (selectedTarget == MediaImportTarget.MAIN_TRACK) {
-              viewModel.checkAndAutoConfigureCanvasFromMedia(
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate
-              )
-              viewModel.timelineEngine.addVideoClip(
-                uri = persistentPath,
-                name = fileName,
-                isVideo = false,
-                durationMs = metadata.durationMs,
-                atPlayhead = insertAtPlayhead,
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate,
-                mimeType = metadata.mimeType,
-                hasAudio = false
-              )
-            } else {
-              viewModel.timelineEngine.addOverlayClip(
-                uri = persistentPath,
-                name = fileName,
-                isVideo = false,
-                durationMs = metadata.durationMs,
-                width = metadata.width,
-                height = metadata.height,
-                rotationDegrees = metadata.rotationDegrees,
-                frameRate = metadata.frameRate,
-                mimeType = metadata.mimeType,
-                hasAudio = false
-              )
-            }
-          } catch (e: Throwable) {
-            android.util.Log.e("MediaImportPanel", "Error importing photo", e)
-          }
-        }
+        importPickedMedia(
+          uris = uris,
+          fallbackName = "Imported Photo",
+          defaultImageDurationMs = (imageDurationSec * 1000).toLong(),
+          forceIsVideo = false,
+          forceHasAudio = false
+        )
         onDismiss()
       }
     }
