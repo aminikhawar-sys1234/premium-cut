@@ -3207,6 +3207,16 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       return
     }
     timelineEngine.pause()
+    // The GPU preview compositor (active whenever the project uses chroma key / effects / grades)
+    // holds up to four hardware decoders plus its own GL context. The export opens its own decoders,
+    // and together they exceed what devices grant: MediaCodec ERROR_INSUFFICIENT_RESOURCE, i.e. the
+    // "filters/effects set ho to export fail hota hai" failure. Hand the whole codec budget to the
+    // export; prepareForEditorEntry rebuilds the preview when the editor is entered again.
+    try {
+      playbackEngine.suspendPreviewForExport()
+    } catch (t: Throwable) {
+      android.util.Log.w("StudioViewModel", "Preview suspension before export failed", t)
+    }
     navigateTo(AppScreen.EXPORT)
     exportJob = viewModelScope.launch(Dispatchers.Default) {
       runCatching {

@@ -205,7 +205,17 @@ class VideoPlaybackEngine(
 
   /** Disk-probe throttle for the compositor playability check (no cache inside isRealPlayableMedia). */
   private var lastPlayableProbeAtElapsedMs = 0L
-  private var lastPlayableProbeResult = false
+  // Fail-open: before the first probe has ever run, let the compositor activate. A genuinely
+  // undecodable source is caught downstream by the compositor's own decoder failure path
+  // (onMainLayerUndecodable -> player fallback); a false default here instead blocked the FIRST
+  // activation on devices that had been up for less than the probe throttle window.
+  private var lastPlayableProbeResult = true
+  /**
+   * Set for the duration of an export (see [suspendPreviewForExport]): blocks compositor
+   * re-activation and overlay/audio player re-allocation so the export owns the codec budget.
+   * Cleared by [prepareForEditorEntry] when the editor is entered again.
+   */
+  @Volatile private var previewSuspendedForExport = false
   private var lastPresentAtElapsedMs = 0L
   private var lastPresentPosMs = -1L
   private var spatialLookJob: Job? = null
@@ -266,11 +276,23 @@ class VideoPlaybackEngine(
   }
 
   private fun refreshCompositorMode() {
+    // While an export runs, the preview must not re-allocate what suspendPreviewForExport freed
+    // (compositor decoders + GL context): the export owns the codec budget. Timeline updates still
+    // reach the engine during export, so the guard has to live here, not only at the call site.
+    if (previewSuspendedForExport) {
+      if (_compositorActive.value) teardownCompositor()
+      return
+    }
     // Chroma key and background removal are per-pixel effects: the player path cannot draw them, only the
     // GPU compositor can - and that is the same compositing the export runs, so both agree. A project that
     // uses either effect therefore switches the compositor on by itself; the Settings switch stays as an
     // explicit "always use the GPU preview".
-    val requiresComposition = PreviewCompositionPolicy.requiresCompositor(currentTimeline)
+    //
+    // lookFallbackActive is the THIRD such case: the device already reported that its Media3 effects
+    // pipeline can only run the identity passthrough, so the player path can draw NO look at all -
+    // filter taps would stay invisible forever. The compositor is the one renderer that draws every
+    // look with the export shaders, so it takes over look rendering for that device.
+    val requiresComposition = PreviewCompositionPolicy.requiresCompositor(currentTimeline) || lookFallbackActive
     val alwaysOn = PreviewCompositorSettings.enabled.value
     val active = _compositorActive.value
     // One transient failure (a decoder slot still held by an overlay player, a slow first decode)
@@ -290,7 +312,17 @@ class VideoPlaybackEngine(
     val sourcesPlayable = if (SystemClock.elapsedRealtime() - lastPlayableProbeAtElapsedMs < PLAYABLE_PROBE_THROTTLE_MS) {
       lastPlayableProbeResult
     } else {
-      val probed = PreviewFramePlan.canComposite(currentTimeline, ::isPlayableInPlayer)
+      // Resolve every clip's uri the SAME way the compositor's decoders will (proxy / relink).
+      // Probing the raw project uri answered "not playable" for proxy-served clips that playback
+      // plays fine, which kept the compositor off and made every effect invisible.
+      val probed = PreviewFramePlan.canComposite(currentTimeline) { clip ->
+        isPlayableInPlayer(
+          MediaPlayableUri.resolvePlayableString(
+            context,
+            proxyEngine?.getProxyUri(clip) ?: clip.uri
+          )
+        )
+      }
       lastPlayableProbeAtElapsedMs = SystemClock.elapsedRealtime()
       lastPlayableProbeResult = probed
       probed
@@ -702,8 +734,19 @@ class VideoPlaybackEngine(
         PreviewVideoSurfaceRegistry.rebindCurrent(player)
         PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
         restorePlaybackAfterGraphChange(playWhenReady, volume)
-        _playerError.value = "Preview effect failed to initialize. Showing unfiltered video."
-        Log.e(TAG, "Preview look fell back to identity passthrough (requested ${effects.size} effects)")
+        // Identity passthrough means the player path can never show this look. Hand look
+        // rendering to the GPU compositor (the pipeline the export runs): on devices with a
+        // broken Media3 effects stack this is the difference between "filters do nothing" and
+        // a live preview. refreshCompositorMode treats lookFallbackActive as requiring
+        // composition, so the very first failed tap now ends on a visible, graded frame.
+        refreshCompositorMode()
+        if (_compositorActive.value) {
+          compositor?.requestRender()
+          _playerError.value = null
+        } else {
+          _playerError.value = "Preview effect failed to initialize. Showing unfiltered video."
+        }
+        Log.e(TAG, "Preview look fell back to identity passthrough (requested ${effects.size} effects; compositor takeover=${_compositorActive.value})")
       }
       Media3EffectPipeline.ApplyResult.FAILED -> {
         pendingMedia3Effects = null
@@ -760,6 +803,9 @@ class VideoPlaybackEngine(
    * is opened on an existing project. Does not reset the playback clock or mute state.
    */
   fun prepareForEditorEntry() {
+    // Editor re-entry after an export lifts the suspension BEFORE the mode refresh: the
+    // compositor must be allowed to re-activate for projects that need it.
+    previewSuspendedForExport = false
     lastMedia3Signature = null
     lastMedia3GraphSignature = null
     lastPreviewFilterSignature = null
@@ -774,6 +820,9 @@ class VideoPlaybackEngine(
     }
     PreviewVideoSurfaceRegistry.attachRememberedPrimary(player)
     PreviewVideoSurfaceRegistry.rebindCurrent(player)
+    // Re-evaluate the compositor mode first: a project that needs the GPU preview re-enters it
+    // here, and applyActiveLookToPlayers below becomes a cheap requestRender on that path.
+    refreshCompositorMode()
     // Do not force setVideoEffects before a TextureView is bound: that is the
     // reopen path that left a black preview with silent source audio.
     applyActiveLookToPlayers(force = false)
@@ -1096,6 +1145,7 @@ class VideoPlaybackEngine(
 
   fun syncOverlayPlayers(posMs: Long) {
     if (isTrimPreviewMode) return
+    if (previewSuspendedForExport) return
     if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return
     try {
       // Default path: one clock, no overlay ExoPlayer. The GPU compositor (beta) is the exception
@@ -1190,6 +1240,7 @@ class VideoPlaybackEngine(
 
   fun syncAudioTrackPlayers(posMs: Long) {
     if (isTrimPreviewMode) return
+    if (previewSuspendedForExport) return
     if (android.os.Looper.myLooper() != android.os.Looper.getMainLooper()) return
     try {
       val hasSolo = currentTimeline.audioClips.any { it.isSolo }
@@ -1371,6 +1422,33 @@ class VideoPlaybackEngine(
     overlayPlayers.values.forEach { try { it.playWhenReady = false; it.pause() } catch (_: Exception) {} }
     audioTrackPlayers.values.forEach { try { it.playWhenReady = false; it.pause() } catch (_: Exception) {} }
     _isPlaying.value = false
+  }
+
+  /**
+   * Frees every preview resource the export pipeline competes for, and keeps them freed until
+   * [prepareForEditorEntry] runs again.
+   *
+   * While the GPU preview compositor is active it holds up to [PreviewLayerPlanner.MAX_VIDEO_DECODERS]
+   * hardware decoders plus its own EGL context. An export then has to open its OWN decoders on top,
+   * and devices with a small MediaCodec instance budget refuse the export's first open
+   * (MediaCodec ERROR_INSUFFICIENT_RESOURCE) - the "filters/effects set ho to export fail hota hai"
+   * report. Without looks the preview stays on the player path (one decoder, the configuration every
+   * export has always been validated against), which is why those exports kept working.
+   *
+   * Everything rebuilt here comes back lazily: [prepareForEditorEntry] clears the suspension,
+   * [refreshCompositorMode] re-enters the compositor when the project needs it, and the sync
+   * functions reload overlay / audio players on the next timeline update.
+   */
+  fun suspendPreviewForExport() {
+    previewSuspendedForExport = true
+    pause()
+    releaseOverlayPlayers()
+    audioTrackPlayers.values.forEach { p ->
+      try { p.stop(); p.clearVideoSurface(); p.release() } catch (_: Exception) {}
+    }
+    audioTrackPlayers.clear()
+    audioLoadedUris.clear()
+    teardownCompositor()
   }
 
   fun togglePlayPause() {

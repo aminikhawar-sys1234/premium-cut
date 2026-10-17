@@ -59,10 +59,15 @@ data class PreviewFramePlan(
     /**
      * The compositor can only draw real media. Projects with placeholder clips (stock / sample
      * previews that the Compose path paints procedurally) stay on the legacy preview.
+     *
+     * The check is per clip, and the CALLER resolves the uri exactly the way the compositor's own
+     * decoders will (proxy / relink). Probing the raw project uri here used to answer "not playable"
+     * for clips that playback plays fine through their proxy — which latched the GPU compositor off
+     * and made every registry effect permanently invisible while the same clip previewed unfiltered.
      */
-    fun canComposite(timeline: Timeline, isPlayable: (String) -> Boolean): Boolean {
+    fun canComposite(timeline: Timeline, isPlayable: (VideoClip) -> Boolean): Boolean {
       val visual = timeline.videoClips + timeline.overlayClips
-      return visual.isNotEmpty() && visual.all { !isSynthetic(it.uri) && isPlayable(it.uri) }
+      return visual.isNotEmpty() && visual.all { !isSynthetic(it.uri) && isPlayable(it) }
     }
   }
 }

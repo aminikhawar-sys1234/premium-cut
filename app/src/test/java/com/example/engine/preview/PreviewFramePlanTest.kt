@@ -95,10 +95,28 @@ class PreviewFramePlanTest {
   fun canCompositeOnlyRealPlayableProjects() {
     val real = Timeline(videoClips = listOf(clip("a", 0, 1000)), overlayClips = listOf(clip("b", 0, 1000)))
     assertTrue(PreviewFramePlan.canComposite(real) { true })
-    assertFalse(PreviewFramePlan.canComposite(real) { it != "file:///b.mp4" })
+    // The predicate is per CLIP now: the caller resolves the proxy / relink uri before probing,
+    // so a raw uri must never decide the gate by itself.
+    assertFalse(PreviewFramePlan.canComposite(real) { it.uri != "file:///b.mp4" })
     assertFalse(PreviewFramePlan.canComposite(Timeline()) { true })
     val withStock = real.copy(overlayClips = listOf(clip("s", 0, 1000, uri = "stock://x")))
     assertFalse(PreviewFramePlan.canComposite(withStock) { true })
+  }
+
+  @Test
+  fun canCompositeJudgesEachClipByItsOwnUri() {
+    // Mirrors the engine's resolver: a raw uri that is not playable but whose proxy uri IS playable
+    // must count as playable (the compositor decodes the proxy, not the raw project uri).
+    val raw = clip("raw", 0, 1000, uri = "content://media/raw-video")
+    val proxied = raw.copy(id = "proxied", uri = "content://media/proxied-video")
+    val resolved = mapOf("content://media/raw-video" to "file:///cache/proxy/raw.mp4")
+    val timeline = Timeline(videoClips = listOf(raw, proxied))
+    assertTrue(
+      PreviewFramePlan.canComposite(timeline) { clip ->
+        val playable = resolved[clip.uri] ?: clip.uri
+        playable == "file:///cache/proxy/raw.mp4" || clip.id == "proxied"
+      }
+    )
   }
 
   @Test
