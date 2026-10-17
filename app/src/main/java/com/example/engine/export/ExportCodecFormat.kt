@@ -19,9 +19,32 @@ object ExportCodecFormat {
     val caps = runCatching { codec.codecInfo.getCapabilitiesForType(mime) }.getOrNull() ?: return
     val neededMbs = macroblocks(width, height)
     val neededMbps = neededMbs * fps.coerceAtLeast(1)
-    val pick = caps.profileLevels
-      .filter { supportsFrame(mime, it, neededMbs, neededMbps) }
-      .maxWithOrNull(compareBy({ it.profile }, { it.level }))
+    // SDR whitelist: `maxWithOrNull(profile)` picked the numerically HIGHEST profile constant,
+    // and HEVC's HDR constants (Main10HDR10 = 0x1000, Main10HDR10Plus = 0x2000) outrank Main
+    // (0x1). Every HEVC export then requested a 10-bit HDR profile for 8-bit SDR surface input -
+    // strict encoders rejected configure() outright and lenient ones produced washed-out
+    // PQ-VUI streams tagged SDR Rec.709. Pick the LOWEST whitelisted profile that still
+    // satisfies the frame size, then the highest level listed for it.
+    val allowedProfiles = when (mime) {
+      MediaFormat.MIMETYPE_VIDEO_HEVC -> listOf(
+        MediaCodecInfo.CodecProfileLevel.HEVCMain,
+        MediaCodecInfo.CodecProfileLevel.HEVCMain10
+      )
+      MediaFormat.MIMETYPE_VIDEO_AVC -> listOf(
+        MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,
+        MediaCodecInfo.CodecProfileLevel.AVCProfileMain,
+        MediaCodecInfo.CodecProfileLevel.AVCProfileHigh
+      )
+      else -> null
+    }
+    val candidates = caps.profileLevels.filter { supportsFrame(mime, it, neededMbs, neededMbps) }
+    val whitelisted = allowedProfiles
+      ?.let { allowed -> candidates.filter { it.profile in allowed } }
+      ?: candidates
+    val pick = whitelisted.minWithOrNull(compareBy({ it.profile }, { -it.level }))
+      // Nothing whitelisted fits this frame size (e.g. an encoder listing only Main10/HDR for
+      // 4K): keep the old highest-profile pick rather than losing the capability entirely.
+      ?: candidates.maxWithOrNull(compareBy({ it.profile }, { it.level }))
       ?: return
     try {
       format.setInteger(MediaFormat.KEY_PROFILE, pick.profile)

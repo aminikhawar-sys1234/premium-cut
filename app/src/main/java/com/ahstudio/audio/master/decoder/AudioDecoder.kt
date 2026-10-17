@@ -63,10 +63,26 @@ class MediaCodecAudioDecoder(private val context: Context) : AudioDecoder {
                                 val floatPcm = codec.outputFormat.getInteger(MediaFormat.KEY_PCM_ENCODING, android.media.AudioFormat.ENCODING_PCM_16BIT) == android.media.AudioFormat.ENCODING_PCM_FLOAT
                                 val frames = info.size / (ch * if (floatPcm) 4 else 2)
                                 if (frames > 0) {
-                                    val inter = FloatArray(frames * ch)
-                                    if (floatPcm) { val fb = ob.asFloatBuffer(); for (i in inter.indices) inter[i] = fb.get(i) }
-                                    else { val sb = ob.asShortBuffer(); for (i in inter.indices) inter[i] = sb.get(i) / 32768f }
-                                    chunks.add(inter); totalFrames += frames
+                                    // A seek lands on the sync frame AT OR BEFORE startUs, so the first
+                                    // buffer(s) can begin before the requested start. Drop those samples:
+                                    // callers index the result as if it really began at startUs (the WAV
+                                    // renderer and the level analysers both assumed that), and the old
+                                    // code returned windows shifted early by a sync frame.
+                                    var skip = 0
+                                    if (startUs > 0 && info.presentationTimeUs < startUs) {
+                                        val safeRate = sr.coerceAtLeast(1)
+                                        val bufferEndUs = info.presentationTimeUs + frames * 1_000_000L / safeRate
+                                        skip = if (bufferEndUs <= startUs) frames
+                                        else (((startUs - info.presentationTimeUs) * safeRate) / 1_000_000L).toInt().coerceIn(0, frames)
+                                    }
+                                    val kept = frames - skip
+                                    if (kept > 0) {
+                                        val inter = FloatArray(kept * ch)
+                                        var k = 0
+                                        if (floatPcm) { val fb = ob.asFloatBuffer(); for (i in skip until frames) for (c in 0 until ch) { inter[k] = fb.get(i * ch + c); k++ } }
+                                        else { val sb = ob.asShortBuffer(); for (i in skip until frames) for (c in 0 until ch) { inter[k] = sb.get(i * ch + c) / 32768f; k++ } }
+                                        chunks.add(inter); totalFrames += kept
+                                    }
                                 }
                             }
                             codec.releaseOutputBuffer(outIdx, false)

@@ -15,9 +15,11 @@ import com.example.engine.KeyframeInterpolator
  * disagreed: the export (TimelineEvaluator + AudioExportProcessor) silences a muted or
  * non-soloed track, while the preview player kept playing it.
  *
- * Hide is deliberately *not* part of the audibility rule: hiding a video track only
- * switches its picture off, exactly like the export pipeline, which still mixes the audio
- * of a hidden video track. Silence always comes from mute/solo.
+ * Hide is deliberately *not* part of the audibility rule at the TRACK level: hiding a video
+ * track only switches its picture off, exactly like the export pipeline, which still mixes the
+ * audio of that track. A per-CLIP hidden flag (`VideoClip.isHidden`) DOES silence that clip's
+ * audio in both the preview ([clipGain]) and the export - so the two always agree. Silence always
+ * comes from mute/solo/clip-hide.
  */
 object PreviewMixPolicy {
 

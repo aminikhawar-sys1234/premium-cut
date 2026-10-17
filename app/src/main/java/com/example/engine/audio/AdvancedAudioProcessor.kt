@@ -138,6 +138,14 @@ object AdvancedAudioProcessor {
       if (channels > 1 && i + 1 < pcm.size) {
         result[i + 1] = clampedR.toShort()
       }
+      // Channels beyond stereo (5.1 sources) pass through unchanged: the EQ only shapes L/R, and
+      // the zero-filled result used to mute channels 2..5 outright whenever any EQ/voice effect ran.
+      if (channels > 2) {
+        for (c in 2 until channels) {
+          val idx = i + c
+          if (idx < pcm.size) result[idx] = pcm[idx]
+        }
+      }
     }
     return result
   }
@@ -161,6 +169,13 @@ object AdvancedAudioProcessor {
           res[i] = (pcm[i] * carrier).toInt().coerceIn(-32768, 32767).toShort()
           if (channels > 1 && i + 1 < pcm.size) {
             res[i + 1] = (pcm[i + 1] * carrier).toInt().coerceIn(-32768, 32767).toShort()
+          }
+          // Channels beyond stereo pass through instead of going silent.
+          if (channels > 2) {
+            for (c in 2 until channels) {
+              val idx = i + c
+              if (idx < pcm.size) res[idx] = pcm[idx]
+            }
           }
         }
         res
@@ -222,6 +237,13 @@ object AdvancedAudioProcessor {
           res[i] = (pcm[i] * carrier * 1.2f).toInt().coerceIn(-32768, 32767).toShort()
           if (channels > 1 && i + 1 < pcm.size) {
             res[i + 1] = (pcm[i + 1] * carrier * 1.2f).toInt().coerceIn(-32768, 32767).toShort()
+          }
+          // Channels beyond stereo pass through instead of going silent.
+          if (channels > 2) {
+            for (c in 2 until channels) {
+              val idx = i + c
+              if (idx < pcm.size) res[idx] = pcm[idx]
+            }
           }
         }
         res

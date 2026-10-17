@@ -246,8 +246,18 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
   private val _isCanvasConfiguredByMedia = MutableStateFlow(false)
   val isCanvasConfiguredByMedia: StateFlow<Boolean> = _isCanvasConfiguredByMedia.asStateFlow()
 
-  private val _activeResolution = MutableStateFlow(Resolution.RES_1080P)
+  // The Settings screen's "Video Quality" preference used to write a value nothing consumed.
+  // New blank projects now start at that quality (project/template/media canvases still override).
+  private val _activeResolution = MutableStateFlow(defaultResolutionFromSettings())
   val activeResolution: StateFlow<Resolution> = _activeResolution.asStateFlow()
+
+  private fun defaultResolutionFromSettings(): Resolution =
+    when (StudioPreferencesManager.settings.value.videoQuality) {
+      "720p" -> Resolution.RES_720P
+      "2K" -> Resolution.RES_2K
+      "4K UHD" -> Resolution.RES_4K
+      else -> Resolution.RES_1080P
+    }
 
   private val _activeFps = MutableStateFlow(FrameRate.FPS_30)
   val activeFps: StateFlow<FrameRate> = _activeFps.asStateFlow()
@@ -3174,10 +3184,21 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
   // --- Export Operation ---
 
+  private var exportJob: Job? = null
+
   fun startExport(config: ExportConfig) {
+    // Re-entrancy guard. The Rendering-state branch the UI checks flips asynchronously inside the
+    // launched coroutine, and every export() call builds a fresh pipeline, so a fast double-tap
+    // (or an "Export" from the editor while one runs) launched TWO full pipelines: two GPU
+    // renderers and encoders, interleaved progress, two gallery saves, and the cancel hook
+    // rewired to only the newest one.
+    if (exportJob?.isActive == true) {
+      android.util.Log.w("StudioViewModel", "startExport ignored: an export is already running")
+      return
+    }
     timelineEngine.pause()
     navigateTo(AppScreen.EXPORT)
-    viewModelScope.launch(Dispatchers.Default) {
+    exportJob = viewModelScope.launch(Dispatchers.Default) {
       runCatching {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_FOREGROUND)
       }
@@ -3189,6 +3210,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
 
       videoExporter.beginExternalExport(config)
       videoExporter.onExternalCancel = { professionalExportEngine.cancel() }
+      // Clear the previous run's progress BEFORE the collector starts: the StateFlow otherwise
+      // replays its stale "100% / Export completed successfully!" into the new collection.
+      professionalExportEngine.resetProgress()
       val progressJob = launch {
         professionalExportEngine.progress.collect { progress ->
           videoExporter.updateExternalExportProgress(
@@ -3226,6 +3250,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
         )
 
         if (!saveResult.isSavedToPublicGallery) {
+          // Do not strand the full-size verified MP4 in cacheDir: repeated failures (e.g. storage
+          // full) used to accumulate multi-GB cache files that worsened the very storage pressure
+          // that caused the failure.
+          runCatching { verifiedFile.delete() }
           videoExporter.failExternalExport("Export completed, but the video could not be saved to the device Gallery.")
           return@launch
         }

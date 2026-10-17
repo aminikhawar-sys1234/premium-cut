@@ -358,10 +358,18 @@ class ProfessionalExportEngine(private val context: Context) {
   @Volatile private var cancelled = false
   @Volatile private var activePipeline: AsyncFramePipelineEngine? = null
   @Volatile private var lastProgressLogMs = 0L
+  // Class-level re-entrancy guard: every export() call used to build a brand-new pipeline, so the
+  // pipeline's own "already running" CAS never fired for a second concurrent startExport.
+  private val exportActive = java.util.concurrent.atomic.AtomicBoolean(false)
 
   fun cancel() {
     cancelled = true
     activePipeline?.cancel()
+  }
+
+  /** Clears a previous run's progress so a new export never flashes the stale "100% / completed". */
+  fun resetProgress() {
+    _progress.value = ProfessionalExportProgress()
   }
 
   suspend fun export(
@@ -375,6 +383,11 @@ class ProfessionalExportEngine(private val context: Context) {
   ): Result<File> = withContext(Dispatchers.IO) {
     cancelled = false
     activePipeline = null
+    if (!exportActive.compareAndSet(false, true)) {
+      return@withContext Result.failure(
+        IllegalStateException("An export is already running. Wait for it to finish or cancel it first.")
+      )
+    }
     try {
       _progress.value = ProfessionalExportProgress(message = "Checking device encoder capabilities")
       val dimensions = ExportDimensionResolver.resolve(config.resolution, timeline.aspectRatio)
@@ -404,6 +417,10 @@ class ProfessionalExportEngine(private val context: Context) {
       val renderStartMs = System.currentTimeMillis()
       val rendered: File = coroutineScope {
         val progressJob = launch(Dispatchers.Default) {
+          // Monotonic clamp: a retry attempt resets the pipeline's frame counters, so the raw
+          // mapping walks backwards (75% -> 5%). Holding the highest fraction shown keeps the
+          // ring steady through a retry instead of jumping back to the pre-roll floor.
+          var reportedMax = 0f
           while (isActive) {
             if (shouldCancel()) this@ProfessionalExportEngine.cancel()
             val total = pipeline.plannedTotalFrames.takeIf { it > 0L } ?: plan.totalFrames
@@ -417,7 +434,9 @@ class ProfessionalExportEngine(private val context: Context) {
             // frame yet" - all of them read 5 % (see [ExportPhase]).
             val phase = pipeline.currentPhase
             val phaseFraction = pipeline.phaseFraction
-            val mapped = ExportProgressModel.overall(phase, phaseFraction, done, total)
+            val mappedRaw = ExportProgressModel.overall(phase, phaseFraction, done, total)
+            val mapped = max(mappedRaw, reportedMax)
+            reportedMax = mapped
             val fps = pipeline.activePlan?.fps ?: plan.frameRate
             val renderedMs = ((done.toDouble() / max(1, fps)) * 1000L).toLong()
             val wallMs = (System.currentTimeMillis() - renderStartMs).coerceAtLeast(1L)
@@ -513,6 +532,7 @@ class ProfessionalExportEngine(private val context: Context) {
       Result.failure(t)
     } finally {
       activePipeline = null
+      exportActive.set(false)
     }
   }
 

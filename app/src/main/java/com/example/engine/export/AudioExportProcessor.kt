@@ -55,6 +55,9 @@ class AudioExportProcessor(
         private const val INITIAL_PCM_SAMPLES = 1 shl 16
         /** Upper bound for the pre-sized window buffer (8M samples = 16 MB); growth handles more. */
         private const val MAX_PREALLOC_SAMPLES = 8 shl 20
+
+        /** No-output bound of the audio encode drain: past this the encoder is wedged, not slow. */
+        private const val ENCODER_OUTPUT_STALL_MS = 30_000L
     }
 
     private var context: Context? = null
@@ -63,8 +66,13 @@ class AudioExportProcessor(
         this.context = context
     }
 
-    private var audioTrackIndex = -1
-    private var isAudioFormatAdded = false
+    /**
+     * Deleted: the pass-through audio path (`processAudioTrack`) was dead code with unfixable
+     * semantics - it added one muxer track PER clip and re-zeroed every clip's PTS to 0 (N clips
+     * all overlapping at t=0), and muxed arbitrary source codecs into an MP4 without re-encoding.
+     * The chunked decode->mix->encode path ([mixTimelineAudio] + the AAC encoder in the pipeline)
+     * is the only audio path this class exposes now.
+     */
 
     var sampleRate: Int = 48000
     var channelCount: Int = 2 // Stereo
@@ -74,124 +82,6 @@ class AudioExportProcessor(
 
     fun clearCache() {
         pcmCache.clear()
-    }
-
-    /**
-     * Extracts, decodes/encodes and writes audio samples synchronized to video baseline PTS.
-     */
-    fun processAudioTrack(
-        sourceUriPath: String,
-        clipStartOffsetUs: Long,
-        clipDurationUs: Long
-    ): Boolean {
-        val targetMuxer = muxer ?: return false
-        val extractor = MediaExtractor()
-        var decoder: MediaCodec? = null
-
-        try {
-            extractor.setDataSource(sourceUriPath)
-            val sourceTrackIndex = selectAudioTrack(extractor)
-            if (sourceTrackIndex == -1) {
-                Log.w(TAG, "No audio track found in source.")
-                return false
-            }
-
-            extractor.selectTrack(sourceTrackIndex)
-            val inputFormat = extractor.getTrackFormat(sourceTrackIndex)
-
-            // Dynamic Sample Rate aur Channel count (No hardcoded 44100Hz)
-            val sampleRate = if (inputFormat.containsKey(MediaFormat.KEY_SAMPLE_RATE)) {
-                inputFormat.getInteger(MediaFormat.KEY_SAMPLE_RATE)
-            } else 44100
-
-            val channelCount = if (inputFormat.containsKey(MediaFormat.KEY_CHANNEL_COUNT)) {
-                inputFormat.getInteger(MediaFormat.KEY_CHANNEL_COUNT)
-            } else 2
-
-            this.sampleRate = sampleRate
-            this.channelCount = channelCount
-
-            // Pass-through check ya AAC re-encoder setup
-            synchronized(muxerLock) {
-                audioTrackIndex = targetMuxer.addTrack(inputFormat)
-                isAudioFormatAdded = true
-                onTrackReady(audioTrackIndex)
-            }
-
-            // Wait until VideoExporter starts the muxer safely. Bounded: a muxer that never starts
-            // means the video side is not going to finish, and reporting that is better than
-            // spinning here forever (see MUXER_START_DEADLINE_MS).
-            val muxerDeadlineMs = System.currentTimeMillis() + MUXER_START_DEADLINE_MS
-            while (!isMuxerStarted()) {
-                if (System.currentTimeMillis() > muxerDeadlineMs) {
-                    Log.e(
-                        TAG,
-                        "Muxer was not started within ${MUXER_START_DEADLINE_MS}ms; abandoning audio " +
-                            "track '${sourceUriPath}' so the export can fail with a reason."
-                    )
-                    return false
-                }
-                Thread.sleep(10)
-            }
-
-            // Seek extractor to clip start
-            extractor.seekTo(clipStartOffsetUs, MediaExtractor.SEEK_TO_PREVIOUS_SYNC)
-
-            val maxBufferSize = if (inputFormat.containsKey(MediaFormat.KEY_MAX_INPUT_SIZE)) {
-                inputFormat.getInteger(MediaFormat.KEY_MAX_INPUT_SIZE)
-            } else 64 * 1024
-
-            val buffer = ByteBuffer.allocateDirect(maxBufferSize)
-            val bufferInfo = MediaCodec.BufferInfo()
-
-            var firstSampleTimeUs = -1L
-            val clipEndUs = clipStartOffsetUs + clipDurationUs
-
-            while (true) {
-                buffer.clear()
-                val sampleSize = extractor.readSampleData(buffer, 0)
-                if (sampleSize < 0) {
-                    break // EOS
-                }
-
-                val sampleTimeUs = extractor.sampleTime
-                if (sampleTimeUs > clipEndUs) {
-                    break // Clip duration exceeded
-                }
-
-                if (sampleTimeUs >= clipStartOffsetUs) {
-                    if (firstSampleTimeUs == -1L) {
-                        firstSampleTimeUs = sampleTimeUs
-                    }
-
-                    // ZERO-POINT PTS NORMALIZATION:
-                    val normalizedPtsUs = sampleTimeUs - firstSampleTimeUs
-
-                    bufferInfo.offset = 0
-                    bufferInfo.size = sampleSize
-                    bufferInfo.presentationTimeUs = normalizedPtsUs
-                    bufferInfo.flags = extractor.sampleFlags
-
-                    synchronized(muxerLock) {
-                        if (isMuxerStarted()) {
-                            targetMuxer.writeSampleData(audioTrackIndex, buffer, bufferInfo)
-                        }
-                    }
-                }
-
-                extractor.advance()
-            }
-
-            return true
-        } catch (e: Exception) {
-            Log.e(TAG, "Audio processing failed: ${e.message}", e)
-            return false
-        } finally {
-            try {
-                extractor.release()
-                decoder?.release()
-            } catch (ignored: Exception) {}
-        }
     }
 
     private fun selectAudioTrack(extractor: MediaExtractor): Int {
@@ -302,8 +192,20 @@ class AudioExportProcessor(
         this@AudioExportProcessor.sampleRate = targetSampleRate
         this@AudioExportProcessor.channelCount = targetChannelCount
 
-        val totalFrames = ((totalDurationMs / 1000.0) * targetSampleRate).toInt()
-        if (totalFrames <= 0) return@withContext ShortArray(0)
+        // Long math + a hard ceiling: `toInt()` silently overflowed past ~12.4h at 48 kHz, and the
+        // `totalFrames * channels` ShortArray size overflowed Int past ~6.2h stereo (a
+        // NegativeArraySizeException instead of a message). A project that large cannot be mixed
+        // into memory anyway, so the export fails with a named reason instead of a crash.
+        val totalFramesL = ((totalDurationMs / 1000.0) * targetSampleRate).toLong()
+        if (totalFramesL <= 0L) return@withContext ShortArray(0)
+        if (totalFramesL * targetChannelCount.coerceAtLeast(1) > (Int.MAX_VALUE - 8).toLong()) {
+            throw ExportPipelineException(
+                "The project is too long to mix in memory (${totalDurationMs / 1000L}s of audio at " +
+                    "${targetSampleRate}Hz). Trim or split the project before exporting.",
+                retryable = false
+            )
+        }
+        val totalFrames = totalFramesL.toInt()
 
         val mixedPcm = ShortArray(totalFrames * targetChannelCount)
 
@@ -726,7 +628,14 @@ class AudioExportProcessor(
             var sampleCount = 0
             var reachedWindowEnd = false
             val bufferInfo = MediaCodec.BufferInfo()
-            var isEos = false
+            // EOS is tracked on BOTH sides: the old loop set isEos the moment input EOS was queued
+            // and then ran exactly ONE drain pass - a decoder that had not flushed its internal
+            // pipeline within that ~10ms window (hardware decoders, MP3, codec delay) lost the tail
+            // of the stream (the last 20-100ms of every track's final window). The loop now runs
+            // until the decoder's own EOS arrives on an OUTPUT buffer (or the window end,
+            // cancellation or the decode deadline ends it).
+            var inputEosQueued = false
+            var outputEosSeen = false
             val deadlineAt = if (deadlineMs > 0L) android.os.SystemClock.elapsedRealtime() + deadlineMs else 0L
             var timedOut = false
             var cancelledEarly = false
@@ -746,7 +655,7 @@ class AudioExportProcessor(
                 sampleCount += usableFrames * srcChannels
             }
 
-            while (!isEos && !reachedWindowEnd) {
+            while (!outputEosSeen && !reachedWindowEnd) {
                 if (isCancelled()) {
                     cancelledEarly = true
                     break
@@ -755,16 +664,18 @@ class AudioExportProcessor(
                     timedOut = true
                     break
                 }
-                val inIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
-                if (inIndex >= 0) {
-                    val inputBuf = decoder.getInputBuffer(inIndex) ?: continue
-                    val sampleSize = extractor.readSampleData(inputBuf, 0)
-                    if (sampleSize < 0) {
-                        decoder.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        isEos = true
-                    } else {
-                        decoder.queueInputBuffer(inIndex, 0, sampleSize, extractor.sampleTime, 0)
-                        extractor.advance()
+                if (!inputEosQueued) {
+                    val inIndex = decoder.dequeueInputBuffer(TIMEOUT_US)
+                    if (inIndex >= 0) {
+                        val inputBuf = decoder.getInputBuffer(inIndex) ?: continue
+                        val sampleSize = extractor.readSampleData(inputBuf, 0)
+                        if (sampleSize < 0) {
+                            decoder.queueInputBuffer(inIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            inputEosQueued = true
+                        } else {
+                            decoder.queueInputBuffer(inIndex, 0, sampleSize, extractor.sampleTime, 0)
+                            extractor.advance()
+                        }
                     }
                 }
 
@@ -787,7 +698,7 @@ class AudioExportProcessor(
                     }
                     decoder.releaseOutputBuffer(outIndex, false)
                     if ((bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
-                        isEos = true
+                        outputEosSeen = true
                         break
                     }
                     if (reachedWindowEnd) break
@@ -832,6 +743,12 @@ class AudioExportProcessor(
         isMuxerStarted: () -> Boolean,
         onMuxerReadyCheck: () -> Unit
     ) {
+        // pcm.size * 2 overflowed Int for buffers past ~1G samples; the mix side caps that now,
+        // but this path also takes caller-provided PCM - fail with a name instead of a
+        // NegativeArraySizeException from allocateDirect.
+        if (pcm.size.toLong() * 2L > (Int.MAX_VALUE - 8).toLong()) {
+            throw IllegalArgumentException("PCM buffer too large to encode (${pcm.size} samples).")
+        }
         val byteBuf = ByteBuffer.allocateDirect(pcm.size * 2).order(ByteOrder.LITTLE_ENDIAN)
         val shortBuf = byteBuf.asShortBuffer()
         shortBuf.put(pcm)
@@ -840,38 +757,59 @@ class AudioExportProcessor(
         val bufferInfo = MediaCodec.BufferInfo()
         var inputOffset = 0
         val totalBytes = pcm.size * 2
-        var isEos = false
-
-        var presentationTimeUs = 0L
+        // EOS is tracked on BOTH sides with a no-output stall bound: the old loop ended one pass
+        // after input EOS was queued, discarding whatever encoded AAC was still buffered inside
+        // the encoder (the last several hundred ms of the track), and neither loop had any bound
+        // against a wedged encoder.
+        var inputEosQueued = false
+        var outputEosSeen = false
+        var framesFed = 0L
+        var lastEncoderOutputMs = System.currentTimeMillis()
         val bytesPerFrame = channels * 2
-        val usPerFrame = 1_000_000.0 / sampleRate
 
-        while (!isEos) {
-            val inIndex = encoder.dequeueInputBuffer(TIMEOUT_US)
-            if (inIndex >= 0) {
-                val inBuf = encoder.getInputBuffer(inIndex)
-                if (inBuf != null) {
-                    inBuf.clear()
-                    val bytesToCopy = inBuf.remaining().coerceAtMost(totalBytes - inputOffset)
-                    if (bytesToCopy > 0) {
-                        byteBuf.position(inputOffset)
-                        byteBuf.limit(inputOffset + bytesToCopy)
-                        inBuf.put(byteBuf)
-                        inputOffset += bytesToCopy
-
-                        val framesSent = bytesToCopy / bytesPerFrame
-                        encoder.queueInputBuffer(inIndex, 0, bytesToCopy, presentationTimeUs, 0)
-                        presentationTimeUs += (framesSent * usPerFrame).toLong()
-                    } else {
-                        encoder.queueInputBuffer(inIndex, 0, 0, presentationTimeUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                        isEos = true
+        while (!outputEosSeen) {
+            if (System.currentTimeMillis() - lastEncoderOutputMs > ENCODER_OUTPUT_STALL_MS) {
+                throw IllegalStateException(
+                    "The AAC encoder stopped producing output for ${ENCODER_OUTPUT_STALL_MS / 1000}s " +
+                        "(fed $framesFed of ${pcm.size / channels} frames); the audio track cannot be finished."
+                )
+            }
+            if (!inputEosQueued) {
+                val inIndex = encoder.dequeueInputBuffer(TIMEOUT_US)
+                if (inIndex >= 0) {
+                    val inBuf = encoder.getInputBuffer(inIndex)
+                    if (inBuf != null) {
+                        inBuf.clear()
+                        val bytesToCopy = inBuf.remaining().coerceAtMost(totalBytes - inputOffset)
+                        if (bytesToCopy > 0) {
+                            // Whole frames only: a partial frame is not sample-aligned, and the old
+                            // float PTS accumulation truncated <=1us per buffer (~9ms/hour drift).
+                            // A Long frame counter keeps PTS exact for the whole stream.
+                            val alignedBytes = bytesToCopy - (bytesToCopy % bytesPerFrame)
+                            if (alignedBytes > 0) {
+                                byteBuf.position(inputOffset)
+                                byteBuf.limit(inputOffset + alignedBytes)
+                                inBuf.put(byteBuf)
+                                inputOffset += alignedBytes
+                                framesFed += alignedBytes / bytesPerFrame
+                                encoder.queueInputBuffer(inIndex, 0, alignedBytes, framesFed * 1_000_000L / sampleRate, 0)
+                            } else {
+                                // Buffer smaller than one frame cannot make progress: end the stream here.
+                                inputEosQueued = true
+                                encoder.queueInputBuffer(inIndex, 0, 0, framesFed * 1_000_000L / sampleRate, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                            }
+                        } else {
+                            inputEosQueued = true
+                            encoder.queueInputBuffer(inIndex, 0, 0, framesFed * 1_000_000L / sampleRate, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                        }
                     }
                 }
             }
 
             // Drain loop: INFO_OUTPUT_FORMAT_CHANGED (-2) and INFO_TRY_AGAIN_LATER (-1) are
             // negative, so the old "while (outIndex >= 0)" loop could never run the format-change
-            // branch and the audio track was never added to the muxer on this path.
+            // branch and the audio track was never added to the muxer on this path. It keeps
+            // cycling (bounded by the stall check above) until the encoder's own EOS arrives.
             var outIndex = encoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
             while (true) {
                 when {
@@ -881,15 +819,16 @@ class AudioExportProcessor(
                             setAudioTrackIndex(trackIdx)
                             onMuxerReadyCheck()
                         }
+                        lastEncoderOutputMs = System.currentTimeMillis()
                         outIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
                     }
                     outIndex >= 0 -> {
                         val encoded = encoder.getOutputBuffer(outIndex)
                         val eosFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
                         if (encoded != null && bufferInfo.size > 0) {
-                            // Same bound as processAudioTrack: the muxer belongs to the video side, and a
-                            // sample that cannot be written because the muxer never started must fail the
-                            // export instead of parking this thread (and with it the export) forever.
+                            // The muxer belongs to the video side, and a sample that cannot be written
+                            // because the muxer never started must fail the export instead of parking
+                            // this thread (and with it the export) forever.
                             val muxerDeadlineMs = System.currentTimeMillis() + MUXER_START_DEADLINE_MS
                             while (!isMuxerStarted()) {
                                 if (System.currentTimeMillis() > muxerDeadlineMs) {
@@ -912,10 +851,14 @@ class AudioExportProcessor(
                             }
                         }
                         encoder.releaseOutputBuffer(outIndex, false)
-                        if (eosFrame) break
+                        lastEncoderOutputMs = System.currentTimeMillis()
+                        if (eosFrame) {
+                            outputEosSeen = true
+                            break
+                        }
                         outIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
                     }
-                    else -> break // INFO_TRY_AGAIN_LATER: nothing drained this round
+                    else -> break // INFO_TRY_AGAIN_LATER: nothing drained this round; the outer loop re-feeds/re-polls
                 }
             }
         }

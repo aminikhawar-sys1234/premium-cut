@@ -52,20 +52,41 @@ object GalleryMediaSaver {
         val uri = resolver.insert(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, contentValues)
 
         if (uri != null) {
-          resolver.openOutputStream(uri)?.use { outputStream ->
-            FileInputStream(sourceFile).use { inputStream ->
-              inputStream.copyTo(outputStream)
+          // Copy first, publish only on success: the old code flipped IS_PENDING to 0 even when
+          // openOutputStream returned null (a 0-byte "published" video) and left the pending row
+          // orphaned when the copy threw mid-way (storage full) - a partial, invisible entry
+          // lingering in MediaStore forever.
+          var copied = false
+          try {
+            val outputStream = resolver.openOutputStream(uri)
+            if (outputStream == null) {
+              Log.e(TAG, "MediaStore returned no output stream for $uri; treating the save as failed")
+            } else {
+              outputStream.use { out ->
+                FileInputStream(sourceFile).use { inputStream ->
+                  inputStream.copyTo(out)
+                }
+              }
+              copied = true
             }
+          } catch (e: Exception) {
+            Log.e(TAG, "MediaStore copy failed for $uri", e)
           }
-          contentValues.clear()
-          contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
-          resolver.update(uri, contentValues, null, null)
+          if (!copied) {
+            // Remove the pending row so no ghost entry is left behind, then fall through to the
+            // legacy public-folder copy below.
+            runCatching { resolver.delete(uri, null, null) }
+          } else {
+            contentValues.clear()
+            contentValues.put(MediaStore.Video.Media.IS_PENDING, 0)
+            resolver.update(uri, contentValues, null, null)
 
-          Log.d(TAG, "Successfully auto-saved video to MediaStore: $uri")
+            Log.d(TAG, "Successfully auto-saved video to MediaStore: $uri")
 
-          // Also copy to public Movies directory for direct File path references if needed
-          val publicFile = saveToPublicMoviesFolder(context, sourceFile, fileName)
-          return SaveResult(uri, publicFile ?: sourceFile, true)
+            // Also copy to public Movies directory for direct File path references if needed
+            val publicFile = saveToPublicMoviesFolder(context, sourceFile, fileName)
+            return SaveResult(uri, publicFile ?: sourceFile, true)
+          }
         }
       } catch (e: Exception) {
         Log.e(TAG, "MediaStore Q+ insert failed, falling back to legacy public copy", e)

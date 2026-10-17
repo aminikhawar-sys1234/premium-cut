@@ -9,6 +9,7 @@ import android.net.Uri
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
 import android.opengl.Matrix
+import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
@@ -264,6 +265,21 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
               com.example.engine.export.ExportOrientationPolicy.DECODER_KEY_ROTATION_DEGREES
             )
           } catch (_: Exception) {}
+          // HDR sources (HLG / PQ, BT.2020) used to be decoded with their HDR transfer intact
+          // while the export tags the file SDR Rec.709 - washed-out/overexposed output on every
+          // player. Requesting SDR tone mapping asks the decoder to convert the transfer; codecs
+          // that cannot simply ignore the key, and non-HDR sources are never touched.
+          if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            val transfer = runCatching { trackFormat.getInteger(MediaFormat.KEY_COLOR_TRANSFER, 0) }.getOrDefault(0)
+            if (transfer == MediaFormat.COLOR_TRANSFER_HLG || transfer == MediaFormat.COLOR_TRANSFER_ST2084) {
+              try {
+                trackFormat.setInteger(MediaFormat.KEY_COLOR_TRANSFER_REQUEST, MediaFormat.COLOR_TRANSFER_SDR_VIDEO)
+                Log.i("HardwareVideoTextureSource", "HDR source (transfer=$transfer): requesting SDR tone mapping from the decoder")
+              } catch (e: Exception) {
+                Log.w("HardwareVideoTextureSource", "Could not request SDR tone mapping: ${e.message}")
+              }
+            }
+          }
           dec.configure(trackFormat, decoderSurface, null, 0)
           dec.start()
           opened = dec

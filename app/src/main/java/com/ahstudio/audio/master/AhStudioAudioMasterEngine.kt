@@ -118,14 +118,21 @@ class AhStudioAudioMasterEngine(
     /** [WIRE] Render audio into the host video exporter's MediaMuxer track (preview/export parity: same mixer graph). */
     fun renderToPcmSink(sink: PcmSink, startSec: Double, endSec: Double, progress: ((Float) -> Unit)? = null): AudioExportResult {
         sink.prepare()
-        val total = (endSec - startSec).coerceAtLeast(1e-6)
-        val r = AudioPcmRenderer(cache, format, 4096).render(timeline.current, startSec, endSec) { inter, frames, t ->
-            sink.write(inter, frames)
-            progress?.invoke(((t - startSec) / total).toFloat().coerceIn(0f, 1f))
-            true
+        try {
+            val total = (endSec - startSec).coerceAtLeast(1e-6)
+            val r = AudioPcmRenderer(cache, format, 4096).render(timeline.current, startSec, endSec) { inter, frames, t ->
+                sink.write(inter, frames)
+                progress?.invoke(((t - startSec) / total).toFloat().coerceIn(0f, 1f))
+                true
+            }
+            sink.finish()
+            return r
+        } catch (t: Throwable) {
+            // An exception used to abandon the sink without release/finish - a muxer/codec sink
+            // (AacM4aWriter, MediaMuxerAudioSinkAdapter) then leaked its open file descriptors.
+            sink.release()
+            throw t
         }
-        sink.finish()
-        return r
     }
 
     // ---- edits / undo ----
