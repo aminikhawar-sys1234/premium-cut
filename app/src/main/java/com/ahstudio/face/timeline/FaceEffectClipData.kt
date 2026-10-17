@@ -95,7 +95,6 @@ object FaceEffectSerializer {
     }
 
     fun fromJson(text: String): FaceEffectClipData {
-        println("Deserializing: $text")
         val obj = JSONObject(text)
         val deformMap = mutableMapOf<String, Float>()
         if (obj.has("deform")) {

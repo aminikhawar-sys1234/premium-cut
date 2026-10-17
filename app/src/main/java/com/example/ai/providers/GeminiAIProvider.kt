@@ -43,15 +43,7 @@ class GeminiAIProvider(private val context: Context? = null) :
     return AISecurityConfig.getEffectiveApiKey(context)
   }
 
-  private fun getEndpointUrl(): String {
-    val proxy = context?.let { AISecurityConfig.getBackendProxyUrl(it) } ?: ""
-    if (proxy.isNotBlank()) {
-      return if (proxy.endsWith("/")) "${proxy}v1beta/models/gemini-3.5-flash:generateContent"
-      else "$proxy/v1beta/models/gemini-3.5-flash:generateContent"
-    }
-    val key = getApiKey()
-    return "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$key"
-  }
+  private fun getEndpointUrl(): String = AISecurityConfig.resolveGeminiEndpoint(context)
 
   override suspend fun transcribeAudio(audioFile: File, language: String): Result<List<TextClip>> = withContext(Dispatchers.IO) {
     if (!isAvailable) {

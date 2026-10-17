@@ -245,8 +245,10 @@ fun AudioToolsContainerPanel(
         }
 
         AudioSubPanel.SOUNDS_LIBRARY -> {
-          SoundsLibraryPanel(
+          DeviceAudioBrowserPanel(
             viewModel = viewModel,
+            title = "Device sounds",
+            emptyMessage = "No audio found on this device. Import a real sound file to add it to the timeline.",
             onClose = { currentSubPanel = AudioSubPanel.MAIN_GRID },
             onCompleteAndClose = onClose
           )
@@ -307,8 +309,10 @@ fun AudioToolsContainerPanel(
         }
 
         AudioSubPanel.MUSIC_LIBRARY -> {
-          MusicLibraryPanel(
+          DeviceAudioBrowserPanel(
             viewModel = viewModel,
+            title = "Device music",
+            emptyMessage = "No audio found on this device. Import a real music file to add it to the timeline.",
             onClose = { currentSubPanel = AudioSubPanel.MAIN_GRID },
             onCompleteAndClose = onClose
           )

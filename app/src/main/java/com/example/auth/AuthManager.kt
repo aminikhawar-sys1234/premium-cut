@@ -42,6 +42,17 @@ sealed class AuthResult {
   object Cancelled : AuthResult()
 }
 
+/**
+ * Centralised OAuth scope constants for the platforms we ship first-class support for.
+ * Kept here so a scope change never has to be hunted down across the file.
+ */
+private object OAuthScopes {
+  const val YOUTUBE_UPLOAD = "https://www.googleapis.com/auth/youtube.upload"
+  const val TIKTOK_CREATOR = "video.upload,user.info.basic"
+  const val INSTAGRAM_BASIC = "instagram_basic,instagram_content_publish"
+  const val TWITTER_RW = "tweet.read,tweet.write"
+}
+
 data class StorageBreakdown(
   val cacheBytes: Long,
   val internalFilesBytes: Long,
@@ -146,25 +157,25 @@ class AuthManager private constructor(private val appContext: Context) {
         platformId = "youtube",
         platformName = "YouTube Studio",
         platformIcon = "🔴",
-        grantedScopes = "https://www.googleapis.com/auth/youtube.upload"
+        grantedScopes = OAuthScopes.YOUTUBE_UPLOAD
       ),
       OAuthConnectionEntity(
         platformId = "tiktok",
         platformName = "TikTok Creator",
         platformIcon = "🎵",
-        grantedScopes = "video.upload,user.info.basic"
+        grantedScopes = OAuthScopes.TIKTOK_CREATOR
       ),
       OAuthConnectionEntity(
         platformId = "instagram",
         platformName = "Instagram Reels",
         platformIcon = "📸",
-        grantedScopes = "instagram_basic,instagram_content_publish"
+        grantedScopes = OAuthScopes.INSTAGRAM_BASIC
       ),
       OAuthConnectionEntity(
         platformId = "twitter",
         platformName = "X / Twitter",
         platformIcon = "🐦",
-        grantedScopes = "tweet.read,tweet.write"
+        grantedScopes = OAuthScopes.TWITTER_RW
       )
     )
 
@@ -214,7 +225,7 @@ class AuthManager private constructor(private val appContext: Context) {
               accountHandle = user.email ?: user.displayName ?: "Connected Account",
               accountId = user.uid,
               accessToken = idToken,
-              grantedScopes = "https://www.googleapis.com/auth/youtube.upload",
+              grantedScopes = OAuthScopes.YOUTUBE_UPLOAD,
               connectedAtTimestamp = System.currentTimeMillis(),
               isConnected = true
             )

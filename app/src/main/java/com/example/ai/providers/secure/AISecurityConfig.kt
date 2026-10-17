@@ -18,6 +18,25 @@ object AISecurityConfig {
   private const val KEY_BACKEND_PROXY_URL = "backend_proxy_url"
   private const val KEY_CUSTOM_TOKEN = "custom_auth_token"
 
+  /**
+   * Gemini model identifier used by both transcription and translation providers.
+   * Centralised so the model can be swapped in a single place.
+   */
+  const val GEMINI_MODEL = "gemini-3.5-flash"
+
+  /**
+   * Public Gemini endpoint base. Used only as a fallback when no secure backend
+   * proxy is configured. The caller appends the API key as a query parameter.
+   */
+  const val GEMINI_DIRECT_ENDPOINT =
+    "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent"
+
+  /**
+   * Path appended to a configured backend proxy URL when forwarding Gemini
+   * requests. Trailing-slash safe.
+   */
+  private const val GEMINI_PROXY_PATH = "v1beta/models/${GEMINI_MODEL}:generateContent"
+
   private fun getPrefs(context: Context): SharedPreferences {
     return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
   }
@@ -36,6 +55,22 @@ object AISecurityConfig {
 
   fun setCustomAuthToken(context: Context, token: String) {
     getPrefs(context).edit().putString(KEY_CUSTOM_TOKEN, token.trim()).apply()
+  }
+
+  /**
+   * Resolves the full Gemini endpoint URL for the active configuration:
+   *  - If a secure backend proxy URL is configured, returns `<proxy>/<GEMINI_PROXY_PATH>`
+   *    (trailing slash on the proxy is normalised).
+   *  - Otherwise, returns the public direct endpoint with `?key=<apiKey>` appended.
+   */
+  fun resolveGeminiEndpoint(context: Context?): String {
+    val proxy = context?.let { getBackendProxyUrl(it) } ?: ""
+    if (proxy.isNotBlank()) {
+      val base = if (proxy.endsWith("/")) proxy.dropLast(1) else proxy
+      return "$base/$GEMINI_PROXY_PATH"
+    }
+    val key = getEffectiveApiKey(context)
+    return "$GEMINI_DIRECT_ENDPOINT?key=$key"
   }
 
   /**
