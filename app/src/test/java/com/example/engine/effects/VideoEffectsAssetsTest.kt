@@ -1,14 +1,13 @@
 package com.example.engine.effects
 
 import com.example.domain.model.VideoClip
-import com.example.engine.effects.media3.CustomShaderGlEffect
-import com.example.engine.effects.media3.PreviewVfxEffects
+import com.example.engine.effects.media3.PreviewVfxCoverage
 import com.example.engine.effects.registry.EffectCategory
 import com.example.engine.effects.registry.EffectsAssetRegistry
 import com.example.engine.vfx.VfxEffectsHost
 import com.vfx.engine.core.effect.EffectDefinition
-import com.vfx.engine.effects.VideoEffects
-import com.vfx.engine.gpu.glsl.EffectGlsl
+import com.vfx.engine.effects.TrendEffects
+import com.vfx.engine.gpu.glsl.TrendGlsl
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
@@ -19,9 +18,9 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 
 /**
- * Contract of the ten Video Effects assets: they must be real engine definitions (GLSL body +
- * params), reachable from the catalog, wired into the live preview shader, and they must survive
- * the `vfxStackJson` round-trip the GPU compositor (preview and export) runs every frame.
+ * Contract of the Video Effects assets: they must be real engine definitions (GLSL body +
+ * params), reachable from the catalog, routed to the GPU compositor preview, and they must
+ * survive the `vfxStackJson` round-trip the compositor (preview and export) runs every frame.
  */
 @RunWith(RobolectricTestRunner::class)
 class VideoEffectsAssetsTest {
@@ -36,18 +35,18 @@ class VideoEffectsAssetsTest {
   }
 
   @Test
-  fun videoCategoryShipsExactlyTenRealAssetsAndNoLeftovers() {
+  fun videoCategoryShipsExactlyNineRealAssetsAndNoLeftovers() {
     val assets = videoAssets
-    assertEquals(10, assets.size)
-    assertEquals(10, assets.map { it.id }.toSet().size)
-    assertEquals(10, assets.map { it.shaderKey }.toSet().size)
-    // The old assets are gone: three ids disappeared, the two kept ids now point at the new
-    // engine implementations instead of the deleted `blur.directional` / `noise.filmGrain` wiring.
-    listOf("video.glitch", "video.chromatic", "video.light_leak").forEach { removed ->
-      assertNull(removed, ProductionEffectCatalog.byId(removed))
-    }
+    assertEquals(9, assets.size)
+    assertEquals(9, assets.map { it.id }.toSet().size)
+    assertEquals(9, assets.map { it.shaderKey }.toSet().size)
+    // The previous generation is gone from the catalog.
+    listOf(
+      "video.vhs", "video.crt", "video.datamosh", "video.anamorphic", "video.film_grain",
+      "video.halation", "video.lens_flare", "video.speed_lines", "video.kaleidoscope",
+    ).forEach { removed -> assertNull(removed, ProductionEffectCatalog.byId(removed)) }
+    // Motion Blur kept its engine binding.
     assertEquals("vfx:blur.motion", ProductionEffectCatalog.byId("video.motion_blur")!!.shaderKey)
-    assertEquals("vfx:noise.grain", ProductionEffectCatalog.byId("video.film_grain")!!.shaderKey)
     assets.forEach { asset ->
       val key = asset.shaderKey
       assertNotNull(asset.id, key)
@@ -65,7 +64,10 @@ class VideoEffectsAssetsTest {
       "skipped: ${VfxEffectsHost.registrationSkipped}",
       VfxEffectsHost.registrationSkipped.isEmpty()
     )
-    assertEquals(VideoEffects.ids, videoAssets.map { it.shaderKey!!.removePrefix("vfx:") })
+    val trendKeys = videoAssets.mapNotNull { it.shaderKey }
+      .filter { it != "vfx:blur.motion" }
+      .map { it.removePrefix("vfx:") }
+    assertEquals(TrendEffects.ids, trendKeys)
     videoAssets.forEach { asset ->
       val id = asset.shaderKey!!.removePrefix("vfx:")
       val def: EffectDefinition? = VfxEffectsHost.registry.getEffectOrNull(id)
@@ -78,56 +80,49 @@ class VideoEffectsAssetsTest {
   @Test
   fun everyAssetHasItsOwnGlslBodyAndTheWarpEffectsDeclareWarpUv() {
     val bodies = listOf(
-      EffectGlsl.MOTION_BLUR,
-      EffectGlsl.VHS_TAPE,
-      EffectGlsl.CRT_SCANLINES,
-      EffectGlsl.DATAMOSH,
-      EffectGlsl.ANAMORPHIC_STREAK,
-      EffectGlsl.FILM_GRAIN_PRO,
-      EffectGlsl.HALATION,
-      EffectGlsl.LENS_FLARE,
-      EffectGlsl.SPEED_LINES,
-      EffectGlsl.KALEIDOSCOPE
+      TrendGlsl.EXPLOSION,
+      TrendGlsl.INK_SPILL,
+      TrendGlsl.EARTH,
+      TrendGlsl.MAGICAL_TOME,
+      TrendGlsl.CUT_SHIFT,
+      TrendGlsl.FIRE,
+      TrendGlsl.MINI_ZOOM,
+      TrendGlsl.WHITE_FLASH,
     )
-    assertEquals(10, bodies.toSet().size)
+    assertEquals(8, bodies.toSet().size)
     bodies.forEach { body ->
       assertTrue(body.contains("process("))
-      // Reads the incoming frame: either samples the texture itself (blur, streak, bleed …) or
-      // works on the `c` the template already sampled (grain, flare, wedge fold).
       assertTrue(body, body.contains("u_tex") || body.contains("c.rgb") || body.contains("return c"))
     }
-    assertTrue(EffectGlsl.CRT_SCANLINES.contains("vec2 warpUV"))
-    assertTrue(EffectGlsl.KALEIDOSCOPE.contains("vec2 warpUV"))
-    // The tube curve and the kaleidoscope are coordinate warps, so they must not fake it in process()
-    assertTrue(EffectGlsl.KALEIDOSCOPE.contains("vec4 process(vec4 c, vec2 uv){ return c; }"))
+    // Coordinate warps must be real warpUV bodies, not faked in process().
+    assertTrue(TrendGlsl.CUT_SHIFT.contains("vec2 warpUV"))
+    assertTrue(TrendGlsl.FIRE.contains("vec2 warpUV"))
+    assertTrue(TrendGlsl.MINI_ZOOM.contains("vec2 warpUV"))
   }
 
   @Test
   fun applyingAnAssetTunesTheParamsItsShaderReads() {
-    val vhs = ProductionEffectCatalog.byId("video.vhs")!!
-    val tuned = ProductionEffectApplicator.apply(VideoClip(id = "v", name = "v"), vhs, 1f)
+    val shift = ProductionEffectCatalog.byId("video.cut_shift")!!
+    val tuned = ProductionEffectApplicator.apply(VideoClip(id = "v", name = "v"), shift, 1f)
     val inst = VfxEffectsHost.decode(tuned.vfxStackJson).effectAt(0)
-    assertEquals("video.vhs", inst.definition.id)
+    assertEquals("trend.cut_shift", inst.definition.id)
     assertEquals(1f, inst.intensity, 1e-4f)
-    assertTrue(inst.getParam<Float>("bleed") > 0f)
-    assertTrue(inst.getParam<Float>("tracking") > 0f)
-    assertTrue(inst.getParam<Float>("scanline") > 0f)
-    assertEquals(1f, ProductionEffectApplicator.intensityOn(tuned, vhs), 1e-4f)
-    assertEquals("video.vhs", ProductionEffectApplicator.appliedOn(tuned, EffectCategory.VIDEO_EFFECTS)?.id)
+    assertTrue(inst.getParam<Float>("rgb") > 0f)
+    assertTrue(inst.getParam<Float>("speed") > 0f)
+    assertEquals(1f, ProductionEffectApplicator.intensityOn(tuned, shift), 1e-4f)
+    assertEquals("video.cut_shift", ProductionEffectApplicator.appliedOn(tuned, EffectCategory.VIDEO_EFFECTS)?.id)
     assertNull(ProductionEffectApplicator.clearCategory(tuned, EffectCategory.VIDEO_EFFECTS).vfxStackJson)
   }
 
   @Test
-  fun aClipWithAllTenAssetsResolvesInTheCompositorStack() {
+  fun aClipWithAllNineAssetsResolvesInTheCompositorStack() {
     val looked = videoAssets.fold(VideoClip(id = "v", name = "v")) { clip, asset ->
       ProductionEffectApplicator.apply(clip, asset, 0.8f)
     }
     val stack = VfxEffectsHost.decode(looked.vfxStackJson)
-    assertEquals(10, stack.size)
-    assertEquals(VideoEffects.ids, stack.effects().map { it.definition.id })
-    // What VfxStackStage.apply() runs every frame on both preview and export.
+    assertEquals(9, stack.size)
     val resolved = stack.resolveAt(1_000_000L)
-    assertEquals(10, resolved.size)
+    assertEquals(9, resolved.size)
     resolved.forEach { r ->
       assertNotNull(r.instance.definition.runtimeFactory(r.instance))
       assertTrue(r.snapshot.intensity > 0.01f)
@@ -135,19 +130,15 @@ class VideoEffectsAssetsTest {
   }
 
   @Test
-  fun everyAssetIsMappedIntoTheLivePreviewShaderGraph() {
+  fun everyAssetRoutesTheClipToTheCompositorPreview() {
+    // The whole point of the R11 parity rule: an active stack never stays on the Media3 player
+    // path, so what the user sees while editing is the exact pipeline the export runs.
     videoAssets.forEach { asset ->
       val looked = ProductionEffectApplicator.apply(VideoClip(id = "v", name = "v"), asset, 0.6f)
-      val inst = VfxEffectsHost.decode(looked.vfxStackJson).effectAt(0)
-      val effect = PreviewVfxEffects.toMedia3(inst)
-      assertNotNull("${asset.id} has no Media3 preview shader", effect)
-      val shader = effect as CustomShaderGlEffect
-      assertTrue(shader.name, shader.name.startsWith("Preview"))
       assertTrue(
-        "${asset.id} does not gate on uIntensity",
-        shader.fragmentShader.contains("mix(base.rgb") || shader.fragmentShader.contains("mix(uv, warped")
+        "${asset.id} does not route to the compositor",
+        PreviewVfxCoverage.hasAnyActiveEffects(looked.vfxStackJson)
       )
-      assertTrue("${asset.id} does not declare its params", Regex("uniform (float|vec2|vec3|vec4) u[A-Z]").containsMatchIn(shader.fragmentShader))
     }
   }
 
@@ -155,8 +146,8 @@ class VideoEffectsAssetsTest {
   fun previewAndExportShareTheSameAssetIdSet() {
     val keys = videoAssets.mapNotNull { it.shaderKey }
     val previewIds = keys.map { it.removePrefix("vfx:") }.toSet()
-    assertEquals(10, previewIds.size)
-    assertEquals(VideoEffects.ids.toSet(), previewIds)
+    assertEquals(9, previewIds.size)
+    assertEquals(TrendEffects.ids.toSet() + "blur.motion", previewIds)
     // Nothing in the catalog may point at an id the engine does not know.
     ProductionEffectCatalog.effects.forEach { effect ->
       val key = effect.shaderKey ?: return@forEach

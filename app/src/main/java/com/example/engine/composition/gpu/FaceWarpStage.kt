@@ -52,7 +52,10 @@ class FaceWarpStage {
     if (faces.isEmpty()) return srcTex
 
     val placement = placementOverride ?: faceClipPlacement(clip, timelinePosMs, width, height, transform)
-    val ops = FaceWarpMapper.toTextureSpace(faces.flatMap { WarpOps.forFace(it, params) }, placement)
+    // Clip-local time drives the time-based warp channels (Wink); preview and export both pass the
+    // timeline position, so the same frame always warps identically.
+    val clipTimeMs = (timelinePosMs - clip.timelineStartMs).coerceAtLeast(0L)
+    val ops = FaceWarpMapper.toTextureSpace(faces.flatMap { WarpOps.forFace(it, params, clipTimeMs) }, placement)
     if (ops.isEmpty()) return srcTex
 
     val prevFbo = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, prevFbo, 0)

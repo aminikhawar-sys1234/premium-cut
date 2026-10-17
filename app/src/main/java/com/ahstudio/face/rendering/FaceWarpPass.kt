@@ -44,8 +44,14 @@ class FaceWarpPass {
                 } else if (uOpB[i].x < 1.5) {
                     // SLIM_LATERAL: dir is the direction the CONTENT moves, so sample from the opposite side.
                     p -= vec2(uOpB[i].y / uAspect, uOpB[i].z) * s * fall;
-                } else {
+                } else if (uOpB[i].x < 2.5) {
                     p -= vec2(uOpB[i].y / uAspect, uOpB[i].z) * s * fall;
+                } else {
+                    // SWIRL: rotate the aspect-corrected offset around the centre by s * fall radians.
+                    float ang = s * fall;
+                    float ca = cos(ang), sa = sin(ang);
+                    vec2 rd = vec2(d.x * ca - d.y * sa, d.x * sa + d.y * ca);
+                    p = c + vec2(rd.x / uAspect, rd.y);
                 }
             }
             gl_FragColor = texture2D(uTex, p);
@@ -86,6 +92,7 @@ class FaceWarpPass {
                 WarpType.MAGNIFY_EYE -> 0f
                 WarpType.SLIM_LATERAL -> 1f
                 WarpType.PUSH -> 2f
+                WarpType.SWIRL -> 3f
             }
             arrB[i * 3 + 1] = op.dir.x
             arrB[i * 3 + 2] = op.dir.y

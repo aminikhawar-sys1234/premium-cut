@@ -290,14 +290,17 @@ class Media3EffectPipelineTest {
   }
 
   @Test
-  fun testPreviewFilterEffects_includesCatalogVfxOnTheLivePreviewPath() {
-    val clip = VideoClip(name = "Fx")
-    val moshed = com.example.engine.effects.ProductionEffectCatalog.byId("video.datamosh")!!
-    val looked = com.example.engine.effects.ProductionEffectApplicator.apply(clip, moshed, 0.8f)
-    val effects = PreviewFilterEffects.effectsFor(looked, Timeline())
+  fun testPreviewFilterEffects_includesLegacyStackEffectsOnTheLivePreviewPath() {
+    // The Media3 mirror serves stacks built on the engine registry directly (legacy projects);
+    // catalog assets route to the GPU compositor by the PreviewVfxCoverage rule instead.
+    val clip = VideoClip(name = "Fx").copy(
+      vfxStackJson = com.example.engine.vfx.VfxEffectsHost.addEffect(null, "distort.datamosh")
+    )
+    val effects = PreviewFilterEffects.effectsFor(clip, Timeline())
     assertTrue(effects.any { it is CustomShaderGlEffect && it.name == "PreviewDatamosh" })
-    val sketch = com.example.engine.effects.ProductionEffectCatalog.byId("ai.sketch")!!
-    val styled = com.example.engine.effects.ProductionEffectApplicator.apply(looked, sketch, 1f)
+    val styled = clip.copy(
+      vfxStackJson = com.example.engine.vfx.VfxEffectsHost.addEffect(clip.vfxStackJson, "stylize.sketch")
+    )
     val styledEffects = PreviewFilterEffects.effectsFor(styled, Timeline())
     assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "PreviewDatamosh" })
     assertTrue(styledEffects.any { it is CustomShaderGlEffect && it.name == "SketchCharcoalEffect" })

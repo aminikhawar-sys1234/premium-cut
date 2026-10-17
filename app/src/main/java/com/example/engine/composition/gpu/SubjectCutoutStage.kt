@@ -46,6 +46,8 @@ class SubjectCutoutStage {
     var lastAlpha: ByteArray? = null
     var epoch = -1
     var lastRequestNs = 0L
+    /** Last time an external consumer (subject effects) asked for this clip's mask. */
+    var lastEnsureNs = 0L
     val inFlight = AtomicBoolean(false)
     val pending = AtomicReference<SubjectMaskResult?>(null)
   }
@@ -131,51 +133,10 @@ class SubjectCutoutStage {
       pruneSlots(epoch)
 
       val slot = slots.getOrPut(clipId) { Slot() }
-      if (slot.epoch != epoch) {
-        slot.epoch = epoch
-        slot.hasMask = false
-        slot.maskBucket = Long.MIN_VALUE
-        slot.lastAlpha = null
-        slot.pending.set(null)
-      }
+      maintainSlotEpoch(slot, epoch)
 
-      // 1. Pick up a mask the worker finished since the last frame.
-      slot.pending.getAndSet(null)?.let { r ->
-        if (r.epoch == epoch) uploadMask(slot, r.pixels, r.bucket)
-      }
-
-      // 2. Make sure we have (or are getting) a mask for this frame.
-      // Preview keys masks per frame (it analyses off the GL thread anyway); the export keys them by
-      // a 200 ms window, because with `blocking = true` a per-frame key meant a synchronous readback
-      // *and* a segmentation *for every frame* of the clip. See [MaskAnalysisCadence].
-      val bucket = if (blocking) {
-        if (cadenceLogged.compareAndSet(false, true)) {
-          Log.i(
-            TAG,
-            "Export mask cadence: one segmentation per ${MaskAnalysisCadence.EXPORT_WINDOW_US / 1000}ms " +
-              "of timeline instead of one per frame (analysis ${ANALYSIS_LONG_SIDE}px, on the GL thread)."
-          )
-        }
-        MaskAnalysisCadence.exportBucketFor(frameKeyUs)
-      } else {
-        MaskAnalysisCadence.previewBucketFor(frameKeyUs)
-      }
-      val exact = slot.hasMask && slot.maskBucket == bucket
-      if (!exact) {
-        if (blocking) {
-          val bytes = readBack(slot, srcTex, analysisAspect)
-          val dims = analysisSize(analysisAspect)
-          val pixels = if (bytes != null) SubjectMaskWorker.analyse(bytes, dims.first, dims.second, analysisRotation) else null
-          if (pixels != null) {
-            consecutiveFailures.set(0)
-            uploadMask(slot, pixels, bucket)
-          } else {
-            noteFailure()
-          }
-        } else if (!slot.inFlight.get() && System.nanoTime() - slot.lastRequestNs >= MIN_INTERVAL_NS) {
-          requestAsync(clipId, slot, srcTex, analysisAspect, analysisRotation, bucket, epoch)
-        }
-      }
+      // 1+2. Pick up finished masks and make sure we have (or are getting) one for this frame.
+      val bucket = maintainMask(slot, clipId, srcTex, analysisAspect, analysisRotation, frameKeyUs, blocking)
 
       // 3. Use the mask only if it is for this frame (export) or recent enough (preview).
       val fresh = if (blocking) slot.maskBucket == bucket else abs(slot.maskBucket - bucket) <= HOLD_BUCKETS
@@ -206,6 +167,138 @@ class SubjectCutoutStage {
       if (scissorWasOn) GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
     }
   }
+
+  // ---------------------------------------------------------------------------------------------
+  // Mask maintenance (shared by the cutout look and the subject-effect consumers)
+  // ---------------------------------------------------------------------------------------------
+
+  private fun maintainSlotEpoch(slot: Slot, epoch: Int) {
+    if (slot.epoch == epoch) return
+    slot.epoch = epoch
+    slot.hasMask = false
+    slot.maskBucket = Long.MIN_VALUE
+    slot.lastAlpha = null
+    slot.pending.set(null)
+  }
+
+  /**
+   * Picks up a finished worker result, then makes sure a mask exists for this frame's bucket
+   * (blocking analysis on export, throttled async analysis on preview). Returns the bucket.
+   */
+  private fun maintainMask(
+    slot: Slot,
+    clipId: String,
+    srcTex: Int,
+    analysisAspect: Float,
+    analysisRotation: Int,
+    frameKeyUs: Long,
+    blocking: Boolean
+  ): Long {
+    val epoch = slot.epoch
+    // 1. Pick up a mask the worker finished since the last frame.
+    slot.pending.getAndSet(null)?.let { r ->
+      if (r.epoch == epoch) uploadMask(slot, r.pixels, r.bucket)
+    }
+
+    // 2. Make sure we have (or are getting) a mask for this frame.
+    // Preview keys masks per frame (it analyses off the GL thread anyway); the export keys them by
+    // a 200 ms window, because with `blocking = true` a per-frame key meant a synchronous readback
+    // *and* a segmentation *for every frame* of the clip. See [MaskAnalysisCadence].
+    val bucket = if (blocking) {
+      if (cadenceLogged.compareAndSet(false, true)) {
+        Log.i(
+          TAG,
+          "Export mask cadence: one segmentation per ${MaskAnalysisCadence.EXPORT_WINDOW_US / 1000}ms " +
+            "of timeline instead of one per frame (analysis ${ANALYSIS_LONG_SIDE}px, on the GL thread)."
+        )
+      }
+      MaskAnalysisCadence.exportBucketFor(frameKeyUs)
+    } else {
+      MaskAnalysisCadence.previewBucketFor(frameKeyUs)
+    }
+    val exact = slot.hasMask && slot.maskBucket == bucket
+    if (!exact) {
+      if (blocking) {
+        val bytes = readBack(slot, srcTex, analysisAspect)
+        val dims = analysisSize(analysisAspect)
+        val pixels = if (bytes != null) SubjectMaskWorker.analyse(bytes, dims.first, dims.second, analysisRotation) else null
+        if (pixels != null) {
+          consecutiveFailures.set(0)
+          uploadMask(slot, pixels, bucket)
+        } else {
+          noteFailure()
+        }
+      } else if (!slot.inFlight.get() && System.nanoTime() - slot.lastRequestNs >= MIN_INTERVAL_NS) {
+        requestAsync(clipId, slot, srcTex, analysisAspect, analysisRotation, bucket, epoch)
+      }
+    }
+    return bucket
+  }
+
+  /**
+   * Makes sure a subject mask exists for [clipId] WITHOUT applying any cut look, so the
+   * subject-effect runtimes can sample it the same frame. Returns true when a usable mask
+   * texture is available right now (export: exact for this frame; preview: recent enough).
+   * Must be used on the GL thread that owns the compositor.
+   */
+  fun ensureMask(
+    clipId: String,
+    srcTex: Int,
+    analysisAspect: Float,
+    analysisRotation: Int,
+    frameKeyUs: Long,
+    blocking: Boolean
+  ): Boolean {
+    if (disabled || clipId == null || srcTex <= 0) return false
+    if (SubjectCutoutRegistry.status.value == CutoutStatus.UNAVAILABLE) return false
+
+    // maintainMask/readBack rebind FBOs, viewport, program and texture units; the compositor
+    // calls this mid-pipeline (between the grade and the VFX stack), so every piece of state
+    // the analysis touches must be restored before returning — same contract as apply().
+    val prevFbo = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, prevFbo, 0)
+    val prevViewport = IntArray(4); GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, prevViewport, 0)
+    val prevProgram = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_CURRENT_PROGRAM, prevProgram, 0)
+    val prevActive = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_ACTIVE_TEXTURE, prevActive, 0)
+    GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+    val prevTex1 = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_TEXTURE_BINDING_2D, prevTex1, 0)
+    GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+    val prevTex0 = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_TEXTURE_BINDING_2D, prevTex0, 0)
+    val prevVao = GlEsCompat.currentVao()
+    val prevArrayBuf = IntArray(1); GLES20.glGetIntegerv(GLES20.GL_ARRAY_BUFFER_BINDING, prevArrayBuf, 0)
+    val blendWasOn = GLES20.glIsEnabled(GLES20.GL_BLEND)
+    val depthWasOn = GLES20.glIsEnabled(GLES20.GL_DEPTH_TEST)
+    val scissorWasOn = GLES20.glIsEnabled(GLES20.GL_SCISSOR_TEST)
+
+    return try {
+      val epoch = SubjectCutoutRegistry.epoch
+      val slot = slots.getOrPut(clipId) { Slot() }
+      maintainSlotEpoch(slot, epoch)
+      slot.lastEnsureNs = System.nanoTime()
+      val bucket = maintainMask(slot, clipId, srcTex, analysisAspect, analysisRotation, frameKeyUs, blocking)
+      val fresh = if (blocking) slot.maskBucket == bucket else abs(slot.maskBucket - bucket) <= HOLD_BUCKETS
+      slot.hasMask && slot.maskTex != 0 && fresh
+    } catch (t: Throwable) {
+      Log.e(TAG, "Subject mask ensure failed; subject effects pass through this frame", t)
+      false
+    } finally {
+      GlEsCompat.bindVao(prevVao)
+      GLES20.glBindBuffer(GLES20.GL_ARRAY_BUFFER, prevArrayBuf[0])
+      GLES20.glUseProgram(prevProgram[0])
+      GLES20.glActiveTexture(GLES20.GL_TEXTURE1)
+      GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, prevTex1[0])
+      GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+      GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, prevTex0[0])
+      GLES20.glActiveTexture(prevActive[0])
+      GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, prevFbo[0])
+      GLES20.glViewport(prevViewport[0], prevViewport[1], prevViewport[2], prevViewport[3])
+      if (blendWasOn) GLES20.glEnable(GLES20.GL_BLEND)
+      if (depthWasOn) GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+      if (scissorWasOn) GLES20.glEnable(GLES20.GL_SCISSOR_TEST)
+    }
+  }
+
+  /** The current mask texture for [clipId], or 0. Only meaningful right after [ensureMask] returned true. */
+  fun latestMaskTexture(clipId: String): Int = slots[clipId]?.maskTex ?: 0
 
   // ---------------------------------------------------------------------------------------------
   // Analysis
@@ -384,14 +477,16 @@ class SubjectCutoutStage {
     uBlurStep = GLES20.glGetUniformLocation(cutProgram, "uBlurStep")
   }
 
-  /** Frees GL resources of clips that no longer have a cutout. */
+  /** Frees GL resources of clips that no longer have a cutout or a recent external mask consumer. */
   private fun pruneSlots(epoch: Int) {
     if (prunedEpoch == epoch) return
     prunedEpoch = epoch
+    val staleBeforeNs = System.nanoTime() - EXTERNAL_MASK_HOLD_NS
     val it = slots.entries.iterator()
     while (it.hasNext()) {
       val e = it.next()
-      if (!SubjectCutoutRegistry.isActive(e.key)) {
+      val externallyConsumed = e.value.lastEnsureNs >= staleBeforeNs
+      if (!SubjectCutoutRegistry.isActive(e.key) && !externallyConsumed) {
         releaseSlot(e.value, deleteGl = true)
         it.remove()
       }
@@ -445,6 +540,9 @@ class SubjectCutoutStage {
 
     /** After this many failed analyses in a row the feature reports UNAVAILABLE instead of retrying forever. */
     const val MAX_FAILURES = 3
+
+    /** How long a subject-effect consumer's claim keeps a clip's mask slot alive across epochs. */
+    const val EXTERNAL_MASK_HOLD_NS = 2_000_000_000L
 
     /** One log line per process, so a slow export's launcher can see the mask cadence it chose. */
     val cadenceLogged = java.util.concurrent.atomic.AtomicBoolean(false)

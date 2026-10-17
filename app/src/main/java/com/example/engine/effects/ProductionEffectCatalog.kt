@@ -7,56 +7,74 @@ import com.example.engine.effects.registry.RegisteredEffect
 
 /**
  * The only curated catalog the Effects tools UI shows. [shaderKey] is the implementation:
- * `vfx:` runs in [com.example.engine.composition.gpu.VfxStackStage] (preview + export),
- * `face:` / `body:` run in the face and body warp stages,
- * `cutout:` runs in [com.example.engine.composition.gpu.SubjectCutoutStage] blur mode.
+ * `vfx:trend.*` are the CapCut-trending full-frame GPU effects (explosion, ink spill, rotating
+ * earth, magical tome, cut shift, fire, mini zoom, white flash, and the photo set) rendered by
+ * [com.example.engine.composition.gpu.VfxStackStage] in preview AND export,
+ * `vfx:subject.*` are the subject-driven assets (body effects + AI character restyles) rendered
+ * by the same stage through [com.vfx.engine.effects.SubjectMaskRuntime] with the on-device
+ * segmentation mask,
+ * `face:*` run in the face mesh warp stage (big head, small face, funny, alien eyes, melt,
+ * chubby, wink, perm curls).
  * Thumbnails use the same key via [EffectThumbnailRaster] on the live clip frame.
+ *
+ * Every entry here is a real engine definition — a GLSL body or a mesh-warp channel — registered
+ * through [com.vfx.engine.effects.BuiltinEffects]. There are no placeholder rows: the registry
+ * rejects effects without a shader key, and every key below resolves to a registered definition
+ * (pinned by VideoEffectsAssetsTest / TrendEffectsAssetsTest / SubjectEffectsTest).
  */
 object ProductionEffectCatalog {
 
-  /**
-   * Video Effects: ten GPU assets. Every entry is a real engine definition registered through
-   * [com.vfx.engine.effects.VideoEffects] (`vfx:` key = `EffectDefinition.id`), so the same asset
-   * renders in the live Media3 preview, in the GPU compositor and in export.
-   */
+  /** Video Effects: the CapCut-trending GPU assets (Motion Blur kept from the previous set). */
   private val videoEffects: List<RegisteredEffect> = listOf(
+    fx("video.explosion", "Explosion", EffectCategory.VIDEO_EFFECTS, "vfx:trend.explosion", listOf("intensity", "scale", "speed", "heat")),
+    fx("video.ink_spill", "Ink Spill", EffectCategory.VIDEO_EFFECTS, "vfx:trend.ink_spill", listOf("intensity", "spread", "speed", "dark")),
+    fx("video.rotating_earth", "Rotating Earth", EffectCategory.VIDEO_EFFECTS, "vfx:trend.earth", listOf("intensity", "size", "position", "spin", "clouds")),
+    fx("video.magical_tome", "Magical Tome", EffectCategory.VIDEO_EFFECTS, "vfx:trend.magical_tome", listOf("intensity", "scale", "speed", "hue")),
     fx("video.motion_blur", "Motion Blur", EffectCategory.VIDEO_EFFECTS, "vfx:blur.motion", listOf("intensity", "distance", "angle", "samples")),
-    fx("video.vhs", "VHS Tape", EffectCategory.VIDEO_EFFECTS, "vfx:video.vhs", listOf("intensity", "bleed", "noise", "tracking", "scanline")),
-    fx("video.crt", "CRT Scanlines", EffectCategory.VIDEO_EFFECTS, "vfx:video.crt", listOf("intensity", "curvature", "scanline", "grille", "flicker", "vignette")),
-    fx("video.datamosh", "Datamosh", EffectCategory.VIDEO_EFFECTS, "vfx:distort.datamosh", listOf("intensity", "amount", "blockSize", "smear")),
-    fx("video.anamorphic", "Anamorphic Streaks", EffectCategory.VIDEO_EFFECTS, "vfx:light.anamorphic", listOf("intensity", "amount", "threshold", "length", "tint")),
-    fx("video.film_grain", "Film Grain", EffectCategory.VIDEO_EFFECTS, "vfx:noise.grain", listOf("intensity", "amount", "size", "shadow", "chroma")),
-    fx("video.halation", "Halation", EffectCategory.VIDEO_EFFECTS, "vfx:light.halation", listOf("intensity", "amount", "radius", "threshold", "tint")),
-    fx("video.lens_flare", "Lens Flare", EffectCategory.VIDEO_EFFECTS, "vfx:light.flare", listOf("intensity", "position", "amount", "halo", "ghosts", "tint")),
-    fx("video.speed_lines", "Speed Lines", EffectCategory.VIDEO_EFFECTS, "vfx:stylize.speedLines", listOf("intensity", "center", "amount", "lines", "speed", "reach")),
-    fx("video.kaleidoscope", "Kaleidoscope", EffectCategory.VIDEO_EFFECTS, "vfx:distort.kaleidoscope", listOf("intensity", "segments", "rotation", "zoom", "center")),
+    fx("video.cut_shift", "Cut Shift", EffectCategory.VIDEO_EFFECTS, "vfx:trend.cut_shift", listOf("intensity", "slices", "speed", "rgb")),
+    fx("video.fire", "Fire", EffectCategory.VIDEO_EFFECTS, "vfx:trend.fire", listOf("intensity", "height", "speed", "heat")),
+    fx("video.mini_zoom", "Mini Zoom", EffectCategory.VIDEO_EFFECTS, "vfx:trend.mini_zoom", listOf("intensity", "speed", "amount", "shake")),
+    fx("video.white_flash", "White Flash", EffectCategory.VIDEO_EFFECTS, "vfx:trend.white_flash", listOf("intensity", "speed", "hold", "bloom")),
   )
 
-  val effects: List<RegisteredEffect> = videoEffects + listOf(
+  /** Body Effects: subject-segmentation-driven assets — they only draw on the tracked person. */
+  private val bodyEffects: List<RegisteredEffect> = listOf(
+    fx("body.optical_scan", "Optical Scan", EffectCategory.BODY_EFFECTS, "vfx:subject.optical_scan", listOf("intensity", "speed", "band")),
+    fx("body.phantom_clone", "Phantom Clone", EffectCategory.BODY_EFFECTS, "vfx:subject.phantom_clone", listOf("intensity", "offset", "speed", "ghost")),
+    fx("body.light_trails", "Light Trails", EffectCategory.BODY_EFFECTS, "vfx:subject.light_trails", listOf("intensity", "speed", "glow")),
+    fx("body.pixel_mask", "Pixel Mask", EffectCategory.BODY_EFFECTS, "vfx:subject.pixel_mask", listOf("intensity", "blocks")),
+    fx("body.action_paint", "Action Paint", EffectCategory.BODY_EFFECTS, "vfx:subject.action_paint", listOf("intensity", "speed", "splash")),
+    fx("body.face_scan", "Face Scan", EffectCategory.BODY_EFFECTS, "vfx:subject.face_scan", listOf("intensity", "speed", "band")),
+    fx("body.light_dissolve", "Light Dissolve", EffectCategory.BODY_EFFECTS, "vfx:subject.light_dissolve", listOf("intensity", "speed", "ember")),
+    fx("body.luminescence", "Luminescence", EffectCategory.BODY_EFFECTS, "vfx:subject.luminescence", listOf("intensity", "glow", "pulse")),
+    fx("body.hand_drawn", "Hand Drawn", EffectCategory.BODY_EFFECTS, "vfx:subject.hand_drawn", listOf("intensity", "outline", "paper")),
+  )
 
-    fx("face.reshape", "Face Reshape", EffectCategory.FACE_EFFECTS, "face:reshape", listOf("intensity")),
-    fx("face.skin", "Skin Smooth", EffectCategory.FACE_EFFECTS, "face:skin", listOf("intensity")),
-    fx("face.slim", "Face Slim", EffectCategory.FACE_EFFECTS, "face:slim", listOf("intensity")),
-    fx("face.eyes", "Eye Enhancement", EffectCategory.FACE_EFFECTS, "face:eyes", listOf("intensity")),
-    fx("face.teeth", "Teeth Whitening", EffectCategory.FACE_EFFECTS, "face:teeth", listOf("intensity")),
+  val effects: List<RegisteredEffect> = videoEffects + bodyEffects + listOf(
 
-    fx("body.reshape", "Body Reshape", EffectCategory.BODY_EFFECTS, "body:reshape", listOf("intensity")),
-    fx("body.waist", "Waist Slim", EffectCategory.BODY_EFFECTS, "body:waist", listOf("intensity")),
-    fx("body.legs", "Legs Lengthen", EffectCategory.BODY_EFFECTS, "body:legs", listOf("intensity")),
-    fx("body.shoulders", "Shoulder Reshape", EffectCategory.BODY_EFFECTS, "body:shoulders", listOf("intensity")),
-    fx("body.proportions", "Body Proportions", EffectCategory.BODY_EFFECTS, "body:proportions", listOf("intensity")),
+    fx("face.funny", "Funny Face", EffectCategory.FACE_EFFECTS, "face:funny", listOf("intensity")),
+    fx("face.alien_eyes", "Alien Eyes", EffectCategory.FACE_EFFECTS, "face:alien", listOf("intensity")),
+    fx("face.small_face", "Small Face", EffectCategory.FACE_EFFECTS, "face:small", listOf("intensity")),
+    fx("face.melting", "Melting Face", EffectCategory.FACE_EFFECTS, "face:melt", listOf("intensity")),
+    fx("face.chubby", "Chubby Cheeks", EffectCategory.FACE_EFFECTS, "face:chubby", listOf("intensity")),
 
-    fx("photo.hdr", "HDR Enhance", EffectCategory.PHOTO_EFFECTS, "vfx:color.hdr", listOf("intensity", "amount")),
-    fx("photo.portrait_blur", "Portrait Blur", EffectCategory.PHOTO_EFFECTS, "cutout:portrait", listOf("intensity", "strength", "softness")),
-    fx("photo.background_blur", "Background Blur", EffectCategory.PHOTO_EFFECTS, "cutout:background", listOf("intensity", "strength", "softness")),
-    fx("photo.color_pop", "Color Pop", EffectCategory.PHOTO_EFFECTS, "vfx:color.pop", listOf("intensity", "amount", "hue")),
-    fx("photo.sharpen", "Sharpen & Enhance", EffectCategory.PHOTO_EFFECTS, "vfx:sharpen.unsharp", listOf("intensity", "amount")),
+    fx("photo.expand_x", "Expand X", EffectCategory.PHOTO_EFFECTS, "vfx:trend.expand_x", listOf("intensity", "expand", "falloff")),
+    fx("photo.orbit360", "Orbit 360", EffectCategory.PHOTO_EFFECTS, "vfx:trend.orbit360", listOf("intensity", "speed", "reach", "twist")),
+    fx("photo.perm_curls", "Perm Curls", EffectCategory.PHOTO_EFFECTS, "face:curls", listOf("intensity")),
+    fx("photo.wink", "Wink", EffectCategory.PHOTO_EFFECTS, "face:wink", listOf("intensity")),
+    fx("photo.layer", "Layer", EffectCategory.PHOTO_EFFECTS, "vfx:trend.layer_echo", listOf("intensity", "offset", "scaleStep", "mixAmt")),
+    fx("photo.doll", "Doll", EffectCategory.PHOTO_EFFECTS, "face:big_head", listOf("intensity")),
+    fx("photo.zoom3d", "3D Zoom", EffectCategory.PHOTO_EFFECTS, "vfx:trend.zoom3d", listOf("intensity", "zoom", "depth", "speed")),
+    fx("photo.ai_filter", "AI Filter", EffectCategory.PHOTO_EFFECTS, "vfx:trend.ai_filter", listOf("intensity", "warmth", "glow", "pop")),
+    fx("photo.sad", "Sad", EffectCategory.PHOTO_EFFECTS, "vfx:trend.sad", listOf("intensity", "mood", "vig", "grain")),
+    fx("photo.cartoon3d", "3D Cartoon", EffectCategory.PHOTO_EFFECTS, "vfx:trend.cartoon3d", listOf("intensity", "levels", "outline", "sat")),
 
-    fx("ai.sketch", "Sketch", EffectCategory.AI_EFFECTS, "vfx:stylize.sketch", listOf("intensity", "strength")),
-    fx("ai.halftone", "Halftone", EffectCategory.AI_EFFECTS, "vfx:stylize.halftone", listOf("intensity", "dotSize")),
-    fx("ai.posterize", "Posterize", EffectCategory.AI_EFFECTS, "vfx:stylize.posterize", listOf("intensity", "levels")),
-    fx("ai.pixelate", "Pixelate", EffectCategory.AI_EFFECTS, "vfx:stylize.pixelate", listOf("intensity", "blocksX", "blocksY")),
-    fx("ai.duotone", "Duotone", EffectCategory.AI_EFFECTS, "vfx:stylize.duotone", listOf("intensity", "detail")),
+    // AI Effects: on-device segmentation-driven character restyles — the tracked person is
+    // transformed in place (shadow silhouette / golden statue / cyber suit / cartoon avatar).
+    fx("ai.shadow_clone", "Shadow Clone", EffectCategory.AI_EFFECTS, "vfx:subject.clone_shadow", listOf("intensity", "lift", "rim")),
+    fx("ai.golden_statue", "Golden Statue", EffectCategory.AI_EFFECTS, "vfx:subject.clone_golden", listOf("intensity", "shine", "relief")),
+    fx("ai.cyber_neon", "Cyber Neon", EffectCategory.AI_EFFECTS, "vfx:subject.clone_cyber", listOf("intensity", "lines", "glow")),
+    fx("ai.cartoon_character", "Cartoon Character", EffectCategory.AI_EFFECTS, "vfx:subject.clone_cartoon", listOf("intensity", "levels", "outline", "boost")),
   )
 
   fun install() {

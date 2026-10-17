@@ -1,13 +1,12 @@
 package com.example.engine.effects
 
 import com.ahstudio.face.deformation.DeformationCodec
+import com.ahstudio.face.deformation.DeformationParams
 import com.example.data.local.TimelineSerializer
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
 import com.example.engine.SelectedTrackElement
 import com.example.engine.TimelineEngine
-import com.example.engine.ai.cutout.BgRemoveCodec
-import com.example.engine.ai.cutout.BgRemoveParams
 import com.example.engine.effects.registry.EffectCategory
 import com.example.engine.effects.registry.EffectsAssetRegistry
 import com.example.engine.vfx.VfxEffectsHost
@@ -31,14 +30,14 @@ class ProductionEffectsTest {
   @Test
   fun catalogHasUniqueRealEffectsInEveryCategory() {
     val all = ProductionEffectCatalog.effects
-    assertEquals(30, all.size)
-    assertEquals(30, all.map { it.id }.toSet().size)
-    assertEquals(30, all.map { it.shaderKey }.toSet().size)
-    assertEquals(10, all.count { it.category == EffectCategory.VIDEO_EFFECTS })
+    assertEquals(37, all.size)
+    assertEquals(37, all.map { it.id }.toSet().size)
+    assertEquals(37, all.map { it.shaderKey }.toSet().size)
+    assertEquals(9, all.count { it.category == EffectCategory.VIDEO_EFFECTS })
     assertEquals(5, all.count { it.category == EffectCategory.FACE_EFFECTS })
-    assertEquals(5, all.count { it.category == EffectCategory.BODY_EFFECTS })
-    assertEquals(5, all.count { it.category == EffectCategory.PHOTO_EFFECTS })
-    assertEquals(5, all.count { it.category == EffectCategory.AI_EFFECTS })
+    assertEquals(9, all.count { it.category == EffectCategory.BODY_EFFECTS })
+    assertEquals(10, all.count { it.category == EffectCategory.PHOTO_EFFECTS })
+    assertEquals(4, all.count { it.category == EffectCategory.AI_EFFECTS })
     assertEquals(EffectCategory.entries.toList(), ProductionEffectCatalog.categories())
     all.forEach { effect ->
       assertTrue(effect.id, effect.shaderKey?.isNotBlank() == true)
@@ -47,85 +46,98 @@ class ProductionEffectsTest {
       assertTrue(effect.supportsExport)
       assertEquals(null, effect.effectType)
     }
-    assertEquals(30, EffectsAssetRegistry.getAllEffects().size)
-    assertEquals(10, EffectsAssetRegistry.getEffects(EffectCategory.VIDEO_EFFECTS).size)
-    assertEquals(5, EffectsAssetRegistry.getEffects(EffectCategory.FACE_EFFECTS).size)
-    assertEquals(5, EffectsAssetRegistry.getEffects(EffectCategory.AI_EFFECTS).size)
+    assertEquals(37, EffectsAssetRegistry.getAllEffects().size)
+    assertEquals(9, EffectsAssetRegistry.getEffects(EffectCategory.VIDEO_EFFECTS).size)
+    assertEquals(9, EffectsAssetRegistry.getEffects(EffectCategory.BODY_EFFECTS).size)
+    assertEquals(10, EffectsAssetRegistry.getEffects(EffectCategory.PHOTO_EFFECTS).size)
+    assertEquals(4, EffectsAssetRegistry.getEffects(EffectCategory.AI_EFFECTS).size)
+  }
+
+  @Test
+  fun everyVfxKeyResolvesToARegisteredEngineDefinition() {
+    assertTrue(
+      "skipped: ${VfxEffectsHost.registrationSkipped}",
+      VfxEffectsHost.registrationSkipped.isEmpty()
+    )
+    ProductionEffectCatalog.effects.forEach { effect ->
+      val key = effect.shaderKey ?: return@forEach
+      if (!key.startsWith("vfx:")) return@forEach
+      assertNotNull(
+        "${effect.id} -> $key is not a registered definition",
+        VfxEffectsHost.registry.createEffect(key.removePrefix("vfx:"))
+      )
+    }
   }
 
   @Test
   fun videoEffectsUpsertIntoTheRealVfxStack() {
     val clip = VideoClip(id = "v", name = "v")
-    val moshed = ProductionEffectCatalog.byId("video.datamosh")!!
-    val grain = ProductionEffectCatalog.byId("video.film_grain")!!
-    val once = ProductionEffectApplicator.apply(clip, moshed, 0.8f)
-    val twice = ProductionEffectApplicator.apply(once, moshed, 0.4f)
-    val both = ProductionEffectApplicator.apply(twice, grain, 1f)
+    val boom = ProductionEffectCatalog.byId("video.explosion")!!
+    val fire = ProductionEffectCatalog.byId("video.fire")!!
+    val once = ProductionEffectApplicator.apply(clip, boom, 0.8f)
+    val twice = ProductionEffectApplicator.apply(once, boom, 0.4f)
+    val both = ProductionEffectApplicator.apply(twice, fire, 1f)
     val stack = VfxEffectsHost.decode(both.vfxStackJson)
     assertEquals(2, stack.size)
-    assertEquals("distort.datamosh", stack.effectAt(0).definition.id)
+    assertEquals("trend.explosion", stack.effectAt(0).definition.id)
     assertEquals(0.4f, stack.effectAt(0).intensity, 1e-4f)
-    assertEquals(0.02f + 0.14f * 0.4f, stack.effectAt(0).getParam<Float>("amount"), 1e-4f)
-    assertEquals("noise.grain", stack.effectAt(1).definition.id)
-    listOf(
-      "blur.motion", "video.vhs", "video.crt", "distort.datamosh", "light.anamorphic",
-      "noise.grain", "light.halation", "light.flare", "stylize.speedLines", "distort.kaleidoscope",
-      "color.hdr", "color.pop", "sharpen.unsharp", "stylize.sketch", "stylize.halftone",
-      "stylize.posterize", "stylize.pixelate", "stylize.duotone"
-    ).forEach { id ->
-      assertNotNull(VfxEffectsHost.registry.createEffect(id))
-    }
-    assertTrue(VfxEffectsHost.registrationSkipped.isEmpty())
+    assertEquals(0.40f + 0.60f * 0.4f, stack.effectAt(0).getParam<Float>("scale"), 1e-4f)
+    assertEquals("trend.fire", stack.effectAt(1).definition.id)
   }
 
   @Test
-  fun faceBodyAndBlurWriteTheFieldsTheCompositorReads() {
+  fun faceWarpAssetsWriteTheChannelsTheCompositorReads() {
     val clip = VideoClip(id = "v", name = "v")
-    val slim = ProductionEffectApplicator.apply(clip, ProductionEffectCatalog.byId("face.slim")!!, 0.7f)
-    val face = ProductionEffectApplicator.apply(slim, ProductionEffectCatalog.byId("face.eyes")!!, 0.4f)
-    val skin = ProductionEffectApplicator.apply(face, ProductionEffectCatalog.byId("face.skin")!!, 0.5f)
-    val teeth = ProductionEffectApplicator.apply(skin, ProductionEffectCatalog.byId("face.teeth")!!, 0.6f)
-    val decoded = DeformationCodec.decode(teeth.faceReshape)
-    assertEquals(0.7f, decoded.faceSlim, 1e-4f)
-    assertEquals(0.4f, decoded.eyeEnlarge, 1e-4f)
-    assertEquals(0.5f, decoded.skinSmooth, 1e-4f)
-    assertEquals(0.6f, decoded.teethWhiten, 1e-4f)
-
-    val body = ProductionEffectApplicator.apply(teeth, ProductionEffectCatalog.byId("body.waist")!!, 0.8f)
-    assertEquals(0.8f, BodyReshapeCodec.decode(body.bodyReshape).waist, 1e-4f)
-
-    val portrait = ProductionEffectApplicator.apply(body, ProductionEffectCatalog.byId("photo.portrait_blur")!!, 1f)
-    assertTrue(portrait.isBackgroundRemoved)
-    assertEquals(BgRemoveParams.MODE_BLUR, BgRemoveCodec.decode(portrait.bgRemove).mode)
-
-    val cleared = ProductionEffectApplicator.clearCategory(portrait, EffectCategory.VIDEO_EFFECTS)
-    assertEquals(portrait.faceReshape, cleared.faceReshape)
-    assertEquals(portrait.bodyReshape, cleared.bodyReshape)
-    val noFace = ProductionEffectApplicator.clearCategory(cleared, EffectCategory.FACE_EFFECTS)
-    assertNull(noFace.faceReshape)
-    assertEquals(portrait.bodyReshape, noFace.bodyReshape)
-    val noBlur = ProductionEffectApplicator.clearCategory(noFace, EffectCategory.PHOTO_EFFECTS)
-    assertTrue(!noBlur.isBackgroundRemoved)
+    val funny = ProductionEffectApplicator.apply(clip, ProductionEffectCatalog.byId("face.funny")!!, 0.7f)
+    val alien = ProductionEffectApplicator.apply(funny, ProductionEffectCatalog.byId("face.alien_eyes")!!, 0.4f)
+    val doll = ProductionEffectApplicator.apply(alien, ProductionEffectCatalog.byId("photo.doll")!!, 0.9f)
+    val decoded = DeformationCodec.decode(doll.faceReshape)
+    assertEquals(0.7f, decoded.funny, 1e-4f)
+    assertEquals(0.4f, decoded.alienEyes, 1e-4f)
+    assertEquals(0.9f, decoded.bigHead, 1e-4f)
+    // appliedOn reports the strongest channel per category.
+    assertEquals("photo.doll", ProductionEffectApplicator.appliedOn(doll, EffectCategory.PHOTO_EFFECTS)?.id)
+    assertEquals(0.9f, ProductionEffectApplicator.intensityOn(doll, ProductionEffectCatalog.byId("photo.doll")!!), 1e-4f)
+    val cleared = ProductionEffectApplicator.clearCategory(doll, EffectCategory.FACE_EFFECTS)
+    assertNull(cleared.faceReshape)
+    // Clearing PHOTO also wipes the shared face-reshape struct (documented semantics:
+    // the warp channels live in one struct, so a category clear resets all of them).
+    val noPhoto = ProductionEffectApplicator.clearCategory(doll, EffectCategory.PHOTO_EFFECTS)
+    assertNull(noPhoto.faceReshape)
   }
 
   @Test
-  fun reshapePresetsEncodeGeometricSliders() {
-    val clip = ProductionEffectApplicator.apply(
-      VideoClip(id = "v", name = "v"),
-      ProductionEffectCatalog.byId("face.reshape")!!,
-      1f
+  fun subjectAssetsRideTheSameStackAsVideoAssets() {
+    val clip = VideoClip(id = "v", name = "v")
+    val scanned = ProductionEffectApplicator.apply(clip, ProductionEffectCatalog.byId("body.optical_scan")!!, 1f)
+    val flashed = ProductionEffectApplicator.apply(scanned, ProductionEffectCatalog.byId("video.white_flash")!!, 0.5f)
+    val stack = VfxEffectsHost.decode(flashed.vfxStackJson)
+    assertEquals(2, stack.size)
+    assertEquals("subject.optical_scan", stack.effectAt(0).definition.id)
+    assertEquals("trend.white_flash", stack.effectAt(1).definition.id)
+    val clearedBody = ProductionEffectApplicator.clearCategory(flashed, EffectCategory.BODY_EFFECTS)
+    assertEquals(
+      listOf("trend.white_flash"),
+      VfxEffectsHost.decode(clearedBody.vfxStackJson).effects().map { it.definition.id }
     )
-    val d = DeformationCodec.decode(clip.faceReshape)
-    assertTrue(d.eyeEnlarge > 0f && d.faceSlim > 0f && d.jawSharp > 0f)
-    val shaped = ProductionEffectApplicator.apply(clip, ProductionEffectCatalog.byId("body.reshape")!!, 0.5f)
-    val legs = ProductionEffectApplicator.apply(shaped, ProductionEffectCatalog.byId("body.legs")!!, 0.3f)
-    val shoulders = ProductionEffectApplicator.apply(legs, ProductionEffectCatalog.byId("body.shoulders")!!, 0.2f)
-    val proportions = ProductionEffectApplicator.apply(shoulders, ProductionEffectCatalog.byId("body.proportions")!!, 0.4f)
-    val b = BodyReshapeCodec.decode(proportions.bodyReshape)
-    assertEquals(0.5f, b.reshape, 1e-4f)
-    assertEquals(0.3f, b.legs, 1e-4f)
-    assertEquals(0.2f, b.shoulders, 1e-4f)
-    assertEquals(0.4f, b.proportions, 1e-4f)
+  }
+
+  @Test
+  fun warpChannelCodecRoundTripsThroughTheClip() {
+    val clip = VideoClip(id = "v", name = "v")
+    val applied = ProductionEffectCatalog.effects
+      .filter { it.shaderKey?.startsWith("face:") == true }
+      .fold(clip) { c, effect -> ProductionEffectApplicator.apply(c, effect, 0.5f) }
+    val d = DeformationCodec.decode(applied.faceReshape)
+    assertEquals(0.5f, d.funny, 1e-4f)
+    assertEquals(0.5f, d.alienEyes, 1e-4f)
+    assertEquals(0.5f, d.smallFace, 1e-4f)
+    assertEquals(0.5f, d.melt, 1e-4f)
+    assertEquals(0.5f, d.chubby, 1e-4f)
+    assertEquals(0.5f, d.wink, 1e-4f)
+    assertEquals(0.5f, d.curls, 1e-4f)
+    assertEquals(0.5f, d.bigHead, 1e-4f)
+    assertTrue(DeformationCodec.encode(d) != null)
   }
 
   @Test
@@ -178,26 +190,26 @@ class ProductionEffectsTest {
   @Test
   fun appliedOnReadsTheSameFieldsPreviewAndExportUse() {
     val clip = VideoClip(id = "v", name = "v")
-    val moshed = ProductionEffectCatalog.byId("video.datamosh")!!
-    val sketch = ProductionEffectCatalog.byId("ai.sketch")!!
-    val slim = ProductionEffectCatalog.byId("face.slim")!!
+    val boom = ProductionEffectCatalog.byId("video.explosion")!!
+    val clone = ProductionEffectCatalog.byId("ai.shadow_clone")!!
+    val funny = ProductionEffectCatalog.byId("face.funny")!!
     val looked = ProductionEffectApplicator.apply(
       ProductionEffectApplicator.apply(
-        ProductionEffectApplicator.apply(clip, moshed, 0.6f),
-        sketch,
+        ProductionEffectApplicator.apply(clip, boom, 0.6f),
+        clone,
         0.8f
       ),
-      slim,
+      funny,
       0.5f
     )
-    assertEquals("video.datamosh", ProductionEffectApplicator.appliedOn(looked, EffectCategory.VIDEO_EFFECTS)?.id)
-    assertEquals("ai.sketch", ProductionEffectApplicator.appliedOn(looked, EffectCategory.AI_EFFECTS)?.id)
-    assertEquals("face.slim", ProductionEffectApplicator.appliedOn(looked, EffectCategory.FACE_EFFECTS)?.id)
-    assertEquals(0.6f, ProductionEffectApplicator.intensityOn(looked, moshed), 1e-4f)
-    assertEquals(0.8f, ProductionEffectApplicator.intensityOn(looked, sketch), 1e-4f)
+    assertEquals("video.explosion", ProductionEffectApplicator.appliedOn(looked, EffectCategory.VIDEO_EFFECTS)?.id)
+    assertEquals("ai.shadow_clone", ProductionEffectApplicator.appliedOn(looked, EffectCategory.AI_EFFECTS)?.id)
+    assertEquals("face.funny", ProductionEffectApplicator.appliedOn(looked, EffectCategory.FACE_EFFECTS)?.id)
+    assertEquals(0.6f, ProductionEffectApplicator.intensityOn(looked, boom), 1e-4f)
+    assertEquals(0.8f, ProductionEffectApplicator.intensityOn(looked, clone), 1e-4f)
     val clearedAi = ProductionEffectApplicator.clearCategory(looked, EffectCategory.AI_EFFECTS)
     assertNull(ProductionEffectApplicator.appliedOn(clearedAi, EffectCategory.AI_EFFECTS))
-    assertEquals("video.datamosh", ProductionEffectApplicator.appliedOn(clearedAi, EffectCategory.VIDEO_EFFECTS)?.id)
+    assertEquals("video.explosion", ProductionEffectApplicator.appliedOn(clearedAi, EffectCategory.VIDEO_EFFECTS)?.id)
   }
 
   @Test
@@ -215,10 +227,7 @@ class ProductionEffectsTest {
     )
     engine.loadTimeline(Timeline(videoClips = listOf(source)))
     val looked = ProductionEffectCatalog.effects
-      .filter { it.category != EffectCategory.PHOTO_EFFECTS }
       .fold(source) { clip, effect -> ProductionEffectApplicator.apply(clip, effect, 0.75f) }
-      .let { ProductionEffectApplicator.apply(it, ProductionEffectCatalog.byId("photo.hdr")!!, 0.9f) }
-      .let { ProductionEffectApplicator.apply(it, ProductionEffectCatalog.byId("photo.background_blur")!!, 0.8f) }
     assertTrue(engine.setClipProductionLook("A", looked))
     val before = engine.timeline.value.videoClips.first()
     engine.selectElement(SelectedTrackElement.Video("A"))
@@ -237,8 +246,6 @@ class ProductionEffectsTest {
       assertEquals(before.vfxStackJson, clip.vfxStackJson)
       assertEquals(before.faceReshape, clip.faceReshape)
       assertEquals(before.bodyReshape, clip.bodyReshape)
-      assertEquals(before.isBackgroundRemoved, clip.isBackgroundRemoved)
-      assertEquals(before.bgRemove, clip.bgRemove)
       assertTrue(clip.durationMs > 0L)
       assertTrue(clip.sourceStartMs <= clip.sourceEndMs)
     }
@@ -249,7 +256,7 @@ class ProductionEffectsTest {
       assertEquals(before.vfxStackJson, clip.vfxStackJson)
       assertEquals(before.faceReshape, clip.faceReshape)
       assertEquals(before.bodyReshape, clip.bodyReshape)
-      assertTrue(clip.isBackgroundRemoved)
+      assertNotNull(clip.vfxStackJson)
     }
   }
 
@@ -259,13 +266,13 @@ class ProductionEffectsTest {
     val main = VideoClip(id = "main", name = "main", timelineStartMs = 0, durationMs = 5_000, sourceEndMs = 5_000)
     val pip = VideoClip(id = "pip", name = "pip", timelineStartMs = 0, durationMs = 5_000, sourceEndMs = 5_000)
     engine.loadTimeline(Timeline(videoClips = listOf(main), overlayClips = listOf(pip)))
-    val pipLook = ProductionEffectApplicator.apply(pip, ProductionEffectCatalog.byId("video.anamorphic")!!, 1f)
+    val pipLook = ProductionEffectApplicator.apply(pip, ProductionEffectCatalog.byId("video.explosion")!!, 1f)
     assertTrue(engine.setClipProductionLook("pip", pipLook))
     val tl = engine.timeline.value
     assertNull(tl.videoClips.first().vfxStackJson)
     assertNotNull(tl.overlayClips.first().vfxStackJson)
     assertNotEquals(tl.videoClips.first().vfxStackJson, tl.overlayClips.first().vfxStackJson)
     val stack = VfxEffectsHost.decode(tl.overlayClips.first().vfxStackJson)
-    assertEquals("light.anamorphic", stack.effectAt(0).definition.id)
+    assertEquals("trend.explosion", stack.effectAt(0).definition.id)
   }
 }

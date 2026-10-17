@@ -21,6 +21,8 @@ import com.example.engine.composition.StickerDisplayMetrics
 import com.example.engine.composition.StickerLayerRenderer
 import com.example.engine.composition.VideoEffectRenderer
 import com.example.engine.effects.ColorLookModel
+import com.vfx.engine.effects.SubjectMaskFeed
+import com.vfx.engine.effects.SubjectVfx
 import com.example.engine.text.Text3DGlRenderer
 import com.example.engine.text.TextLayerRenderer
 import java.nio.ByteBuffer
@@ -516,6 +518,17 @@ class GpuCompositionRenderer(private val context: Context) {
         srcTex = main2dTexRaw,
         width = viewportWidth,
         height = viewportHeight
+      )
+
+      // Subject-effects consumers (subject.* in the clip's vfx stack) need the on-device
+      // segmentation mask BEFORE the stack renders; publish it for this exact frame.
+      publishSubjectMask(
+        clip = frame.activeClip,
+        srcTex = gradedTexId,
+        width = viewportWidth,
+        height = viewportHeight,
+        frameKeyUs = frame.timelinePosMs * 1000L,
+        blocking = deterministicMasks
       )
 
       // com.vfx effect stack (no-op for clips without one). Runs after the colour grade.
@@ -2403,6 +2416,41 @@ class GpuCompositionRenderer(private val context: Context) {
   }
 
   /**
+   * Publishes the clip's on-device subject mask to [SubjectMaskFeed] when its vfx stack contains
+   * subject-driven effects, and clears the feed otherwise. Sharing the background-removal stage's
+   * mask pipeline (one segmentation worker, one mask texture per clip) keeps the subject effects
+   * free of any duplicated segmentation code, and the mask is cut from exactly what is displayed.
+   */
+  private fun publishSubjectMask(
+    clip: VideoClip?,
+    srcTex: Int,
+    width: Int,
+    height: Int,
+    frameKeyUs: Long,
+    blocking: Boolean
+  ) {
+    if (clip == null || !SubjectVfx.referenced(clip.vfxStackJson)) {
+      SubjectMaskFeed.clear()
+      return
+    }
+    val available = subjectCutoutStage.ensureMask(
+      clipId = clip.id,
+      srcTex = srcTex,
+      analysisAspect = width.toFloat() / max(1, height),
+      analysisRotation = 0,
+      frameKeyUs = frameKeyUs,
+      blocking = blocking
+    )
+    if (available) {
+      SubjectMaskFeed.publish(subjectCutoutStage.latestMaskTexture(clip.id), width, height)
+    } else {
+      // No mask this frame (model unavailable, no segmentation yet): the subject runtimes see
+      // u_hasMask = 0 and pass the frame through, so the effect can never leak onto the scene.
+      SubjectMaskFeed.clear()
+    }
+  }
+
+  /**
    * Same effect chain as the main clip: vfx stack, face mesh, body pose warp, face beauty.
    * Each layer uses its own stage instances so textures are not released out from under another layer.
    */
@@ -2419,14 +2467,26 @@ class GpuCompositionRenderer(private val context: Context) {
     body: BodyWarpStage,
     beauty: FaceBeautyStage,
   ): Int {
-    val vfxTex = vfx.apply(
-      clipId = clip.id,
-      stackJson = clip.vfxStackJson,
-      clipTimeMs = timelinePosMs - clip.timelineStartMs,
-      srcTex = srcTex,
-      width = width,
-      height = height
-    )
+    val vfxTex = run {
+      // Subject-effects consumers need the mask before the stack renders (same contract as the
+      // main clip path); overlays and transition sides each publish their own clip's mask.
+      publishSubjectMask(
+        clip = clip,
+        srcTex = srcTex,
+        width = width,
+        height = height,
+        frameKeyUs = timelinePosMs * 1000L,
+        blocking = blocking
+      )
+      vfx.apply(
+        clipId = clip.id,
+        stackJson = clip.vfxStackJson,
+        clipTimeMs = timelinePosMs - clip.timelineStartMs,
+        srcTex = srcTex,
+        width = width,
+        height = height
+      )
+    }
     val faceTex = face.apply(
       clip = clip,
       timelinePosMs = timelinePosMs,

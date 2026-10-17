@@ -66,7 +66,9 @@ object ProductionEffectApplicator {
     if (keys.any { it.startsWith("face:") }) {
       val cleared = DeformationCodec.decode(next.faceReshape).copy(
         eyeEnlarge = 0f, faceSlim = 0f, jawSharp = 0f, noseReshape = 0f,
-        chinAdjust = 0f, smileAdjust = 0f, skinSmooth = 0f, teethWhiten = 0f
+        chinAdjust = 0f, smileAdjust = 0f, skinSmooth = 0f, teethWhiten = 0f,
+        bigHead = 0f, smallFace = 0f, funny = 0f, alienEyes = 0f,
+        melt = 0f, chubby = 0f, wink = 0f, curls = 0f
       )
       next = next.copy(faceReshape = DeformationCodec.encode(cleared))
     }
@@ -93,6 +95,15 @@ object ProductionEffectApplicator {
     "eyes" -> current.copy(eyeEnlarge = amount)
     "skin" -> current.copy(skinSmooth = amount)
     "teeth" -> current.copy(teethWhiten = amount)
+    // Effects-tools warp channels (one per mesh-warp asset).
+    "big_head" -> current.copy(bigHead = amount)
+    "small" -> current.copy(smallFace = amount)
+    "funny" -> current.copy(funny = amount)
+    "alien" -> current.copy(alienEyes = amount)
+    "melt" -> current.copy(melt = amount)
+    "chubby" -> current.copy(chubby = amount)
+    "wink" -> current.copy(wink = amount)
+    "curls" -> current.copy(curls = amount)
     else -> current
   }
 
@@ -216,6 +227,53 @@ object ProductionEffectApplicator {
         set("blocksY", blocks)
       }
       "stylize.duotone" -> set("detail", 0.06f + 0.4f * intensity)
+      // ---- Trending assets: intensity -> the params the shaders actually read. ----
+      "trend.explosion" -> {
+        set("scale", 0.40f + 0.60f * intensity)
+        set("heat", 0.40f + 1.20f * intensity)
+      }
+      "trend.ink_spill" -> {
+        set("spread", 0.50f + 0.60f * intensity)
+        set("dark", 0.50f + 0.45f * intensity)
+      }
+      "trend.earth" -> set("size", 0.14f + 0.20f * intensity)
+      "trend.magical_tome" -> set("scale", 0.60f + 0.80f * intensity)
+      "trend.cut_shift" -> {
+        set("rgb", 0.20f + 0.60f * intensity)
+        set("speed", 1.20f + 2.00f * intensity)
+      }
+      "trend.fire" -> {
+        set("heat", 0.40f + 1.20f * intensity)
+        set("height", 0.25f + 0.20f * intensity)
+      }
+      "trend.mini_zoom" -> {
+        set("amount", 0.06f + 0.18f * intensity)
+        set("shake", 0.005f + 0.030f * intensity)
+      }
+      "trend.white_flash" -> set("bloom", 0.15f + 0.40f * intensity)
+      "trend.expand_x" -> set("expand", 0.05f + 0.22f * intensity)
+      "trend.orbit360" -> {
+        set("reach", 0.25f + 0.55f * intensity)
+        set("twist", 0.10f + 0.30f * intensity)
+      }
+      "trend.layer_echo" -> set("mixAmt", 0.25f + 0.50f * intensity)
+      "trend.zoom3d" -> {
+        set("zoom", 0.08f + 0.25f * intensity)
+        set("depth", 0.30f + 0.50f * intensity)
+      }
+      "trend.ai_filter" -> {
+        set("warmth", 0.50f + 0.30f * intensity)
+        set("glow", 0.20f + 0.40f * intensity)
+        set("pop", 0.40f + 0.40f * intensity)
+      }
+      "trend.sad" -> set("mood", 0.40f + 0.50f * intensity)
+      "trend.cartoon3d" -> {
+        set("outline", 0.40f + 0.50f * intensity)
+        set("sat", 0.40f + 0.50f * intensity)
+      }
+      // ---- Subject-driven assets: the mask gates where they draw; intensity is the mix. ----
+      "subject.pixel_mask" -> set("blocks", 90f - 55f * intensity)
+      "subject.phantom_clone" -> set("ghost", 0.30f + 0.60f * intensity)
     }
   }
 
@@ -248,6 +306,14 @@ object ProductionEffectApplicator {
       "teeth" to d.teethWhiten,
       "eyes" to d.eyeEnlarge,
       "slim" to d.faceSlim,
+      "big_head" to d.bigHead,
+      "small" to d.smallFace,
+      "funny" to d.funny,
+      "alien" to d.alienEyes,
+      "melt" to d.melt,
+      "chubby" to d.chubby,
+      "wink" to d.wink,
+      "curls" to d.curls,
     )
     return singles.maxByOrNull { it.second }?.takeIf { it.second > 0.02f }?.first
       ?: if (geometric > 0) "reshape" else null
@@ -277,6 +343,14 @@ object ProductionEffectApplicator {
     "eyes" -> d.eyeEnlarge
     "skin" -> d.skinSmooth
     "teeth" -> d.teethWhiten
+    "big_head" -> d.bigHead
+    "small" -> d.smallFace
+    "funny" -> d.funny
+    "alien" -> d.alienEyes
+    "melt" -> d.melt
+    "chubby" -> d.chubby
+    "wink" -> d.wink
+    "curls" -> d.curls
     else -> 1f
   }
 

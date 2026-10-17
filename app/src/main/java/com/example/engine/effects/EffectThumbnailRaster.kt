@@ -13,6 +13,10 @@ import kotlin.math.sin
  * Icon-resolution processing of the same effect keys the GPU path uses.
  * Live tiles pass the current clip frame; the fallback scene is only used when
  * no clip thumbnail is available yet.
+ *
+ * The `subject.*` icons gate their look on a synthetic person silhouette (the same
+ * face/torso/legs shapes the fallback scene draws), so a body/AI icon communicates
+ * "this styles the tracked person", not the whole frame.
  */
 object EffectThumbnailRaster {
 
@@ -73,283 +77,408 @@ object EffectThumbnailRaster {
     return pack(r, g, b)
   }
 
+  /** Soft synthetic silhouette of the fallback scene's person (face + torso + legs). */
+  private fun personMask(u: Float, v: Float): Float {
+    val face = ellipse(u, v, 0.36f, 0.30f, 0.15f, 0.19f)
+    val torsoW = if (u in 0.25f..0.50f && v in 0.48f..0.84f) 0.85f else 0f
+    val legs = if (u in 0.28f..0.47f && v in 0.82f..0.98f) 0.8f else 0f
+    return max(face, max(torsoW, legs))
+  }
+
   private fun shade(key: String, src: IntArray, x: Int, y: Int, w: Int, h: Int): Int {
     val u = x / (w - 1f).coerceAtLeast(1f)
     val v = y / (h - 1f).coerceAtLeast(1f)
     return when (key) {
-      // ---- Video Effects assets: icon-resolution previews of the GPU shaders. ----
       "vfx:blur.motion" -> average(src, x, y, w, h, 6, 1, 0)
 
-      "vfx:video.vhs" -> {
+      // ---- Video Effects: CapCut-trending assets. ----
+      "vfx:trend.explosion" -> {
         val c = src[y * w + x]
-        val bleed = sample(src, x - 2, y, w, h)
-        val hiss = (hash(y.toFloat(), 3.7f) - 0.5f) * 0.22f
-        val scan = if (y % 2 == 0) 0.84f else 1f
+        val d = hypot(u - 0.5f, v - 0.55f)
+        val ring = exp(-((d - 0.30f) * 7f) * ((d - 0.30f) * 7f))
+        val core = exp(-d * d * 22f)
+        val heat = (ring * 0.85f + core * 1.2f).coerceIn(0f, 1.4f)
         pack(
-          mix(red(c), red(bleed), 0.35f) * scan + hiss,
-          mix(green(c), green(bleed), 0.35f) * scan + hiss,
-          mix(blue(c), blue(bleed), 0.35f) * scan + hiss
+          red(c) + heat * 1.0f,
+          green(c) + heat * 0.62f,
+          blue(c) + heat * 0.22f
         )
       }
-
-      "vfx:video.crt" -> {
+      "vfx:trend.ink_spill" -> {
         val c = src[y * w + x]
-        val scan = if (y % 2 == 0) 0.70f else 1.06f
-        val triad = x % 3
-        val maskR = if (triad == 0) 1.25f else 0.45f
-        val maskG = if (triad == 1) 1.25f else 0.45f
-        val maskB = if (triad == 2) 1.25f else 0.45f
-        val vig = 1f - 0.35f * (hypot(u - 0.5f, v - 0.5f) * 1.6f).coerceIn(0f, 1f)
-        pack(red(c) * scan * maskR * vig, green(c) * scan * maskG * vig, blue(c) * scan * maskB * vig)
+        val d = hypot((u - 0.5f) * 1.2f, v - 0.5f)
+        val n = hash(u * 9f, v * 9f)
+        val edge = 0.42f + 0.22f * n
+        val ink = (1f - smooth(edge - 0.10f, edge, d)).coerceIn(0f, 1f)
+        pack(mix(red(c), 0.03f, ink), mix(green(c), 0.03f, ink), mix(blue(c), 0.07f, ink))
       }
-
-      "vfx:distort.datamosh" -> {
-        val blocks = 6
-        val cellW = (w / blocks).coerceAtLeast(1)
-        val cellH = (h / blocks).coerceAtLeast(1)
-        val bx = (x / cellW).coerceIn(0, blocks - 1)
-        val by = (y / cellH).coerceIn(0, blocks - 1)
-        val shift = ((hash(bx.toFloat(), by.toFloat()) - 0.5f) * w * 0.22f).toInt()
-        val torn = sample(src, x + shift, y, w, h)
-        val flat = sample(src, bx * cellW + cellW / 2, by * cellH + cellH / 2, w, h)
-        pack(
-          mix(red(torn), red(flat), 0.5f),
-          mix(green(torn), green(flat), 0.5f),
-          mix(blue(torn), blue(flat), 0.5f)
-        )
-      }
-
-      "vfx:light.anamorphic" -> {
+      "vfx:trend.earth" -> {
         val c = src[y * w + x]
-        var r = 0f
-        var g = 0f
-        var b = 0f
-        var weight = 0f
-        for (i in -8..8) {
-          val p = sample(src, x + i, y, w, h)
-          val l = 0.2126f * red(p) + 0.7152f * green(p) + 0.0722f * blue(p)
-          val wgt = exp(-kotlin.math.abs(i) / 4f) * smooth(0.35f, 0.95f, l)
-          r += red(p) * wgt; g += green(p) * wgt; b += blue(p) * wgt; weight += wgt
-        }
-        if (weight < 1e-4f) c else pack(
-          red(c) + (r / weight) * 0.55f * 0.9f,
-          green(c) + (g / weight) * 0.75f * 0.9f,
-          blue(c) + (b / weight) * 1.0f * 0.9f
-        )
-      }
-
-      "vfx:noise.grain" -> {
-        val c = src[y * w + x]
-        val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
-        val shape = 1f + 0.5f * (1f - l)
-        val n = (hash(x * 1.7f, y * 2.3f) - 0.5f) * 0.30f
-        val chroma = (hash(x * 3.1f, y * 1.3f) - 0.5f) * 0.14f
-        pack(red(c) + n * shape, green(c) + n * shape, blue(c) + n * shape + chroma)
-      }
-
-      "vfx:light.halation" -> {
-        val c = src[y * w + x]
-        var weight = 0f
-        var r = 0f
-        var g = 0f
-        var b = 0f
-        for (i in -3..3) {
-          for (j in -3..3) {
-            val p = sample(src, x + i, y + j, w, h)
-            val l = 0.2126f * red(p) + 0.7152f * green(p) + 0.0722f * blue(p)
-            val wgt = smooth(0.30f, 0.90f, l)
-            r += red(p) * wgt; g += green(p) * wgt; b += blue(p) * wgt; weight += wgt
-          }
-        }
-        if (weight < 1e-4f) {
-          c
-        } else {
-          val bleedR = (r / weight * 1.5f).coerceIn(0f, 1f)
-          val bleedG = (g / weight * 0.55f).coerceIn(0f, 1f)
-          val bleedB = (b / weight * 0.40f).coerceIn(0f, 1f)
+        val cx = 0.72f; val cy = 0.34f; val rr = 0.20f
+        val d = hypot((u - cx) * 1.0f, v - cy)
+        if (d > rr) c else {
+          val land = hash((u * 24f).toInt().toFloat(), (v * 24f).toInt().toFloat())
+          val sphere = 1f - (d / rr) * (d / rr)
+          val shade = (0.35f + 0.75f * sphere).coerceIn(0f, 1f)
+          val rim = exp(-((rr - d) * 18f)) * 0.5f
+          val base = if (land > 0.62f) floatArrayOf(0.16f, 0.42f, 0.14f) else floatArrayOf(0.05f, 0.20f, 0.45f)
           pack(
-            1f - (1f - red(c)) * (1f - bleedR),
-            1f - (1f - green(c)) * (1f - bleedG),
-            1f - (1f - blue(c)) * (1f - bleedB)
+            base[0] * shade + rim * 0.35f,
+            base[1] * shade + rim * 0.55f,
+            base[2] * shade + rim * 0.9f
           )
         }
       }
-
-      "vfx:light.flare" -> {
+      "vfx:trend.magical_tome" -> {
         val c = src[y * w + x]
-        val halo = exp(-hypot(u - 0.25f, v - 0.75f) * 4f) * 0.7f
-        val ghost = exp(-hypot(u - 0.75f, v - 0.25f) * 6f) * 0.5f
-        val flare = (halo + ghost) * 0.9f
-        pack(red(c) + flare, green(c) + flare * 0.82f, blue(c) + flare * 0.55f)
+        val d = hypot(u - 0.5f, v - 0.45f)
+        var glow = 0f
+        for (i in 0..2) {
+          val ring = exp(-((d - (0.16f + 0.11f * i)) * 16f) * ((d - (0.16f + 0.11f * i)) * 16f))
+          val ticks = if (hash((d * 40f).toInt().toFloat(), i.toFloat()) > 0.35f) 1f else 0.3f
+          glow += ring * ticks
+        }
+        val sparkle = exp(-hypot(u - 0.68f, v - 0.28f) * 16f) + exp(-hypot(u - 0.32f, v - 0.62f) * 16f)
+        val g2 = (glow + sparkle * 0.8f).coerceIn(0f, 1.3f)
+        pack(red(c) + g2 * 0.75f, green(c) + g2 * 0.45f, blue(c) + g2 * 1.0f)
       }
-
-      "vfx:stylize.speedLines" -> {
-        val c = src[y * w + x]
-        val dx = u - 0.5f
-        val dy = v - 0.5f
-        val r = hypot(dx, dy)
-        val angle = atan2(dy, dx) / 6.2831855f + 0.5f
-        val seg = (angle * 90f).toInt()
-        val line = if (hash(seg.toFloat(), 4f) > 0.55f) 1f else 0f
-        val toward = sample(src, (mix(u, 0.5f, 0.35f) * (w - 1)).toInt(), (mix(v, 0.5f, 0.35f) * (h - 1)).toInt(), w, h)
-        val m = line * smooth(0.02f, 0.32f, r) * 0.75f
-        pack(
-          mix(red(c), red(toward), m) + line * m * 0.05f,
-          mix(green(c), green(toward), m) + line * m * 0.05f,
-          mix(blue(c), blue(toward), m) + line * m * 0.05f
-        )
-      }
-
-      "vfx:distort.kaleidoscope" -> {
-        val wedge = 6.2831855f / 6f
-        val px = u - 0.5f
-        val py = v - 0.5f
-        val r = hypot(px, py)
-        var a = atan2(py, px)
-        a -= kotlin.math.floor(a / wedge) * wedge
-        a = kotlin.math.abs(a - wedge * 0.5f)
-        val su = 0.5f + cos(a) * r
-        val sv = 0.5f + sin(a) * r
-        sample(src, (su * (w - 1)).toInt(), (sv * (h - 1)).toInt(), w, h)
-      }
-
-      "vfx:blur.directional" -> average(src, x, y, w, h, 5, 1, 0)
-      "vfx:distort.glitch" -> {
-        val band = (v * 14f).toInt()
-        val shift = if (band % 3 == 0) (hash(band.toFloat(), 2f) - 0.5f) * w * 0.18f else 0f
+      "vfx:trend.cut_shift" -> {
+        val band = (v * 10f).toInt()
+        val gate = hash(band.toFloat(), 7f)
+        val shift = if (gate > 0.55f) (hash(band.toFloat(), 3f) - 0.5f) * w * 0.30f else 0f
         val sx = (x + shift).toInt()
         val c = sample(src, sx, y, w, h)
         val cr = sample(src, sx + 2, y, w, h)
         val cb = sample(src, sx - 2, y, w, h)
         pack(red(cr), green(c), blue(cb))
       }
-      "vfx:chromatic.aberration" -> {
-        val dx = ((u - 0.5f) * 5f).toInt()
-        pack(red(sample(src, x + dx, y, w, h)), green(sample(src, x, y, w, h)), blue(sample(src, x - dx, y, w, h)))
-      }
-      "vfx:light.leak" -> {
+      "vfx:trend.fire" -> {
         val c = src[y * w + x]
-        val blob = exp(-hypot(u - 0.18f, v - 0.78f) * 3.2f)
+        val band = smooth(0.35f, 0.95f, 1f - v)
+        val n = hash(u * 14f, v * 9f + u * 5f) * 0.6f + hash(u * 31f, v * 21f) * 0.4f
+        val flame = band * smooth(0.30f, 0.85f, n + band * 0.35f)
         pack(
-          1f - (1f - red(c)) * (1f - (blob * 1.15f).coerceIn(0f, 1f)),
-          1f - (1f - green(c)) * (1f - (0.45f * blob * 1.15f).coerceIn(0f, 1f)),
-          1f - (1f - blue(c)) * (1f - (0.12f * blob * 1.15f).coerceIn(0f, 1f))
+          red(c) + flame * 1.05f,
+          green(c) + flame * 0.45f,
+          blue(c) + flame * 0.05f
         )
       }
-      "vfx:color.hdr" -> {
+      "vfx:trend.mini_zoom" -> {
+        val toward = sample(src, (mix(u, 0.5f, 0.30f) * (w - 1)).toInt(), (mix(v, 0.5f, 0.30f) * (h - 1)).toInt(), w, h)
         val c = src[y * w + x]
-        val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
-        val shadow = smooth(0.42f, 0f, l)
-        fun map(ch: Float): Float {
-          var m = ch + ch * shadow * 0.35f + shadow * 0.06f
-          m = (m - 0.5f) * 1.18f + 0.5f
-          return m
+        val d = hypot(u - 0.5f, v - 0.5f)
+        val vig = 1f - 0.30f * smooth(0.35f, 0.85f, d)
+        pack(mix(red(c), red(toward), 0.45f) * vig, mix(green(c), green(toward), 0.45f) * vig, mix(blue(c), blue(toward), 0.45f) * vig)
+      }
+      "vfx:trend.white_flash" -> {
+        val c = src[y * w + x]
+        val center = 1f - smooth(0.0f, 0.75f, hypot(u - 0.5f, v - 0.5f))
+        val flash = (0.45f + 0.55f * center).coerceIn(0f, 1f)
+        pack(mix(red(c), 1f, flash), mix(green(c), 1f, flash), mix(blue(c), 1f, flash))
+      }
+
+      // ---- Photo Effects. ----
+      "vfx:trend.expand_x" -> {
+        val e = 0.16f
+        val su = when {
+          u < e -> (e - u) / max(1f - 2f * e, 0.05f)
+          u > 1f - e -> 1f - (u - (1f - e)) / max(1f - 2f * e, 0.05f) + (1f - e) / max(1f - 2f * e, 0.05f)
+          else -> (u - e) / max(1f - 2f * e, 0.05f)
         }
-        pack(map(red(c)), map(green(c)), map(blue(c)))
+        val s = sample(src, (su.coerceIn(0f, 1f) * (w - 1)).toInt(), y, w, h)
+        val dEdge = max(e - u, u - (1f - e)) / max(e, 1e-4f)
+        val k = if (dEdge > 0f) (1f - 0.20f * dEdge.coerceIn(0f, 1f)) else 1f
+        pack(red(s) * k, green(s) * k, blue(s) * k)
       }
-      "vfx:color.pop" -> {
+      "vfx:trend.orbit360" -> {
+        val k = 1.8f
+        val xx = (atan((u - 0.5f) * k) / atan(k)) * 0.5f + 0.5f
+        sample(src, (xx.coerceIn(0f, 1f) * (w - 1)).toInt(), y, w, h)
+      }
+      "vfx:trend.layer_echo" -> {
         val c = src[y * w + x]
-        val r = red(c); val g = green(c); val b = blue(c)
-        val l = 0.2126f * r + 0.7152f * g + 0.0722f * b
-        val mx = max(r, max(g, b)); val mn = min(r, min(g, b))
-        val sat = (mx - mn) / max(mx, 0.001f)
-        val keep = if (r > g && r > b && sat > 0.25f) 1f else 0f
-        pack(mix(l, r, keep), mix(l, g, keep), mix(l, b, keep))
+        val l1 = sample(src, (mix(u, 0.5f, 0.85f) * (w - 1)).toInt() - 3, (y + 2).coerceIn(0, h - 1), w, h)
+        val l2 = sample(src, (mix(u, 0.5f, 0.72f) * (w - 1)).toInt() + 3, (y - 2).coerceIn(0, h - 1), w, h)
+        fun screen(a: Float, b: Float) = 1f - (1f - a) * (1f - b)
+        pack(
+          screen(screen(red(c), red(l1) * 0.5f), red(l2) * 0.3f),
+          screen(screen(green(c), green(l1) * 0.5f), green(l2) * 0.3f),
+          screen(screen(blue(c), blue(l1) * 0.5f), blue(l2) * 0.3f)
+        )
       }
-      "vfx:sharpen.unsharp" -> {
+      "vfx:trend.zoom3d" -> {
+        val z = 0.78f
+        val toward = sample(src, (mix(u, 0.5f, z) * (w - 1)).toInt(), (mix(v, 0.5f, z) * (h - 1)).toInt(), w, h)
+        val parallax = (hash(x.toFloat(), y.toFloat()) - 0.5f) * 1.6f
+        sample(src, (mix(u, 0.5f, z) * (w - 1)).toInt() + parallax.toInt(), (mix(v, 0.5f, z) * (h - 1)).toInt(), w, h).let {
+          pack(mix(red(it), red(toward), 0.3f), mix(green(it), green(toward), 0.3f), mix(blue(it), blue(toward), 0.3f))
+        }
+      }
+      "vfx:trend.ai_filter" -> {
         val c = src[y * w + x]
         val blur = average(src, x, y, w, h, 1, 1, 1)
+        val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
+        val toned = if (l < 0.4f) {
+          pack(red(c) * 0.82f, green(c) * 0.95f, blue(c) * 1.14f)
+        } else {
+          pack(min(1f, red(c) * 1.08f), min(1f, green(c) * 1.02f), min(1f, blue(c) * 0.92f))
+        }
         pack(
-          red(c) + (red(c) - red(blur)) * 1.1f,
-          green(c) + (green(c) - green(blur)) * 1.1f,
-          blue(c) + (blue(c) - blue(blur)) * 1.1f
+          mix(red(toned), red(blur), 0.25f),
+          mix(green(toned), green(blur), 0.25f),
+          mix(blue(toned), blue(blur), 0.25f)
         )
       }
-      "vfx:stylize.sketch" -> {
+      "vfx:trend.sad" -> {
         val c = src[y * w + x]
         val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
-        val nbor = 0.2126f * red(sample(src, x + 1, y, w, h)) +
-          0.7152f * green(sample(src, x, y + 1, w, h)) +
-          0.0722f * blue(sample(src, x - 1, y, w, h))
-        val edge = (1f - (kotlin.math.abs(l - nbor) * 6.5f).coerceIn(0f, 1f))
-        val s = edge * edge
-        pack(s, s, s)
+        var r = mix(l, red(c), 0.45f) * 0.86f
+        var g = mix(l, green(c), 0.45f) * 0.94f
+        var b = mix(l, blue(c), 0.45f) * 1.12f
+        val d = hypot(u - 0.5f, v - 0.5f)
+        val vig = 1f - 0.35f * smooth(0.45f, 0.95f, d)
+        r *= vig; g *= vig; b *= vig
+        val n = (hash(x * 1.7f, y * 2.3f) - 0.5f) * 0.10f
+        pack(r + n, g + n, b + n)
       }
-      "vfx:stylize.halftone" -> {
-        val c = src[y * w + x]
-        val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
-        val gx = ((u * 12f) % 1f) - 0.5f
-        val gy = ((v * 12f) % 1f) - 0.5f
-        val dot = if (hypot(gx, gy) < (1f - l) * 0.55f) 0.08f else l * 1.15f
-        pack(dot, dot, mix(dot, 0.12f, 0.15f))
-      }
-      "vfx:stylize.posterize" -> {
+      "vfx:trend.cartoon3d" -> {
         val c = src[y * w + x]
         fun q(ch: Float) = kotlin.math.round(ch * 5f) / 5f
-        pack(q(red(c)), q(green(c)), q(blue(c)))
+        val l1 = 0.2126f * red(sample(src, x + 1, y, w, h)) - 0.2126f * red(sample(src, x - 1, y, w, h))
+        val edge = (kotlin.math.abs(l1) * 5f).coerceIn(0f, 1f)
+        pack(
+          mix(q(red(c)) * 1.06f, 0.06f, edge),
+          mix(q(green(c)) * 1.06f, 0.06f, edge),
+          mix(q(blue(c)) * 1.06f, 0.06f, edge)
+        )
       }
-      "vfx:stylize.pixelate" -> {
-        val blocks = 8
-        val bx = ((x * blocks) / w) * (w / blocks)
-        val by = ((y * blocks) / h) * (h / blocks)
-        sample(src, bx, by, w, h)
-      }
-      "vfx:stylize.duotone" -> {
+
+      // ---- Body Effects + AI Effects: styles gated on the synthetic person silhouette. ----
+      "vfx:subject.optical_scan" -> {
         val c = src[y * w + x]
-        val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
-        pack(mix(0.10f, 1f, l), mix(0.00f, 0.85f, l), mix(0.20f, 0.50f, l))
+        val m = personMask(u, v)
+        if (m <= 0.1f) c else {
+          val band = exp(-((v - 0.42f) * 6f) * ((v - 0.42f) * 6f))
+          val grid = if (v % 0.08f < 0.03f || u % 0.06f < 0.02f) 0.35f else 0f
+          val glow = (band * (0.4f + grid)).coerceIn(0f, 1f) * m
+          pack(red(c) + glow * 0.20f, green(c) + glow * 0.90f, blue(c) + glow)
+        }
       }
-      "cutout:portrait", "cutout:background" -> {
-        val inside = ellipse(u, v, 0.38f, 0.42f, 0.16f, 0.28f)
-        if (inside > 0.35f) src[y * w + x] else average(src, x, y, w, h, 3, 1, 1)
-      }
-      "face:reshape", "face:slim" -> displace(src, x, y, w, h) { uu, vv ->
-        val dx = uu - 0.36f
-        if (ellipse(uu, vv, 0.36f, 0.30f, 0.16f, 0.20f) > 0f) uu + dx * 0.22f else uu
-      }
-      "face:eyes" -> displace(src, x, y, w, h) { uu, vv ->
-        val dx = uu - 0.36f; val dy = vv - 0.26f
-        if (hypot(dx, dy) < 0.06f) 0.36f + dx * 0.7f else uu
-      }
-      "face:skin" -> {
-        val inside = ellipse(u, v, 0.36f, 0.30f, 0.13f, 0.17f)
-        if (inside > 0.2f) average(src, x, y, w, h, 2, 1, 1) else src[y * w + x]
-      }
-      "face:teeth" -> {
+      "vfx:subject.phantom_clone" -> {
         val c = src[y * w + x]
-        val mouth = ellipse(u, v, 0.36f, 0.37f, 0.09f, 0.05f)
-        if (mouth > 0.15f) {
+        val ghostU = u + 0.14f
+        val gm = personMask(ghostU, v)
+        if (gm <= 0.1f) c else {
+          val gs = sample(src, ((u + 0.14f) * (w - 1)).toInt(), y, w, h)
+          val gr = mix(0.55f, red(gs), 0.55f)
+          val gg = mix(0.75f, green(gs), 0.55f)
+          val gb = mix(1.0f, blue(gs), 0.55f)
+          val a = gm * 0.75f * (0.5f + 0.5f * hash(u * 20f, v * 3f))
+          pack(mix(red(c), gr, a), mix(green(c), gg, a), mix(blue(c), gb, a))
+        }
+      }
+      "vfx:subject.light_trails" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        val inner = personMask(u + 0.035f, v) + personMask(u - 0.035f, v) + personMask(u, v + 0.035f) + personMask(u, v - 0.035f)
+        val edge = (m * 4f - inner).coerceIn(0f, 1f)
+        val streak = smooth(0.45f, 0.9f, hash(u * 6f, v * 3f))
+        val g2 = (edge * (0.9f + streak) + m * streak * 0.35f).coerceIn(0f, 1f)
+        pack(red(c) + g2 * 0.30f, green(c) + g2 * 0.75f, blue(c) + g2)
+      }
+      "vfx:subject.pixel_mask" -> {
+        val m = personMask(u, v)
+        if (m <= 0.3f) src[y * w + x] else {
+          val blocks = 10
+          val bx = ((x * blocks) / w) * (w / blocks)
+          val by = ((y * blocks) / h) * (h / blocks)
+          sample(src, bx, by, w, h)
+        }
+      }
+      "vfx:subject.action_paint" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        if (m <= 0.2f) c else {
+          val n = hash((u * 8f).toInt().toFloat(), (v * 8f).toInt().toFloat())
+          val splat = smooth(0.35f, 0.6f, n)
+          val hue = hash((u * 5f).toInt().toFloat() + 3f, (v * 5f).toInt().toFloat())
+          val paint = hsv(hue, 0.85f, 1f)
+          val a = m * splat * 0.85f
+          pack(mix(red(c), max(red(c), paint[0]), a), mix(green(c), max(green(c), paint[1]), a), mix(blue(c), max(blue(c), paint[2]), a))
+        }
+      }
+      "vfx:subject.face_scan" -> {
+        val c = src[y * w + x]
+        val m = max(personMask(u, v) * smooth(0.62f, 0.30f, v), 0f)
+        if (m <= 0.1f) c else {
+          val band = exp(-((v - 0.30f) * 9f) * ((v - 0.30f) * 9f))
+          val ticks = if (u % 0.05f < 0.018f) 0.5f else 0f
+          val glow = (band * (0.45f + ticks)).coerceIn(0f, 1f) * m
+          pack(red(c) + glow * 0.15f, green(c) + glow, blue(c) + glow * 0.55f)
+        }
+      }
+      "vfx:subject.light_dissolve" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        if (m <= 0.1f) c else {
+          val gone = smooth(0.15f, 0.75f, v) * 0.65f
+          val px = if (hash((x * 3).toFloat(), (y * 3).toFloat()) > 0.86f) 1f else 0f
           pack(
-            min(1f, red(c) + 0.12f * mouth),
-            min(1f, green(c) + 0.10f * mouth),
-            min(1f, blue(c) + 0.22f * mouth)
+            mix(red(c), 0.02f, gone * m) + px * gone * m,
+            mix(green(c), 0.02f, gone * m) + px * gone * m * 0.85f,
+            mix(blue(c), 0.03f, gone * m) + px * gone * m * 0.5f
           )
-        } else c
+        }
       }
-      "body:waist" -> displace(src, x, y, w, h) { uu, vv ->
-        if (vv in 0.55f..0.78f) uu - (uu - 0.38f) * 0.18f else uu
+      "vfx:subject.luminescence" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        val inner = personMask(u + 0.03f, v) + personMask(u - 0.03f, v) + personMask(u, v + 0.03f) + personMask(u, v - 0.03f)
+        val edge = (m * 4f - inner).coerceIn(0f, 1f)
+        val glow = (edge * 1.3f + m * 0.25f).coerceIn(0f, 1f)
+        pack(red(c) + glow * 0.45f, green(c) + glow * 0.85f, blue(c) + glow)
       }
-      "body:reshape" -> {
-        val pinched = if (v in 0.55f..0.78f) u - (u - 0.38f) * 0.18f else u
-        val stretched = if (v > 0.72f) 0.72f + (v - 0.72f) * 0.85f else v
-        sample(src, (pinched * (w - 1)).toInt(), (stretched * (h - 1)).toInt(), w, h)
+      "vfx:subject.hand_drawn" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        if (m <= 0.2f) c else {
+          val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
+          val hatch = sin((u + v) * 60f + l * 12f)
+          val shadeD = smooth(0.0f, 0.5f, 0.55f - l) * (0.5f + 0.5f * hatch)
+          val s = (0.98f - shadeD * 0.45f).coerceIn(0f, 1f)
+          pack(mix(red(c), s, m), mix(green(c), s, m), mix(blue(c), s, m))
+        }
       }
-      "body:legs", "body:proportions" -> {
-        val stretched = if (v > 0.72f) 0.72f + (v - 0.72f) * 0.72f else v
-        sample(src, x, (stretched * (h - 1)).toInt(), w, h)
+      "vfx:subject.clone_shadow" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        if (m <= 0.1f) c else {
+          val inner = personMask(u + 0.03f, v) + personMask(u - 0.03f, v) + personMask(u, v + 0.03f) + personMask(u, v - 0.03f)
+          val rim = (m * 4f - inner).coerceIn(0f, 1f)
+          val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
+          val sr = 0.03f + 0.10f * l
+          val sg = 0.035f + 0.12f * l
+          val sb = 0.05f + 0.18f * l
+          pack(mix(red(c), sr + rim * 0.35f, m), mix(green(c), sg + rim * 0.55f, m), mix(blue(c), sb + rim, m))
+        }
       }
-      "body:shoulders" -> displace(src, x, y, w, h) { uu, vv ->
-        if (vv in 0.48f..0.62f) uu + (uu - 0.38f) * 0.2f else uu
+      "vfx:subject.clone_golden" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        if (m <= 0.1f) c else {
+          val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
+          val spec = exp(-((l - 0.8f) * 4f) * ((l - 0.8f) * 4f))
+          val gr = mix(0.28f, 1.0f, l) + spec * 0.6f
+          val gg = mix(0.16f, 0.78f, l) + spec * 0.5f
+          val gb = mix(0.03f, 0.30f, l) + spec * 0.25f
+          pack(mix(red(c), gr, m), mix(green(c), gg, m), mix(blue(c), gb, m))
+        }
       }
+      "vfx:subject.clone_cyber" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        if (m <= 0.1f) c else {
+          val l = 0.2126f * red(c) + 0.7152f * green(c) + 0.0722f * blue(c)
+          val grid = if (u % 0.05f < 0.008f || v % 0.05f < 0.008f) 1f else 0f
+          val pulse = smooth(0.5f, 1f, hash((u * 10f).toInt().toFloat(), (v * 10f).toInt().toFloat()))
+          val circuit = grid * pulse
+          val sr = 0.05f + 0.04f * l
+          val sg = 0.06f + 0.05f * l
+          val sb = 0.09f + 0.07f * l
+          pack(mix(red(c), sr, m) + circuit * 0.10f * m, mix(green(c), sg, m) + circuit * 0.95f * m, mix(blue(c), sb, m) + circuit * m)
+        }
+      }
+      "vfx:subject.clone_cartoon" -> {
+        val c = src[y * w + x]
+        val m = personMask(u, v)
+        if (m <= 0.2f) c else {
+          fun q(ch: Float) = kotlin.math.round(ch * 6f) / 6f
+          val l1 = 0.2126f * red(sample(src, x + 1, y, w, h)) - 0.2126f * red(sample(src, x - 1, y, w, h))
+          val edge = (kotlin.math.abs(l1) * 5f).coerceIn(0f, 1f)
+          pack(
+            mix(red(c), mix(q(red(c)) * 1.08f, 0.05f, edge), m),
+            mix(green(c), mix(q(green(c)) * 1.08f, 0.05f, edge), m),
+            mix(blue(c), mix(q(blue(c)) * 1.08f, 0.05f, edge), m)
+          )
+        }
+      }
+
+      // ---- Face / photo warp assets (icon-level equivalents of the mesh warp ops). ----
+      "face:big_head" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
+        val dx = uu - 0.36f; val dy = vv - 0.34f
+        if (hypot(dx, dy) < 0.30f) floatArrayOf(0.36f + dx / 1.35f, 0.34f + dy / 1.35f) else floatArrayOf(uu, vv)
+      }
+      "face:small" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
+        val dx = uu - 0.36f; val dy = vv - 0.34f
+        if (hypot(dx, dy) < 0.30f) floatArrayOf(0.36f + dx * 1.35f, 0.34f + dy * 1.35f) else floatArrayOf(uu, vv)
+      }
+      "face:alien" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
+        val dl = hypot(uu - 0.31f, vv - 0.26f)
+        val dr = hypot(uu - 0.41f, vv - 0.26f)
+        when {
+          dl < 0.09f -> floatArrayOf(0.31f + (uu - 0.31f) * 0.45f, 0.26f + (vv - 0.26f) * 0.45f)
+          dr < 0.09f -> floatArrayOf(0.41f + (uu - 0.41f) * 0.45f, 0.26f + (vv - 0.26f) * 0.45f)
+          else -> floatArrayOf(uu, vv)
+        }
+      }
+      "face:funny" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
+        val df = hypot(uu - 0.36f, vv - 0.14f)
+        val dn = hypot(uu - 0.36f, vv - 0.52f)
+        when {
+          df < 0.16f -> floatArrayOf(0.36f + (uu - 0.36f) * 0.55f, 0.14f + (vv - 0.14f) * 0.55f)
+          dn < 0.14f -> floatArrayOf(0.36f + (uu - 0.36f) * 1.5f, 0.52f + (vv - 0.52f) * 1.5f)
+          else -> floatArrayOf(uu, vv)
+        }
+      }
+      "face:melt" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
+        val inFace = ellipse(uu, vv, 0.36f, 0.30f, 0.15f, 0.19f)
+        if (inFace > 0f && vv > 0.24f) floatArrayOf(uu, vv + 0.10f * inFace) else floatArrayOf(uu, vv)
+      }
+      "face:chubby" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
+        val inFace = ellipse(uu, vv, 0.36f, 0.34f, 0.17f, 0.20f)
+        if (inFace > 0f) floatArrayOf(0.36f + (uu - 0.36f) * (1f - 0.18f * inFace), vv) else floatArrayOf(uu, vv)
+      }
+      "face:wink" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
+        val dl = hypot(uu - 0.31f, vv - 0.26f)
+        if (dl < 0.06f) floatArrayOf(0.31f + (uu - 0.31f) * 1.8f, 0.26f + (vv - 0.26f) * 1.8f) else floatArrayOf(uu, vv)
+      }
+      "face:curls" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
+        val cx = 0.30f; val cy = 0.12f
+        val dx = uu - cx; val dy = vv - cy
+        val d = hypot(dx, dy)
+        if (d < 0.20f) {
+          val ang = (1f - d / 0.20f) * 1.8f
+          val ca = cos(ang); val sa = sin(ang)
+          floatArrayOf(cx + dx * ca - dy * sa, cy + dx * sa + dy * ca)
+        } else floatArrayOf(uu, vv)
+      }
+
       else -> src[y * w + x]
     }
   }
 
-  private fun displace(src: IntArray, x: Int, y: Int, w: Int, h: Int, map: (Float, Float) -> Float): Int {
+  /** Displacement icon helper mapping (u, v) -> (u, v). */
+  private fun warpIcon2D(src: IntArray, x: Int, y: Int, w: Int, h: Int, map: (Float, Float) -> FloatArray): Int {
     val u = x / (w - 1f).coerceAtLeast(1f)
     val v = y / (h - 1f).coerceAtLeast(1f)
-    val su = map(u, v).coerceIn(0f, 1f)
-    return sample(src, (su * (w - 1)).toInt(), y, w, h)
+    val m = map(u, v)
+    return sample(src, (m[0].coerceIn(0f, 1f) * (w - 1)).toInt(), (m[1].coerceIn(0f, 1f) * (h - 1)).toInt(), w, h)
+  }
+
+  private fun hsv(h: Float, s: Float, vv: Float): FloatArray {
+    val i = (h * 6f).toInt() % 6
+    val f = h * 6f - (h * 6f).toInt()
+    val p = vv * (1f - s)
+    val q = vv * (1f - f * s)
+    val t = vv * (1f - (1f - f) * s)
+    return when (i) {
+      0 -> floatArrayOf(vv, t, p)
+      1 -> floatArrayOf(q, vv, p)
+      2 -> floatArrayOf(p, vv, t)
+      3 -> floatArrayOf(p, q, vv)
+      4 -> floatArrayOf(t, p, vv)
+      else -> floatArrayOf(vv, p, q)
+    }
   }
 
   private fun average(src: IntArray, x: Int, y: Int, w: Int, h: Int, radius: Int, stepX: Int, stepY: Int): Int {

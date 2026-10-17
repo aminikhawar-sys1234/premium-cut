@@ -32,11 +32,15 @@ object FaceWarpRegistry {
 fun DeformationParams.isActive(): Boolean =
     eyeEnlarge > 0.001f || faceSlim > 0.001f || jawSharp > 0.001f ||
         noseReshape > 0.001f || chinAdjust > 0.001f || smileAdjust > 0.001f ||
-        skinSmooth > 0.001f || teethWhiten > 0.001f
+        skinSmooth > 0.001f || teethWhiten > 0.001f ||
+        bigHead > 0.001f || smallFace > 0.001f || funny > 0.001f || alienEyes > 0.001f ||
+        melt > 0.001f || chubby > 0.001f || wink > 0.001f || curls > 0.001f
 
 fun DeformationParams.hasMeshWarp(): Boolean =
     eyeEnlarge > 0.001f || faceSlim > 0.001f || jawSharp > 0.001f ||
-        noseReshape > 0.001f || chinAdjust > 0.001f || smileAdjust > 0.001f
+        noseReshape > 0.001f || chinAdjust > 0.001f || smileAdjust > 0.001f ||
+        bigHead > 0.001f || smallFace > 0.001f || funny > 0.001f || alienEyes > 0.001f ||
+        melt > 0.001f || chubby > 0.001f || wink > 0.001f || curls > 0.001f
 
 /**
  * Converts face-space warp ops (top-left origin, upright source frame, radius in frame-width units,
@@ -176,13 +180,21 @@ object FaceWarpMapper {
 object DeformationCodec {
     fun encode(d: DeformationParams): String? =
         if (!d.isActive()) null
-        else listOf(d.eyeEnlarge, d.faceSlim, d.jawSharp, d.noseReshape, d.chinAdjust, d.smileAdjust, d.skinSmooth, d.teethWhiten)
-            .joinToString(",")
+        else listOf(
+            d.eyeEnlarge, d.faceSlim, d.jawSharp, d.noseReshape, d.chinAdjust, d.smileAdjust,
+            d.skinSmooth, d.teethWhiten,
+            d.bigHead, d.smallFace, d.funny, d.alienEyes, d.melt, d.chubby, d.wink, d.curls,
+        ).joinToString(",")
 
     fun decode(s: String?): DeformationParams {
         if (s.isNullOrBlank()) return DeformationParams()
         val v = s.split(',').map { it.trim().toFloatOrNull()?.coerceIn(0f, 1f) ?: 0f }
         fun at(i: Int) = v.getOrElse(i) { 0f }
-        return DeformationParams(at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7))
+        // Fields 0..7 are the original beauty sliders; 8..15 are the effects-tools warp
+        // channels. Older projects encode only 0..7 and decode with the new channels at 0.
+        return DeformationParams(
+            at(0), at(1), at(2), at(3), at(4), at(5), at(6), at(7),
+            at(8), at(9), at(10), at(11), at(12), at(13), at(14), at(15),
+        )
     }
 }

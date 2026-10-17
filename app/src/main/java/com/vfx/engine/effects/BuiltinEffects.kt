@@ -20,6 +20,10 @@ object BuiltinEffects {
             addAll(TemporalEffects.all())
             // The production catalog's Video Effects assets (video.vhs, light.halation, ...).
             addAll(VideoEffects.all())
+            // The CapCut-trending full-frame assets (trend.explosion, trend.sad, ...).
+            addAll(TrendEffects.all())
+            // The subject-driven assets (subject.optical_scan, subject.clone_golden, ...).
+            addAll(SubjectEffects.all())
         }.distinctBy { it.id }
     }
 
