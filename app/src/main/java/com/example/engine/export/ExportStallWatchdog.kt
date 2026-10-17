@@ -108,7 +108,18 @@ object ExportStallWatchdog {
     /** True while the render thread is blocked inside `eglSwapBuffers` for a frame. */
     val swapPending: Boolean,
     /** The user paused the export: a pause is not a stall. */
-    val paused: Boolean
+    val paused: Boolean,
+    /**
+     * True while the drain thread is intentionally throttling the video encoder because the muxer
+     * is waiting for the audio track of the still-running background PCM mix/encode. While this is
+     * set the frame clock is NOT the liveness signal - the background audio path's is.
+     */
+    val awaitingAudioMix: Boolean = false,
+    /**
+     * Milliseconds since the background audio path (mix chunk or PCM feed batch) last progressed;
+     * -1 while nothing has. Only meaningful together with [awaitingAudioMix].
+     */
+    val sinceAudioPipelineProgressMs: Long = -1L
   )
 
   sealed class Verdict {
@@ -149,6 +160,27 @@ object ExportStallWatchdog {
     // ten-minute project is *supposed* to take minutes, so "the phase is older than its budget" can
     // only mean "not one frame has been submitted yet".
     if (phase.isFrameStage) {
+      // Intentional backpressure (CapCut-style mix/encode overlap): the video encoder is
+      // throttled on purpose while the muxer waits for the background audio track, so the frame
+      // clock says nothing about liveness here. The pipeline is alive exactly as long as the
+      // background audio path keeps making progress - a slow mix is legitimate, a wedged one is
+      // still reported, by its own no-progress budget.
+      if (heartbeat.awaitingAudioMix) {
+        val mixBudget = budgetsOf(overrides)[ExportPhase.MIXING_AUDIO] ?: budgetFor(ExportPhase.MIXING_AUDIO)
+        if (heartbeat.sinceAudioPipelineProgressMs >= 0L &&
+          heartbeat.sinceAudioPipelineProgressMs > mixBudget.noProgressMs
+        ) {
+          return stall(
+            Kind.PHASE_NO_PROGRESS,
+            phase,
+            heartbeat.sinceAudioPipelineProgressMs,
+            "the background audio mix stopped making progress for " +
+              seconds(heartbeat.sinceAudioPipelineProgressMs) + " (the muxer is waiting for its " +
+              "track; frames submitted=${heartbeat.framesSubmitted}, encoded=${heartbeat.framesEncoded})"
+          )
+        }
+        return Verdict.Continue
+      }
       if (heartbeat.framesSubmitted == 0L) {
         if (heartbeat.phaseElapsedMs > budget.hardMs) {
           return stall(

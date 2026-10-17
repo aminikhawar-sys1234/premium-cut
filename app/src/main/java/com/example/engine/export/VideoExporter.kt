@@ -144,6 +144,14 @@ class MuxerCoordinator(
 
   private val pendingQueue = mutableListOf<QueuedPacket>()
 
+  /**
+   * Bytes of encoded samples currently buffered while the muxer waits for the remaining track
+   * format(s). The drain thread reads this as its backpressure signal: past the soft cap it stops
+   * pulling from the video encoder until the background audio path registers its track.
+   */
+  @Synchronized
+  fun pendingVideoBacklogBytes(): Long = pendingBytes
+
   @Synchronized
   fun setOrientationHint(rotation: Int) {
     if (!isStarted && !isStopped) {

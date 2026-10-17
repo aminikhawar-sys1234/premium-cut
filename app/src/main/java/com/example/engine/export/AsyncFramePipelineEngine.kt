@@ -299,6 +299,22 @@ class AsyncFramePipelineEngine(private val context: Context) {
     private set
 
   /**
+   * `System.currentTimeMillis()` of the background audio path's last observable progress (a mix
+   * chunk or an audio-feed batch). Read by the audio-feed await and the watchdog's backpressure
+   * rule; the video frame clock says nothing about this path once the mix runs beside the encode.
+   */
+  @Volatile var lastAudioPipelineProgressMs: Long = 0L
+    private set
+
+  /**
+   * Non-zero while the drain thread is intentionally throttling the video encoder because the
+   * muxer is waiting for the audio track (background PCM mix/encode still running). Switches the
+   * watchdog from the frame clock to [lastAudioPipelineProgressMs] for that window.
+   */
+  @Volatile var audioBackpressureSinceMs: Long = 0L
+    private set
+
+  /**
    * Set when the stall watchdog abandoned the attempt. The export thread reads it and fails with
    * this exact message (rather than spinning on a worker that will never return).
    */
@@ -393,7 +409,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
                   timeline = timeline,
                   totalDurationMs = durationMs,
                   isCancelled = { userCancelled.get() || mixCancelled.get() },
-                  onProgress = { fraction -> reportPhaseFraction(fraction) }
+                  onProgress = { fraction ->
+                    // Liveness of the background audio path (read by the audio-feed await and the
+                    // watchdog's backpressure rule), as well as the phase fraction.
+                    lastAudioPipelineProgressMs = System.currentTimeMillis()
+                    reportPhaseFraction(fraction)
+                  }
                 )
               }
             )
@@ -739,7 +760,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
       sinceLastFrameSubmittedMs = if (lastFrameSubmittedMs > 0L) now - lastFrameSubmittedMs else -1L,
       sinceLastEncodedMs = if (lastEncodedSampleMs > 0L) now - lastEncodedSampleMs else -1L,
       swapPending = swapPending.get(),
-      paused = isPaused()
+      paused = isPaused(),
+      awaitingAudioMix = audioBackpressureSinceMs > 0L,
+      sinceAudioPipelineProgressMs =
+        if (lastAudioPipelineProgressMs > 0L) now - lastAudioPipelineProgressMs else -1L
     )
   }
 
@@ -767,6 +791,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
     attemptStartedMs = System.currentTimeMillis()
     lastFrameSubmittedMs = 0L
     lastEncodedSampleMs = 0L
+    lastAudioPipelineProgressMs = System.currentTimeMillis()
+    audioBackpressureSinceMs = 0L
     enterPhase(ExportPhase.LOADING_ASSETS)
     // Wall clock from here to the first encoded frame: the UI shows the preparation state for that
     // whole stretch, so its length is worth a log line (see the "audio-mix" / "preroll" stages).
@@ -933,47 +959,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
       failure.get()?.let { throw wrap("GPU initialization failed", it) }
 
-      // Audio mix runs in parallel with encoder/EGL setup. Wait here so the 5% screen is not
-      // blocked on PCM decode before the GPU pipeline is even opened.
-      //
-      // The wait is stall-aware now: the watchdogs below judge the mix phase by its own per-chunk
-      // progress, so a mix that stops moving (a hung decoder, a device thrashing) is reported with
-      // the phase name instead of holding the export thread on a latch forever.
-      enterPhase(ExportPhase.MIXING_AUDIO)
-      val mixWaitStartMs = System.currentTimeMillis()
-      while (!mixLatch.await(1, TimeUnit.SECONDS)) {
-        stallFailure?.let { throw it }
-        checkUserCancelled()
-        val waitedMs = System.currentTimeMillis() - mixWaitStartMs
-        if (waitedMs > phaseBudget(ExportPhase.MIXING_AUDIO).hardMs) {
-          throw ExportPipelineException(
-            "Timed out mixing timeline audio after ${ExportStallWatchdog.seconds(waitedMs)}.",
-            retryable = false
-          )
-        }
-        // The AttemptWatchdog is not running yet (it starts with RENDERING), so the documented
-        // "no progress for 60s" rule of this phase is enforced here against the mix's own
-        // heartbeats (one reportPhaseFraction per mixed chunk). Without it a mix wedged in a
-        // non-decode path (DSP/pitch/concat loops) held the export for the full 30-minute hard
-        // wall with a frozen "Mixing audio" ring.
-        val mixSilentMs = System.currentTimeMillis() - lastHeartbeatMs
-        if (mixSilentMs > phaseBudget(ExportPhase.MIXING_AUDIO).noProgressMs) {
-          throw ExportPipelineException(
-            "Audio mixing stopped making progress for ${ExportStallWatchdog.seconds(mixSilentMs)}.",
-            retryable = false
-          )
-        }
-      }
-      mixError.get()?.let { throw wrap("Audio mix failed", it) }
-      val masterPcm = mixResult.get() ?: ShortArray(0)
-      val encodeAudio = hasAudio && masterPcm.isNotEmpty()
-      // How long a long project's PCM mix really takes on the user's device: the render loop cannot
-      // start before this, so it is the phase a "0% for two minutes" report is about.
-      ExportDiagnostics.stage(
-        "audio-mix",
-        System.currentTimeMillis() - attemptStartMs,
-        "active=$hasAudio samples=${masterPcm.size} channels=$audioChannels rate=$audioSampleRate"
-      )
+      // Audio: the PCM mix runs on its own thread (started in export()) and is awaited by the
+      // dedicated audio-feed thread further below - the video pipeline no longer waits for it.
+      // That is the CapCut-style overlap: frames start encoding while the mix is still running,
+      // so the export's wall clock is max(mix, encode) instead of mix + encode, and the panel
+      // shows one continuous frame-driven progress with no separate "Mixing audio" stage.
+      val encodeAudio = hasAudio
 
       // 4. Audio encoder. If the timeline has audio, failing to encode it is an error, not a silent drop.
       var audioEncoder: MediaCodec? = null
@@ -1025,6 +1016,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       // 6. Drain thread: the ONLY consumer of encoder output (video + audio) -> muxer.
       val drainDone = CountDownLatch(1)
+      // Encoded video the muxer may hold in memory while it waits for the audio track (~12s of
+      // 16Mbps output) before the drain throttles the encoder itself. Hard-capped far below the
+      // coordinator's abort limit, so the overlap can never balloon memory.
+      val audioBackpressureSoftCapBytes = 24L * 1024L * 1024L
       // The drain thread feeds the muxer; if it is starved, eglSwapBuffers blocks the render
       // thread and the whole export slows down with it.
       val drain = Executors.newSingleThreadExecutor { r ->
@@ -1046,44 +1041,71 @@ class AsyncFramePipelineEngine(private val context: Context) {
             var drainedSomething = false
 
             if (!videoEos.get()) {
-              while (!videoEos.get() && !stop.get()) {
-                val vIndex = videoEncoder.dequeueOutputBuffer(vInfo, if (drainedSomething) 0L else 2_000L)
-                if (vIndex >= 0) {
-                  drainedSomething = true
-                  lastOutputNs.set(System.nanoTime())
-                  lastEncodedSampleMs = System.currentTimeMillis()
-                  val isEos = (vInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                  try {
-                    // CODEC_CONFIG buffers go to the coordinator too: some encoders put the first IDR
-                    // picture in the same buffer as SPS/PPS, and dropping it leaves no decodable first frame.
-                    if (vInfo.size > 0) {
-                      val out = videoEncoder.getOutputBuffer(vIndex)
-                        ?: throw IllegalStateException("Video encoder returned a null output buffer")
-                      when (coordinator.writeVideoSample(out, vInfo)) {
-                        MuxerCoordinator.VideoSampleResult.WRITTEN -> metrics.encodedFrames.incrementAndGet()
-                        MuxerCoordinator.VideoSampleResult.DROPPED_BEFORE_KEYFRAME -> {
-                          metrics.encodedFrames.incrementAndGet()
-                          requestSyncFrame(videoEncoder, "first encoder output was not a key frame")
+              // Intentional backpressure (the memory guard of the CapCut-style overlap): the
+              // muxer cannot start before the audio track exists, so early encoded video parks
+              // in the coordinator's bounded queue. Past the soft cap this iteration SKIPS
+              // pulling from the video encoder - the codec's own output buffers then throttle
+              // the render loop - until the background audio path registers its track. The audio
+              // section below still runs EVERY iteration (it is what delivers the audio format
+              // that starts the muxer), so the throttle can never deadlock the start it waits
+              // for. A wedged mix is failed by the audio-feed await and the watchdog's
+              // awaitingAudioMix rule, never by memory.
+              val videoBackpressured = aenc != null && !coordinator.isStarted &&
+                coordinator.pendingVideoBacklogBytes() > audioBackpressureSoftCapBytes
+              if (videoBackpressured) {
+                if (audioBackpressureSinceMs == 0L) audioBackpressureSinceMs = System.currentTimeMillis()
+                val backpressuredForMs = System.currentTimeMillis() - audioBackpressureSinceMs
+                if (backpressuredForMs > phaseBudget(ExportPhase.MIXING_AUDIO).hardMs + 120_000L) {
+                  throw ExportPipelineException(
+                    "The muxer never received the audio track (video backlog " +
+                      "${coordinator.pendingVideoBacklogBytes() / (1024L * 1024L)}MB, waited " +
+                      ExportStallWatchdog.seconds(backpressuredForMs) + ").",
+                    retryable = false
+                  )
+                }
+              } else {
+                audioBackpressureSinceMs = 0L
+              }
+              if (!videoBackpressured) {
+                while (!videoEos.get() && !stop.get()) {
+                  val vIndex = videoEncoder.dequeueOutputBuffer(vInfo, if (drainedSomething) 0L else 2_000L)
+                  if (vIndex >= 0) {
+                    drainedSomething = true
+                    lastOutputNs.set(System.nanoTime())
+                    lastEncodedSampleMs = System.currentTimeMillis()
+                    val isEos = (vInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                    try {
+                      // CODEC_CONFIG buffers go to the coordinator too: some encoders put the first IDR
+                      // picture in the same buffer as SPS/PPS, and dropping it leaves no decodable first frame.
+                      if (vInfo.size > 0) {
+                        val out = videoEncoder.getOutputBuffer(vIndex)
+                          ?: throw IllegalStateException("Video encoder returned a null output buffer")
+                        when (coordinator.writeVideoSample(out, vInfo)) {
+                          MuxerCoordinator.VideoSampleResult.WRITTEN -> metrics.encodedFrames.incrementAndGet()
+                          MuxerCoordinator.VideoSampleResult.DROPPED_BEFORE_KEYFRAME -> {
+                            metrics.encodedFrames.incrementAndGet()
+                            requestSyncFrame(videoEncoder, "first encoder output was not a key frame")
+                          }
+                          else -> Unit
                         }
-                        else -> Unit
                       }
+                    } finally {
+                      videoEncoder.releaseOutputBuffer(vIndex, false)
                     }
-                  } finally {
-                    videoEncoder.releaseOutputBuffer(vIndex, false)
+                    if (isEos) {
+                      videoEos.set(true)
+                      Log.i(tag, "Video encoder signaled BUFFER_FLAG_END_OF_STREAM")
+                      break
+                    }
+                  } else if (vIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    drainedSomething = true
+                    val newFormat = videoEncoder.outputFormat
+                    Log.i(tag, "Video encoder output format changed: $newFormat")
+                    ExportDiagnostics.encoderOutputFormat(newFormat)
+                    coordinator.setVideoFormat(newFormat)
+                  } else {
+                    break // INFO_TRY_AGAIN_LATER (or buffers-changed): nothing more right now
                   }
-                  if (isEos) {
-                    videoEos.set(true)
-                    Log.i(tag, "Video encoder signaled BUFFER_FLAG_END_OF_STREAM")
-                    break
-                  }
-                } else if (vIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                  drainedSomething = true
-                  val newFormat = videoEncoder.outputFormat
-                  Log.i(tag, "Video encoder output format changed: $newFormat")
-                  ExportDiagnostics.encoderOutputFormat(newFormat)
-                  coordinator.setVideoFormat(newFormat)
-                } else {
-                  break // INFO_TRY_AGAIN_LATER (or buffers-changed): nothing more right now
                 }
               }
             }
@@ -1132,41 +1154,147 @@ class AsyncFramePipelineEngine(private val context: Context) {
         }
       }
 
-      // 7. Audio feeding (PCM -> AAC encoder) with sample-exact timestamps.
-      val totalAudioFrames = if (aenc != null) masterPcm.size / audioChannels else 0
-      var fedAudioFrames = 0
+      // 7. Audio feeding (PCM -> AAC encoder) on its own thread, with sample-exact timestamps.
+      // The PCM mix is awaited HERE, not before the render loop: video frames encode while the
+      // mix is still running, and the muxer - which cannot start until the audio track exists -
+      // buffers the early video samples (bounded by the drain's backpressure above).
+      lastAudioPipelineProgressMs = System.currentTimeMillis()
 
-      /** Feeds PCM up to [upToFrames]; [waitUs] is how long to wait for a free input buffer. */
-      fun feedAudio(upToFrames: Int, waitUs: Long, maxBuffers: Int = Int.MAX_VALUE): Boolean {
-        val enc = aenc ?: return true
-        val target = min(upToFrames, totalAudioFrames)
+      /** Feeds PCM up to [upToFrames] frames; returns the fed frame count. [waitUs] = input wait. */
+      fun feedAudio(enc: MediaCodec, pcm: ShortArray, fedSoFar: Int, upToFrames: Int, waitUs: Long, maxBuffers: Int = Int.MAX_VALUE): Int {
+        val target = min(upToFrames, pcm.size / audioChannels)
+        var fed = fedSoFar
         var buffers = 0
-        while (fedAudioFrames < target && !stop.get() && buffers < maxBuffers) {
-          val framesToFeed = min(1024, target - fedAudioFrames)
+        while (fed < target && !stop.get() && buffers < maxBuffers) {
+          val framesToFeed = min(1024, target - fed)
           val inputIndex = enc.dequeueInputBuffer(waitUs)
-          if (inputIndex < 0) return false
-          val inputBuffer = enc.getInputBuffer(inputIndex) ?: return false
+          if (inputIndex < 0) return fed
+          val inputBuffer = enc.getInputBuffer(inputIndex) ?: return fed
           inputBuffer.clear()
           inputBuffer.order(ByteOrder.nativeOrder())
           val samplesToFeed = framesToFeed * audioChannels
-          val startIdx = fedAudioFrames * audioChannels
+          val startIdx = fed * audioChannels
           val shortView = inputBuffer.asShortBuffer()
-          val available = (masterPcm.size - startIdx).coerceAtLeast(0)
+          val available = (pcm.size - startIdx).coerceAtLeast(0)
           val copy = min(samplesToFeed, available)
-          if (copy > 0) shortView.put(masterPcm, startIdx, copy)
+          if (copy > 0) shortView.put(pcm, startIdx, copy)
           if (copy < samplesToFeed) {
             repeat(samplesToFeed - copy) { shortView.put(0) }
           }
-          val audioPtsUs = (fedAudioFrames.toLong() * 1_000_000L) / audioSampleRate
+          val audioPtsUs = (fed.toLong() * 1_000_000L) / audioSampleRate
           enc.queueInputBuffer(inputIndex, 0, samplesToFeed * 2, audioPtsUs, 0)
-          fedAudioFrames += framesToFeed
+          fed += framesToFeed
           buffers++
         }
-        return true
+        return fed
       }
 
-      // Prime the audio encoder so its output format (needed to start the muxer) appears early.
-      if (aenc != null && totalAudioFrames > 0) feedAudio(2048, 10_000L)
+      if (aenc != null) {
+        Thread({
+          val enc = aenc ?: return@Thread
+          try {
+            // Stall-aware await of the PCM mix: the same rules the pre-render wait used to apply
+            // (hard budget, no-progress heartbeats, watchdog verdict, cancellation) enforced where
+            // the wait actually lives now - the audio path, never the video pipeline.
+            val awaitStartMs = System.currentTimeMillis()
+            while (!mixLatch.await(1, TimeUnit.SECONDS)) {
+              stallFailure?.let { t -> failure.compareAndSet(null, t); stop.set(true); return@Thread }
+              if (stop.get()) return@Thread
+              val waitedMs = System.currentTimeMillis() - awaitStartMs
+              if (waitedMs > phaseBudget(ExportPhase.MIXING_AUDIO).hardMs) {
+                failure.compareAndSet(null, ExportPipelineException(
+                  "Timed out mixing timeline audio after ${ExportStallWatchdog.seconds(waitedMs)}.",
+                  retryable = false
+                ))
+                stop.set(true)
+                return@Thread
+              }
+              val mixSilentMs = System.currentTimeMillis() - lastAudioPipelineProgressMs
+              if (mixSilentMs > phaseBudget(ExportPhase.MIXING_AUDIO).noProgressMs) {
+                failure.compareAndSet(null, ExportPipelineException(
+                  "Audio mixing stopped making progress for ${ExportStallWatchdog.seconds(mixSilentMs)}.",
+                  retryable = false
+                ))
+                stop.set(true)
+                return@Thread
+              }
+            }
+            if (stop.get()) return@Thread
+            mixError.get()?.let { t ->
+              failure.compareAndSet(null, wrap("Audio mix failed", t))
+              stop.set(true)
+              return@Thread
+            }
+            val masterPcm = mixResult.get() ?: ShortArray(0)
+            ExportDiagnostics.stage(
+              "audio-mix",
+              System.currentTimeMillis() - attemptStartMs,
+              "active=$hasAudio samples=${masterPcm.size} channels=$audioChannels rate=$audioSampleRate"
+            )
+            // A mix that produced no PCM (every track muted/empty) still has to give the muxer its
+            // audio track: feed a short silence so the encoder announces its format and the file
+            // stays a valid A/V MP4 instead of hanging on a track that never arrives.
+            val silenceOnly = masterPcm.size < audioChannels
+            val pcm = if (silenceOnly) ShortArray(2048 * audioChannels) else masterPcm
+            val totalAudioFrames = pcm.size / audioChannels
+            var fedAudioFrames = 0
+            // Feed paced against the video render progress (half a second of lead), so the MP4's
+            // tracks stay interleaved; the encoder's input buffers are the only backpressure. Once
+            // the video reached its EOS the pace cap is lifted and the remainder flushes.
+            val paceLeadFrames = audioSampleRate / 2
+            while (fedAudioFrames < totalAudioFrames && !stop.get()) {
+              val pacedTarget = if (videoEos.get()) totalAudioFrames
+              else ((metrics.gpuFrames.get() + 1L) * audioSampleRate / fps).toInt() + paceLeadFrames
+              val before = fedAudioFrames
+              fedAudioFrames = feedAudio(enc, pcm, fedAudioFrames, pacedTarget, 10_000L)
+              if (fedAudioFrames > before) {
+                lastAudioPipelineProgressMs = System.currentTimeMillis()
+              } else if (fedAudioFrames < pacedTarget && fedAudioFrames < totalAudioFrames) {
+                // The encoder is refusing input below the pace cap (its input queue is full or
+                // the drain is congested); give both a moment, then fail if it never recovers.
+                Thread.sleep(10)
+                if (System.currentTimeMillis() - lastAudioPipelineProgressMs > 30_000L) {
+                  failure.compareAndSet(null, ExportPipelineException(
+                    "The audio encoder stopped accepting input (fed $fedAudioFrames of $totalAudioFrames frames)."
+                  ))
+                  stop.set(true)
+                  return@Thread
+                }
+              } else {
+                // At the pace cap: the video render progress defines the rate; wait for it.
+                // (This is the overlap's normal resting state, never a failure.)
+                Thread.sleep(10)
+              }
+            }
+            if (stop.get()) return@Thread
+            val eosDeadline = System.nanoTime() + 30_000_000_000L
+            while (!stop.get()) {
+              val inputIndex = enc.dequeueInputBuffer(10_000L)
+              if (inputIndex >= 0) {
+                val audioPtsUs = (fedAudioFrames.toLong() * 1_000_000L) / audioSampleRate
+                enc.queueInputBuffer(inputIndex, 0, 0, audioPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                Log.i(tag, "Audio encoder EOS queued at audioPtsUs=$audioPtsUs")
+                break
+              }
+              if (System.nanoTime() > eosDeadline) {
+                failure.compareAndSet(null, ExportPipelineException("The audio encoder never accepted the end-of-stream marker."))
+                stop.set(true)
+                break
+              }
+            }
+          } catch (t: Throwable) {
+            if (stop.get()) {
+              // The export is already ending (cancel/watchdog/drain failure): a codec exception
+              // from codecs being torn down under the feeder is noise, not the reason.
+              Log.w(tag, "Audio feed thread ended with the export: ${t.message}")
+            } else {
+              Log.e(tag, "Audio feed thread failed", t)
+              failure.compareAndSet(null, t)
+              stop.set(true)
+            }
+          }
+        }, "AH-AudioFeed").apply { isDaemon = true; start() }
+      }
 
       /**
        * Why the last decode of a clip produced no picture. Written by the decoder pre-open (this
@@ -1680,12 +1808,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
             // Heartbeat for the stall watchdog and the progress panel: a frame really did reach the
             // encoder just now.
             lastFrameSubmittedMs = System.currentTimeMillis()
-
-            // 4. Audio, pro-rata with the video position. Cap buffers per frame so a catch-up
-            // burst cannot stall the GL/encoder pipeline around the midpoint of a long export.
-            if (aenc != null) {
-              feedAudio((((frameIndex + 1).toDouble() * audioSampleRate) / fps).toInt(), 0L, maxBuffers = 3)
-            }
+            // (Audio no longer rides along per frame: the dedicated AH-AudioFeed thread paces the
+            // PCM against the render progress on its own, so the GL thread only renders.)
           }
 
           if (!stop.get()) {
@@ -1754,29 +1878,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
         Log.e(tag, "signalEndOfInputStream failed codec=${videoEncoder.name} submitted=${metrics.gpuFrames.get()}", e)
         throw ExportPipelineException("Video encoder rejected end-of-stream", e)
       }
-
-      if (aenc != null) {
-        // Flush the remaining PCM (deadline based, never silently truncated), then EOS at the exact end PTS.
-        val flushDeadline = System.nanoTime() + 30_000_000_000L
-        while (fedAudioFrames < totalAudioFrames && !stop.get()) {
-          if (!feedAudio(totalAudioFrames, 10_000L) && System.nanoTime() > flushDeadline) {
-            throw ExportPipelineException("The audio encoder stopped accepting input (fed $fedAudioFrames of $totalAudioFrames frames).")
-          }
-        }
-        val eosDeadline = System.nanoTime() + 30_000_000_000L
-        var audioEosSent = false
-        while (!audioEosSent && !stop.get()) {
-          val inputIndex = aenc.dequeueInputBuffer(10_000L)
-          if (inputIndex >= 0) {
-            val audioPtsUs = (fedAudioFrames.toLong() * 1_000_000L) / audioSampleRate
-            aenc.queueInputBuffer(inputIndex, 0, 0, audioPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-            audioEosSent = true
-            Log.i(tag, "Audio encoder EOS queued at audioPtsUs=$audioPtsUs")
-          } else if (System.nanoTime() > eosDeadline) {
-            throw ExportPipelineException("The audio encoder never accepted the end-of-stream marker.")
-          }
-        }
-      }
+      // (The audio feeder thread flushes the remaining PCM and queues the audio EOS on its own;
+      // with the video EOS set its pace cap is lifted, so the tail never lags behind.)
 
       // 10. Wait until the encoders have emitted their own EOS and the drain thread consumed everything.
       //     Own phase: the panel says so (this is the "Finalizing..."-forever row of the report) and
@@ -1785,8 +1888,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
       while (!drainDone.await(1, TimeUnit.SECONDS)) {
         stallFailure?.let { throw it }
         if (stop.get()) break
+        // The audio feeder may legitimately still be awaiting/mixing/feeding the PCM after the
+        // video EOS (the overlap makes this the normal order for a short video with long audio):
+        // judge liveness by the background audio path's progress, not raw encoder output.
+        val audioAlive = aenc != null && !audioEos.get() &&
+          System.currentTimeMillis() - lastAudioPipelineProgressMs < 60_000L
         val idleSec = (System.nanoTime() - lastOutputNs.get()) / 1_000_000_000L
-        if (idleSec > 30) {
+        if (idleSec > 30 && !audioAlive) {
           throw ExportPipelineException("The encoder did not finish after end of stream (video EOS=${videoEos.get()}, audio EOS=${audioEos.get()}, idle ${idleSec}s).")
         }
       }

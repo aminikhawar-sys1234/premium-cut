@@ -297,6 +297,62 @@ class ExportStallWatchdogTest {
     assertTrue(verdict is ExportStallWatchdog.Verdict.Continue)
   }
 
+  // ------------------------------------------------------------------ audio backpressure (mix/encode overlap)
+
+  @Test
+  fun awaitingAudioMixKeepsRenderingAliveWhileTheBackgroundAudioProgresses() {
+    // CapCut-style overlap: the muxer waits for the background audio track, so the drain
+    // intentionally throttles the encoder. The frame clock freezes, but the background audio
+    // path is progressing - this is liveness, not a stall (it would be FRAME_TIMEOUT and
+    // ENCODER_STALLED without the flag).
+    val verdict = ExportStallWatchdog.verdict(
+      heartbeat(
+        framesSubmitted = 500L,
+        framesEncoded = 480L,
+        sinceLastFrameSubmittedMs = 90_000L,
+        sinceLastEncodedMs = 90_000L,
+        awaitingAudioMix = true,
+        sinceAudioPipelineProgressMs = 5_000L
+      )
+    )
+    assertTrue("an intentionally throttled, progressing export must continue, was $verdict", verdict is ExportStallWatchdog.Verdict.Continue)
+  }
+
+  @Test
+  fun awaitingAudioMixStillFailsWhenTheBackgroundAudioStopsProgressing() {
+    val verdict = ExportStallWatchdog.verdict(
+      heartbeat(
+        framesSubmitted = 500L,
+        framesEncoded = 480L,
+        sinceLastFrameSubmittedMs = 90_000L,
+        sinceLastEncodedMs = 90_000L,
+        awaitingAudioMix = true,
+        sinceAudioPipelineProgressMs = 61_000L
+      )
+    )
+    val stall = verdict as? ExportStallWatchdog.Verdict.Stall ?: error("expected a stall, got $verdict")
+    assertEquals(ExportStallWatchdog.Kind.PHASE_NO_PROGRESS, stall.kind)
+    assertTrue(
+      "the message must name the background audio path: ${stall.message}",
+      stall.message.contains("background audio mix stopped making progress")
+    )
+  }
+
+  @Test
+  fun awaitingAudioMixAlsoCoversTheNoFirstFrameWindow() {
+    // A slow mix can hold the muxer before frame 0 ever reaches the encoder; that window is
+    // judged by the audio path's progress too, not by the render clock.
+    val verdict = ExportStallWatchdog.verdict(
+      heartbeat(
+        framesSubmitted = 0L,
+        framesEncoded = 0L,
+        awaitingAudioMix = true,
+        sinceAudioPipelineProgressMs = 2_000L
+      )
+    )
+    assertTrue(verdict is ExportStallWatchdog.Verdict.Continue)
+  }
+
   // ------------------------------------------------------------------ shape of the contract
 
   @Test
