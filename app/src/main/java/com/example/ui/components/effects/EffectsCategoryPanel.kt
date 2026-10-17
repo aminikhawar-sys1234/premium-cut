@@ -42,6 +42,8 @@ import com.example.engine.effects.registry.RegisteredEffect
 import com.example.engine.media.VideoThumbnailManager
 import com.example.ui.StudioViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 
 /**
@@ -300,22 +302,69 @@ internal fun EffectLiveSwatch(
   baseBitmap: Bitmap?,
   modifier: Modifier = Modifier
 ) {
-  var image by remember(shaderKey, baseBitmap) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
-  LaunchedEffect(shaderKey, baseBitmap) {
-    image = withContext(Dispatchers.Default) {
-      val processed = if (baseBitmap != null && !baseBitmap.isRecycled) {
-        EffectThumbnailRaster.applyToBitmap(baseBitmap, shaderKey)
-      } else {
-        val pixels = EffectThumbnailRaster.argb(shaderKey, 48)
-        Bitmap.createBitmap(pixels, 48, 48, Bitmap.Config.ARGB_8888)
+  // One small shared sample (the clip's own frame when available) keeps every animated
+  // tile cheap: 64px raster, ~20 fps, triple-buffered so nothing allocates per frame.
+  val sample = remember(baseBitmap) {
+    val n = 64
+    when {
+      baseBitmap != null && !baseBitmap.isRecycled && baseBitmap.width > 0 && baseBitmap.height > 0 -> {
+        val scaled = Bitmap.createScaledBitmap(baseBitmap, n, n, true)
+        IntArray(n * n).also { px ->
+          scaled.getPixels(px, 0, n, 0, 0, n, n)
+          if (scaled !== baseBitmap) scaled.recycle()
+        }
       }
-      processed.asImageBitmap()
+      else -> EffectThumbnailRaster.baseScene(n)
     }
   }
-  val shown = image
-  if (shown != null) {
+
+  if (shaderKey.isNullOrBlank()) {
+    // No shader on this entry: the untouched frame IS the truth for it.
+    val frame = remember(sample) {
+      Bitmap.createBitmap(sample, 64, 64, Bitmap.Config.ARGB_8888).asImageBitmap()
+    }
     Image(
-      bitmap = shown,
+      bitmap = frame,
+      contentDescription = null,
+      contentScale = ContentScale.Crop,
+      modifier = modifier
+    )
+    return
+  }
+
+  var shown by remember(shaderKey) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+  LaunchedEffect(shaderKey, sample) {
+    // Stagger tiles so a grid of live swatches never rasterises in lockstep.
+    delay((shaderKey.hashCode().mod(6)) * 12L)
+    val n = 64
+    val bufs = Array(3) { IntArray(n * n) }
+    val frames = Array(3) { Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888) }
+    var slot = 0
+    var lastT = -1f
+    val startNs = System.nanoTime()
+    withContext(Dispatchers.Default) {
+      while (isActive) {
+        val t = (System.nanoTime() - startNs) / 1_000_000_000f
+        if (t - lastT >= 0.05f) {
+          lastT = t
+          val out = bufs[slot]
+          EffectThumbnailRaster.renderInto(
+            shaderKey, sample, out, n, n,
+            t % EffectThumbnailRaster.LIVE_LOOP_SECONDS
+          )
+          frames[slot].setPixels(out, 0, n, 0, 0, n, n)
+          val frame = frames[slot].asImageBitmap()
+          withContext(Dispatchers.Main.immediate) { shown = frame }
+          slot = (slot + 1) % 3
+        }
+        delay(16)
+      }
+    }
+  }
+  val img = shown
+  if (img != null) {
+    Image(
+      bitmap = img,
       contentDescription = shaderKey,
       contentScale = ContentScale.Crop,
       modifier = modifier
