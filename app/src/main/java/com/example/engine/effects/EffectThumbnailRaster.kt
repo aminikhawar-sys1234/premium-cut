@@ -504,7 +504,9 @@ object EffectThumbnailRaster {
       }
       "face:wink" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
         val dl = hypot(uu - 0.31f, vv - 0.26f)
-        val s = 1.8f - 1.2f * tri(fract(ph + 0.25f))
+        // No phase offset: tri(ph) hits its extremes at t=0/t=loop so the eye is fully
+        // open at the seam and the blink displacement stays well above sub-pixel.
+        val s = 1.8f - 1.2f * tri(ph)
         if (dl < 0.06f) floatArrayOf(0.31f + (uu - 0.31f) * s, 0.26f + (vv - 0.26f) * s) else floatArrayOf(uu, vv)
       }
       "face:curls" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
