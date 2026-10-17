@@ -314,4 +314,24 @@ class Media3EffectPipelineTest {
     assertTrue(identity.single() is IdentityPassthroughGlEffect)
     assertFalse((identity.single() as IdentityPassthroughGlEffect).isNoOp(1280, 720))
   }
+
+  @Test
+  fun everyTrendEffectHasARealMedia3MirrorAndCoverageEntry() {
+    // A trend id without a Media3 mirror shows NOTHING on the player path when the GPU
+    // compositor cannot run (synthetic clips, exhausted decoders) - the "fake effect" report.
+    // Both halves must stay in sync: toMedia3 builds a real shader node AND the coverage set
+    // names the id (PreviewVfxCoverage documents that contract).
+    com.vfx.engine.effects.TrendEffects.ids.forEach { id ->
+      val json = com.example.engine.vfx.VfxEffectsHost.addEffect(null, id)
+      assertNotNull("stack build failed for $id", json)
+      val instance = com.example.engine.vfx.VfxEffectsHost.decode(json).effects().first()
+      val effect = runCatching { PreviewVfxEffects.toMedia3(instance) }
+        .getOrElse { throw AssertionError("toMedia3 threw for $id", it) }
+      assertNotNull("trend effect $id has no Media3 mirror - the player path shows nothing", effect)
+      assertTrue(
+        "$id missing from MEDIA3_PREVIEW_EFFECT_IDS (coverage/policy desync)",
+        id in PreviewVfxCoverage.MEDIA3_PREVIEW_EFFECT_IDS
+      )
+    }
+  }
 }

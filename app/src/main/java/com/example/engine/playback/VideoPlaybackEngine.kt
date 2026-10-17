@@ -205,6 +205,9 @@ class VideoPlaybackEngine(
 
   /** Disk-probe throttle for the compositor playability check (no cache inside isRealPlayableMedia). */
   private var lastPlayableProbeAtElapsedMs = 0L
+  /** Visible-clip id set the cached [lastPlayableProbeResult] was computed for: a scrub that
+   *  brings different sources under the playhead must re-probe even inside the throttle window. */
+  private var lastProbedVisibleKey: List<String> = emptyList()
   // Fail-open: before the first probe has ever run, let the compositor activate. A genuinely
   // undecodable source is caught downstream by the compositor's own decoder failure path
   // (onMainLayerUndecodable -> player fallback); a false default here instead blocked the FIRST
@@ -304,18 +307,24 @@ class VideoPlaybackEngine(
       Log.i(TAG, "Retrying the GPU compositor after a previous failure (cooldown elapsed)")
       compositorFailed = false
     }
-    // The playability probe below touches the disk for every clip (no cache inside
-    // isRealPlayableMedia). Skip it entirely when the decision cannot depend on it: nothing needs
-    // the compositor, none is running, and the user did not ask for the always-on GPU preview.
-    // Look-only edits (slider ticks) reach this on every tick and must stay pure-Kotlin cheap.
+    // The playability probe below touches the disk for the clips the CURRENT frame decodes only
+    // (no cache inside isRealPlayableMedia). Skip it entirely when the decision cannot depend on
+    // it: nothing needs the compositor, none is running, and the user did not ask for the
+    // always-on GPU preview. Look-only edits (slider ticks) reach this on every tick and must
+    // stay pure-Kotlin cheap.
     if (!alwaysOn && !requiresComposition && !active) return
-    val sourcesPlayable = if (SystemClock.elapsedRealtime() - lastPlayableProbeAtElapsedMs < PLAYABLE_PROBE_THROTTLE_MS) {
+    // The probe verdict is keyed by the visible-clip id set: a scrub that brings different
+    // sources under the playhead re-probes even inside the throttle window, slider ticks reuse it.
+    val visibleKey = PreviewFramePlan.clipsVisibleAt(currentTimeline, currentPosMs).map { it.id }
+    val cachedProbe = SystemClock.elapsedRealtime() - lastPlayableProbeAtElapsedMs < PLAYABLE_PROBE_THROTTLE_MS &&
+      visibleKey == lastProbedVisibleKey
+    val sourcesPlayable = if (cachedProbe) {
       lastPlayableProbeResult
     } else {
-      // Resolve every clip's uri the SAME way the compositor's decoders will (proxy / relink).
-      // Probing the raw project uri answered "not playable" for proxy-served clips that playback
-      // plays fine, which kept the compositor off and made every effect invisible.
-      val probed = PreviewFramePlan.canComposite(currentTimeline) { clip ->
+      // Resolve every probed clip's uri the SAME way the compositor's decoders will (proxy /
+      // relink). Probing the raw project uri answered "not playable" for proxy-served clips that
+      // playback plays fine, which kept the compositor off and made every effect invisible.
+      val probed = PreviewFramePlan.canComposite(currentTimeline, currentPosMs) { clip ->
         isPlayableInPlayer(
           MediaPlayableUri.resolvePlayableString(
             context,
@@ -324,6 +333,7 @@ class VideoPlaybackEngine(
         )
       }
       lastPlayableProbeAtElapsedMs = SystemClock.elapsedRealtime()
+      lastProbedVisibleKey = visibleKey
       lastPlayableProbeResult = probed
       probed
     }

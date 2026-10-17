@@ -94,13 +94,13 @@ class PreviewFramePlanTest {
   @Test
   fun canCompositeOnlyRealPlayableProjects() {
     val real = Timeline(videoClips = listOf(clip("a", 0, 1000)), overlayClips = listOf(clip("b", 0, 1000)))
-    assertTrue(PreviewFramePlan.canComposite(real) { true })
+    assertTrue(PreviewFramePlan.canComposite(real, 0) { true })
     // The predicate is per CLIP now: the caller resolves the proxy / relink uri before probing,
     // so a raw uri must never decide the gate by itself.
-    assertFalse(PreviewFramePlan.canComposite(real) { it.uri != "file:///b.mp4" })
-    assertFalse(PreviewFramePlan.canComposite(Timeline()) { true })
+    assertFalse(PreviewFramePlan.canComposite(real, 0) { it.uri != "file:///b.mp4" })
+    assertFalse(PreviewFramePlan.canComposite(Timeline(), 0) { true })
     val withStock = real.copy(overlayClips = listOf(clip("s", 0, 1000, uri = "stock://x")))
-    assertFalse(PreviewFramePlan.canComposite(withStock) { true })
+    assertFalse(PreviewFramePlan.canComposite(withStock, 0) { true })
   }
 
   @Test
@@ -112,11 +112,54 @@ class PreviewFramePlanTest {
     val resolved = mapOf("content://media/raw-video" to "file:///cache/proxy/raw.mp4")
     val timeline = Timeline(videoClips = listOf(raw, proxied))
     assertTrue(
-      PreviewFramePlan.canComposite(timeline) { clip ->
+      PreviewFramePlan.canComposite(timeline, 0) { clip ->
         val playable = resolved[clip.uri] ?: clip.uri
         playable == "file:///cache/proxy/raw.mp4" || clip.id == "proxied"
       }
     )
+  }
+
+  @Test
+  fun brokenClipFarFromThePlayheadDoesNotBlockTheCompositor() {
+    // The whole-timeline all-clips probe used to latch the compositor off (and with it every
+    // registry effect) for projects where playback worked fine, because ONE far-away source
+    // failed the static file probe. Playability now gates only the visible frame's sources.
+    val good = clip("good", 0, 1000)
+    val broken = clip("broken", 1000, 1000)
+    val timeline = Timeline(videoClips = listOf(good, broken))
+    // Playhead on the good clip: the broken clip is off-screen, the compositor still enters.
+    assertTrue(PreviewFramePlan.canComposite(timeline, 500) { it.id == "good" })
+    // Playhead ON the broken clip: the compositor cannot decode the visible frame.
+    assertFalse(PreviewFramePlan.canComposite(timeline, 1500) { it.id == "good" })
+  }
+
+  @Test
+  fun brokenOverlayAwayFromThePlayheadDoesNotBlockButVisibleOneDoes() {
+    val main = clip("main", 0, 4000)
+    val overlayHere = clip("ovHere", 0, 1000)
+    val overlayFar = clip("ovFar", 3000, 1000)
+    val timeline = Timeline(videoClips = listOf(main), overlayClips = listOf(overlayHere, overlayFar))
+    // Playhead inside ovHere: far overlay is off-screen, its probe failure must not matter.
+    assertTrue(PreviewFramePlan.canComposite(timeline, 500) { it.id != "ovFar" })
+    // Playhead inside ovFar: it decodes now, so the gate correctly refuses.
+    assertFalse(PreviewFramePlan.canComposite(timeline, 3500) { it.id != "ovFar" })
+  }
+
+  @Test
+  fun clipsVisibleAtReturnsActiveClipAndPlayheadOverlays() {
+    val a = clip("a", 0, 1000)
+    val b = clip("b", 1000, 1000)
+    val c = clip("c", 2000, 1000)
+    val ov = clip("ov", 1200, 300)
+    val timeline = Timeline(videoClips = listOf(c, a, b), overlayClips = listOf(ov))
+    val midB = PreviewFramePlan.clipsVisibleAt(timeline, 1500).map { it.id }
+    // Active clip + the overlay covering the playhead (transition sides are runtime-owned).
+    assertEquals(listOf("b", "ov"), midB)
+    val onA = PreviewFramePlan.clipsVisibleAt(timeline, 100).map { it.id }
+    assertEquals(listOf("a"), onA)
+    // Past the end: falls back to the last main clip.
+    val tail = PreviewFramePlan.clipsVisibleAt(timeline, 9_999).map { it.id }
+    assertEquals(listOf("c"), tail)
   }
 
   @Test

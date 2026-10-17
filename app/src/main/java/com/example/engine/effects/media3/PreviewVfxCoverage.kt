@@ -19,13 +19,19 @@ object PreviewVfxCoverage {
 
   /** Ids that have a real Media3 preview shader in [PreviewVfxEffects]. */
   val MEDIA3_PREVIEW_EFFECT_IDS: Set<String> = setOf(
-    // The ten Video Effects assets.
-    "blur.motion", "video.vhs", "video.crt", "distort.datamosh", "light.anamorphic",
-    "noise.grain", "light.halation", "light.flare", "stylize.speedLines", "distort.kaleidoscope",
-    // Engine effects shared with the Photo / AI assets and the stack panel.
+    // Engine effects shared with the stack panel.
     "distort.glitch", "chromatic.aberration", "chromatic.rgbSplit", "blur.directional",
     "light.leak", "color.hdr", "color.pop", "sharpen.unsharp", "sharpen.sharpen",
     "stylize.sketch", "stylize.halftone", "stylize.posterize", "stylize.pixelate", "stylize.duotone",
+    // Legacy video-effect assets that stayed registered for old projects.
+    "blur.motion", "video.vhs", "video.crt", "distort.datamosh", "light.anamorphic",
+    "noise.grain", "light.halation", "light.flare", "stylize.speedLines", "distort.kaleidoscope",
+    // The CapCut-trending assets (TrendGlsl mirrors): explosion, ink spill, earth, tome,
+    // cut shift, fire, mini zoom, white flash + the photo set.
+    "trend.explosion", "trend.ink_spill", "trend.earth", "trend.magical_tome",
+    "trend.cut_shift", "trend.fire", "trend.mini_zoom", "trend.white_flash",
+    "trend.expand_x", "trend.orbit360", "trend.layer_echo", "trend.zoom3d",
+    "trend.ai_filter", "trend.sad", "trend.cartoon3d",
   )
 
   /**

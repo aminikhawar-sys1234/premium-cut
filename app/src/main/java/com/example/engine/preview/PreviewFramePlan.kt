@@ -60,14 +60,47 @@ data class PreviewFramePlan(
      * The compositor can only draw real media. Projects with placeholder clips (stock / sample
      * previews that the Compose path paints procedurally) stay on the legacy preview.
      *
+     * Two rules, matched to what the compositor actually decodes:
+     *  - ANY synthetic clip keeps the whole project off the compositor (GL has no way to draw it).
+     *  - Playability is required only for the sources the CURRENT frame decodes (main clip under
+     *    the playhead, its transition neighbours, overlays covering the playhead). A broken clip
+     *    anywhere else must not blind the whole editor - that static whole-timeline probe used to
+     *    latch the compositor off for projects where playback worked fine (missing proxy file,
+     *    revoked content grant, exotic scheme), and every registry effect then stayed invisible
+     *    forever while the player kept playing. Off-screen failures surface per frame at runtime
+     *    through the compositor's `onMainLayerUndecodable` -> player fallback instead.
+     *
      * The check is per clip, and the CALLER resolves the uri exactly the way the compositor's own
      * decoders will (proxy / relink). Probing the raw project uri here used to answer "not playable"
-     * for clips that playback plays fine through their proxy — which latched the GPU compositor off
+     * for clips that playback plays fine through their proxy - which latched the GPU compositor off
      * and made every registry effect permanently invisible while the same clip previewed unfiltered.
      */
-    fun canComposite(timeline: Timeline, isPlayable: (VideoClip) -> Boolean): Boolean {
+    fun canComposite(timeline: Timeline, playheadMs: Long, isPlayable: (VideoClip) -> Boolean): Boolean {
       val visual = timeline.videoClips + timeline.overlayClips
-      return visual.isNotEmpty() && visual.all { !isSynthetic(it.uri) && isPlayable(it) }
+      if (visual.isEmpty()) return false
+      if (visual.any { isSynthetic(it.uri) }) return false
+      return clipsVisibleAt(timeline, playheadMs).all { isPlayable(it) }
+    }
+
+    /**
+     * The clips whose sources the compositor decodes for the frame at [playheadMs]: the main clip
+     * under the playhead and every overlay covering it. Transition sides are intentionally NOT
+     * probed - they are decoded only while a transition overlaps the playhead, and a broken
+     * transition source surfaces per frame at runtime (player fallback), never as a permanent
+     * whole-project veto.
+     */
+    fun clipsVisibleAt(timeline: Timeline, playheadMs: Long): List<VideoClip> {
+      val mains = timeline.videoClips.sortedBy { it.timelineStartMs }
+      if (mains.isEmpty()) return emptyList()
+      val active = mains.firstOrNull {
+        playheadMs >= it.timelineStartMs && playheadMs < it.timelineStartMs + it.durationMs
+      } ?: mains.last()
+      val visible = ArrayList<VideoClip>(2 + timeline.overlayClips.size)
+      visible.add(active)
+      timeline.overlayClips
+        .filter { playheadMs >= it.timelineStartMs && playheadMs < it.timelineStartMs + it.durationMs }
+        .forEach { visible.add(it) }
+      return visible.distinctBy { it.id }
     }
   }
 }

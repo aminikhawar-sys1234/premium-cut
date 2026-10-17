@@ -110,6 +110,102 @@ object PreviewVfxEffects {
         zoom = instance.param("zoom", 1f)
       )
 
+      // ---- CapCut-trending assets (TrendGlsl mirrors, full-frame GPU shaders). ----
+      // Every trend id has a real Media3 shader so an effect project that CANNOT run the GPU
+      // compositor (synthetic clips, exhausted decoders) still previews the effect on the player
+      // path instead of silently showing nothing. Subject-driven ids (subject.*) have no mirror:
+      // they need the on-device segmentation mask, which only the compositor publishes.
+      "trend.explosion" -> trendExplosion(
+        intensity = intensity,
+        scale = instance.param("scale", 0.7f),
+        speed = instance.param("speed", 0.5f),
+        heat = instance.param("heat", 1f)
+      )
+      "trend.ink_spill" -> trendInkSpill(
+        intensity = intensity,
+        spread = instance.param("spread", 0.9f),
+        speed = instance.param("speed", 0.22f),
+        dark = instance.param("dark", 0.92f)
+      )
+      "trend.earth" -> trendEarth(
+        intensity = intensity,
+        size = instance.param("size", 0.24f),
+        center = instance.param("position", floatArrayOf(0.72f, 0.30f)),
+        spin = instance.param("spin", 0.18f),
+        clouds = instance.param("clouds", 0.55f)
+      )
+      "trend.magical_tome" -> trendMagicalTome(
+        intensity = intensity,
+        scale = instance.param("scale", 1f),
+        speed = instance.param("speed", 0.35f),
+        hue = instance.param("hue", 0.15f)
+      )
+      "trend.cut_shift" -> trendCutShift(
+        intensity = intensity,
+        slices = instance.param("slices", 10f),
+        speed = instance.param("speed", 2.2f),
+        rgb = instance.param("rgb", 0.55f)
+      )
+      "trend.fire" -> trendFire(
+        intensity = intensity,
+        height = instance.param("height", 0.38f),
+        speed = instance.param("speed", 1.1f),
+        heat = instance.param("heat", 1f)
+      )
+      "trend.mini_zoom" -> trendMiniZoom(
+        intensity = intensity,
+        speed = instance.param("speed", 0.75f),
+        amount = instance.param("amount", 0.16f),
+        shake = instance.param("shake", 0.02f)
+      )
+      "trend.white_flash" -> trendWhiteFlash(
+        intensity = intensity,
+        speed = instance.param("speed", 0.9f),
+        hold = instance.param("hold", 0.05f),
+        bloom = instance.param("bloom", 0.35f)
+      )
+      "trend.expand_x" -> trendExpandX(
+        intensity = intensity,
+        expand = instance.param("expand", 0.14f),
+        falloff = instance.param("falloff", 0.55f)
+      )
+      "trend.orbit360" -> trendOrbit360(
+        intensity = intensity,
+        speed = instance.param("speed", 0.18f),
+        reach = instance.param("reach", 0.5f),
+        twist = instance.param("twist", 0.2f)
+      )
+      "trend.layer_echo" -> trendLayerEcho(
+        intensity = intensity,
+        offset = instance.param("offset", 1f),
+        scaleStep = instance.param("scaleStep", 0.6f),
+        mixAmt = instance.param("mixAmt", 0.55f)
+      )
+      "trend.zoom3d" -> trendZoom3d(
+        intensity = intensity,
+        zoom = instance.param("zoom", 0.22f),
+        depth = instance.param("depth", 0.6f),
+        speed = instance.param("speed", 0.14f)
+      )
+      "trend.ai_filter" -> trendAiFilter(
+        intensity = intensity,
+        warmth = instance.param("warmth", 0.65f),
+        glow = instance.param("glow", 0.4f),
+        pop = instance.param("pop", 0.6f)
+      )
+      "trend.sad" -> trendSad(
+        intensity = intensity,
+        mood = instance.param("mood", 0.75f),
+        vig = instance.param("vig", 0.5f),
+        grain = instance.param("grain", 0.4f)
+      )
+      "trend.cartoon3d" -> trendCartoon3d(
+        intensity = intensity,
+        levels = instance.param("levels", 6f),
+        outline = instance.param("outline", 0.75f),
+        sat = instance.param("sat", 0.7f)
+      )
+
       // ---- Engine effects used by the Photo / AI assets and the VFX stack panel. ----
       "distort.glitch" -> Media3EffectPipeline.createGlitchEffect(intensity)
       "chromatic.aberration", "chromatic.rgbSplit" -> Media3EffectPipeline.createRgbSplitEffect(intensity)
@@ -594,6 +690,521 @@ object PreviewVfxEffects {
   )
 
   /**
+   * The compositor's noise/colour library ([com.vfx.engine.gpu.glsl.ShaderChunks]) subset the
+   * trend mirrors need, minus `hash21` (already declared by [shader]). Injected through the
+   * `uniforms` slot, which lands after `hash21` and before `main`.
+   */
+  private val TREND_LIB = """
+float hash11(float p){ p = fract(p * 0.1031); p *= p + 33.33; p *= p + p; return fract(p); }
+float hash31(vec3 p){ p = fract(p * 0.1031); p += dot(p, p.yzx + 33.33); return fract((p.x + p.y) * p.z); }
+float valueNoise(vec2 p){
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
+               mix(hash21(i + vec2(0.0, 1.0)), hash21(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p){
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 5; i++) { v += a * valueNoise(p); p = p * 2.03 + 17.31; a *= 0.5; }
+    return v;
+}
+float vnoise3(vec3 p){
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    float n000 = hash31(i);
+    float n100 = hash31(i + vec3(1.0, 0.0, 0.0));
+    float n010 = hash31(i + vec3(0.0, 1.0, 0.0));
+    float n110 = hash31(i + vec3(1.0, 1.0, 0.0));
+    float n001 = hash31(i + vec3(0.0, 0.0, 1.0));
+    float n101 = hash31(i + vec3(1.0, 0.0, 1.0));
+    float n011 = hash31(i + vec3(0.0, 1.0, 1.0));
+    float n111 = hash31(i + vec3(1.0, 1.0, 1.0));
+    return mix(mix(mix(n000, n100, f.x), mix(n010, n110, f.x), f.y),
+               mix(mix(n001, n101, f.x), mix(n011, n111, f.x), f.y), f.z);
+}
+float fbm3(vec3 p){
+    float v = 0.0, a = 0.5;
+    for (int i = 0; i < 4; i++) { v += a * vnoise3(p); p = p * 2.03 + 17.31; a *= 0.5; }
+    return v;
+}
+mat2 rot2(float a){ float c = cos(a), s = sin(a); return mat2(c, -s, s, c); }
+float luma709(vec3 c){ return dot(c, vec3(0.2126, 0.7152, 0.0722)); }
+float maxc(vec3 c){ return max(c.r, max(c.g, c.b)); }
+float minc(vec3 c){ return min(c.r, min(c.g, c.b)); }
+vec3 blendScreen(vec3 b, vec3 s){ return b + s - b * s; }
+""".trimIndent()
+
+  // ---- TrendGlsl mirrors ---------------------------------------------------------------
+  // Faithful ES1 ports of the compositor bodies in com.vfx.engine.gpu.glsl.TrendGlsl: the warp
+  // (uv displacement) is folded into the base sample, `process` maths runs on the original uv,
+  // and the final `mix(base, result, uIntensity)` matches ShaderTemplate's main exactly, so the
+  // player path renders the same frame the compositor and the export do.
+
+  private fun trendExplosion(intensity: Float, scale: Float, speed: Float, heat: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendExplosion",
+      intensity = intensity,
+      uniforms = "uniform float uScale;\nuniform float uSpeed;\nuniform float uHeat;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec2 res = 1.0 / max(uTexelSize, vec2(1.0e-5));
+  vec4 base = texture2D(uTexSampler, uv);
+  float t = fract(uTime * uSpeed);
+  float aspect = res.x / max(res.y, 1.0);
+  vec2 p = (uv - vec2(0.5)) * vec2(aspect, 1.0);
+  float dist = max(length(p), 1.0e-4);
+  float ringR = t * 1.15 * uScale;
+  float ring = exp(-pow((dist - ringR) * 14.0, 2.0));
+  vec2 dirP = p / dist;
+  vec3 col = base.rgb + ring * 0.20 * dirP.x * vec3(1.0, 0.85, 0.6);
+  float life = smoothstep(1.0, 0.15, t);
+  float body = smoothstep(ringR, 0.0, dist) * life;
+  float n = fbm(p * 6.0 + vec2(0.0, -t * 5.0) + 31.7);
+  float radial = 1.0 - clamp(dist / max(ringR, 1.0e-3), 0.0, 1.0);
+  float flame = body * smoothstep(0.35, 0.9, n + radial * 0.4) * uHeat;
+  vec3 fireCol = mix(vec3(1.0, 0.30, 0.05), vec3(1.0, 0.85, 0.45), body);
+  col = mix(col, max(col, fireCol), clamp(flame, 0.0, 1.0));
+  col += exp(-t * 9.0) * 0.65;
+  vec3 result = col * uIntensity + base.rgb * (1.0 - uIntensity);
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uScale", scale)
+        program.setFloatUniform("uSpeed", speed)
+        program.setFloatUniform("uHeat", heat)
+      }
+    )
+
+  private fun trendInkSpill(intensity: Float, spread: Float, speed: Float, dark: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendInkSpill",
+      intensity = intensity,
+      uniforms = "uniform float uSpread;\nuniform float uSpeed;\nuniform float uDark;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec2 res = 1.0 / max(uTexelSize, vec2(1.0e-5));
+  vec4 base = texture2D(uTexSampler, uv);
+  float t = fract(uTime * uSpeed);
+  float env = sin(3.14159265 * min(t * 1.25, 1.0));
+  float aspect = res.x / max(res.y, 1.0);
+  vec2 p = (uv - vec2(0.5)) * vec2(aspect, 1.0);
+  float dist = length(p);
+  vec2 dirP = p / max(dist, 1.0e-4);
+  float reach = env * uSpread * 1.4;
+  float n = fbm(dirP * 7.0 + 11.3);
+  float edge = reach * (0.75 + 0.5 * n);
+  float ink = 1.0 - smoothstep(edge - 0.06, edge, dist);
+  float sheen = ink * (1.0 - smoothstep(0.0, 0.10, edge - dist));
+  vec3 inkCol = vec3(0.02, 0.02, 0.045) * (1.0 + 0.4 * (n - 0.5));
+  vec3 stained = mix(inkCol, vec3(0.30, 0.34, 0.42), sheen * 0.35);
+  vec3 col = mix(base.rgb, stained, clamp(ink * uDark, 0.0, 1.0));
+  vec3 result = col * uIntensity + base.rgb * (1.0 - uIntensity);
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uSpread", spread)
+        program.setFloatUniform("uSpeed", speed)
+        program.setFloatUniform("uDark", dark)
+      }
+    )
+
+  private fun trendEarth(intensity: Float, size: Float, center: FloatArray, spin: Float, clouds: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendEarth",
+      intensity = intensity,
+      uniforms = "uniform float uSize;\nuniform vec2 uCenter;\nuniform float uSpin;\nuniform float uClouds;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec2 res = 1.0 / max(uTexelSize, vec2(1.0e-5));
+  vec4 base = texture2D(uTexSampler, uv);
+  float aspect = res.x / max(res.y, 1.0);
+  vec2 p = (uv - uCenter) * vec2(aspect, 1.0);
+  float R = uSize;
+  float dist = length(p);
+  float inside = 1.0 - smoothstep(R - 0.002, R, dist);
+  vec3 surf = base.rgb;
+  if (inside > 0.0) {
+    float z = sqrt(max(R * R - dist * dist, 0.0));
+    vec3 nrm = vec3(p.x, p.y, z) / max(R, 1.0e-4);
+    float lat = asin(clamp(nrm.y, -1.0, 1.0));
+    float lon = atan(nrm.x, nrm.z) + uTime * uSpin;
+    vec3 sphereP = vec3(cos(lat) * cos(lon), sin(lat), cos(lat) * sin(lon));
+    float land = fbm3(sphereP * 2.6 + 5.0);
+    land = smoothstep(0.50, 0.56, land);
+    vec3 ocean = mix(vec3(0.02, 0.09, 0.28), vec3(0.03, 0.20, 0.42), fbm3(sphereP * 5.0) * 0.7 + 0.3);
+    vec3 ground = mix(vec3(0.10, 0.32, 0.10), vec3(0.55, 0.45, 0.22), fbm3(sphereP * 6.5 + 3.0));
+    surf = mix(ocean, ground, land);
+    float cl = smoothstep(0.52, 0.74, fbm3(sphereP * 3.4 + vec3(uTime * uSpin * 0.45, 0.0, 17.0)));
+    surf = mix(surf, vec3(0.95), cl * uClouds);
+    float diff = clamp(dot(nrm, normalize(vec3(-0.45, 0.55, 0.7))), 0.0, 1.0);
+    surf *= 0.22 + 0.88 * diff;
+    float rim = pow(1.0 - z / max(R, 1.0e-4), 2.5);
+    surf += rim * vec3(0.35, 0.55, 0.9) * 0.8;
+    surf = mix(base.rgb, surf, inside);
+  }
+  vec3 result = surf;
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uSize", size)
+        program.setFloatsUniform("uCenter", floatArrayOf(center[0], center[1]))
+        program.setFloatUniform("uSpin", spin)
+        program.setFloatUniform("uClouds", clouds)
+      }
+    )
+
+  private fun trendMagicalTome(intensity: Float, scale: Float, speed: Float, hue: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendMagicalTome",
+      intensity = intensity,
+      uniforms = "uniform float uScale;\nuniform float uSpeed;\nuniform float uHue;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec2 res = 1.0 / max(uTexelSize, vec2(1.0e-5));
+  vec4 base = texture2D(uTexSampler, uv);
+  float t = fract(uTime * uSpeed);
+  float aspect = res.x / max(res.y, 1.0);
+  vec2 p = (uv - vec2(0.5, 0.45)) * vec2(aspect, 1.0);
+  float r = length(p);
+  float ang = atan(p.y, p.x);
+  float glow = 0.0;
+  for (int i = 0; i < 3; i++) {
+    float fi = float(i);
+    float rr = uScale * (0.16 + 0.10 * fi);
+    float spin = uTime * (0.6 + 0.35 * fi) * (mod(fi, 2.0) * 2.0 - 1.0);
+    float ticks = smoothstep(0.45, 0.95, sin((ang + spin) * (9.0 + 6.0 * fi)));
+    glow += exp(-pow((r - rr) * 90.0, 2.0)) * (0.35 + 0.65 * ticks);
+  }
+  glow += exp(-pow((r - uScale * 0.10) * 110.0, 2.0)) * 1.3;
+  float spark = 0.0;
+  for (int i = 0; i < 6; i++) {
+    float fi = float(i);
+    float seed = hash11(fi + 7.31);
+    float sr = uScale * (0.14 + 0.34 * seed);
+    float sa = fi * 1.0471976 + uTime * (0.8 + seed) + seed * 6.2831853;
+    vec2 sp = vec2(cos(sa), sin(sa)) * sr;
+    float d = length(p - sp);
+    float tw = 0.55 + 0.45 * sin(uTime * (6.0 + 5.0 * seed) + fi);
+    spark += exp(-d * d * 2600.0) * tw;
+  }
+  glow += spark * 0.9;
+  vec3 tint = mix(vec3(0.55, 0.25, 0.95), vec3(1.0, 0.78, 0.30), 0.5 + 0.5 * sin(uHue * 6.2831853 + r * 3.0));
+  float breathe = 0.55 + 0.45 * sin(3.14159265 * t);
+  vec3 col = base.rgb + tint * glow * breathe;
+  vec3 result = col * uIntensity + base.rgb * (1.0 - uIntensity);
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uScale", scale)
+        program.setFloatUniform("uSpeed", speed)
+        program.setFloatUniform("uHue", hue)
+      }
+    )
+
+  private fun trendCutShift(intensity: Float, slices: Float, speed: Float, rgb: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendCutShift",
+      intensity = intensity,
+      uniforms = "uniform float uSlices;\nuniform float uSpeed;\nuniform float uRgb;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, uv);
+  float stepN = floor(uTime * uSpeed);
+  float rows = max(uSlices, 2.0);
+  float row = floor(uv.y * rows);
+  float gate = step(0.55, hash21(vec2(row * 1.7, stepN * 1.3)));
+  float amt = (hash21(vec2(row, stepN)) - 0.5) * 0.5 * (0.3 + 0.7 * hash11(stepN + 3.1)) * gate;
+  vec2 wuv = clamp(mix(uv, uv + vec2(amt, 0.0), clamp(uIntensity, 0.0, 1.0)), 0.0, 1.0);
+  base = texture2D(uTexSampler, wuv);
+  float split = uRgb * (0.004 + 0.010 * hash11(stepN + 9.7));
+  float r = texture2D(uTexSampler, clamp(uv + vec2(split, 0.0), 0.0, 1.0)).r;
+  float b = texture2D(uTexSampler, clamp(uv - vec2(split, 0.0), 0.0, 1.0)).b;
+  vec3 result = vec3(r, base.g, b);
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uSlices", slices)
+        program.setFloatUniform("uSpeed", speed)
+        program.setFloatUniform("uRgb", rgb)
+      }
+    )
+
+  private fun trendFire(intensity: Float, height: Float, speed: Float, heat: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendFire",
+      intensity = intensity,
+      uniforms = "uniform float uHeight;\nuniform float uSpeed;\nuniform float uHeat;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, uv);
+  float t = uTime * uSpeed;
+  float m = smoothstep(1.0 - uHeight * 1.8, 0.0, uv.y);
+  float w = fbm(vec2(uv.x * 6.0, uv.y * 4.0 - t * 2.0)) - 0.5;
+  vec2 wuv = clamp(mix(uv, uv + vec2(w * 0.014, 0.0) * m, clamp(uIntensity, 0.0, 1.0)), 0.0, 1.0);
+  base = texture2D(uTexSampler, wuv);
+  float band = smoothstep(1.0 - uHeight, 1.05, 1.0 - uv.y + 0.05);
+  vec2 fp = vec2(uv.x * 3.0, uv.y * 3.0 + t * 1.6);
+  float n = fbm(fp);
+  float n2 = fbm(fp * 2.1 + vec2(7.7, -t * 2.4));
+  float flame = band * smoothstep(0.35, 0.85, n * 0.65 + n2 * 0.45);
+  flame = pow(flame, 1.4);
+  vec3 fireCol = mix(vec3(1.0, 0.25, 0.02), vec3(1.0, 0.9, 0.35), clamp(flame * 0.8 + n2 * 0.2, 0.0, 1.0));
+  vec3 col = base.rgb + fireCol * flame * uHeat;
+  float ember = step(0.985, hash21(floor(uv * vec2(220.0, 220.0)) + floor(t * 14.0)));
+  col += vec3(1.0, 0.6, 0.2) * ember * band * 1.2;
+  vec3 result = col * uIntensity + base.rgb * (1.0 - uIntensity);
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uHeight", height)
+        program.setFloatUniform("uSpeed", speed)
+        program.setFloatUniform("uHeat", heat)
+      }
+    )
+
+  private fun trendMiniZoom(intensity: Float, speed: Float, amount: Float, shake: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendMiniZoom",
+      intensity = intensity,
+      uniforms = "uniform float uSpeed;\nuniform float uAmount;\nuniform float uShake;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  float t = fract(uTime * uSpeed);
+  float z = 1.0 + uAmount * pow(1.0 - t, 3.0);
+  float j = uShake * pow(1.0 - t, 5.0);
+  vec2 off = (vec2(hash11(floor(uTime * uSpeed) + 1.7), hash11(floor(uTime * uSpeed) + 5.3)) - 0.5) * j;
+  vec2 wuv = clamp(mix(uv, (uv - vec2(0.5)) / max(z, 0.1) + vec2(0.5) + off, clamp(uIntensity, 0.0, 1.0)), 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, wuv);
+  float env = pow(1.0 - t, 3.0);
+  vec2 res = 1.0 / max(uTexelSize, vec2(1.0e-5));
+  float aspect = res.x / max(res.y, 1.0);
+  float d = length((uv - 0.5) * vec2(aspect, 1.0));
+  vec3 result = base.rgb * (1.0 - 0.35 * env * smoothstep(0.3, 0.85, d));
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uSpeed", speed)
+        program.setFloatUniform("uAmount", amount)
+        program.setFloatUniform("uShake", shake)
+      }
+    )
+
+  private fun trendWhiteFlash(intensity: Float, speed: Float, hold: Float, bloom: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendWhiteFlash",
+      intensity = intensity,
+      uniforms = "uniform float uSpeed;\nuniform float uHold;\nuniform float uBloom;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, uv);
+  float t = fract(uTime * uSpeed);
+  float attack = smoothstep(0.0, 0.02, t);
+  float decay = exp(-max(t - uHold, 0.0) * 14.0);
+  float flash = attack * decay;
+  vec3 col = mix(base.rgb, vec3(1.0), clamp(flash, 0.0, 1.0));
+  col += uBloom * decay * 0.25 * (1.0 - luma709(base.rgb));
+  vec3 result = col * uIntensity + base.rgb * (1.0 - uIntensity);
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uSpeed", speed)
+        program.setFloatUniform("uHold", hold)
+        program.setFloatUniform("uBloom", bloom)
+      }
+    )
+
+  private fun trendExpandX(intensity: Float, expand: Float, falloff: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendExpandX",
+      intensity = intensity,
+      uniforms = "uniform float uExpand;\nuniform float uFalloff;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  float e = uExpand;
+  float s = max(1.0 - 2.0 * e, 0.05);
+  float t = (uv.x - e) / s;
+  float x = (uv.x < e) ? -t : ((uv.x > 1.0 - e) ? 2.0 - t : t);
+  vec2 wuv = clamp(mix(uv, vec2(x, uv.y), clamp(uIntensity, 0.0, 1.0)), 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, wuv);
+  float dEdge = clamp(max(e - uv.x, uv.x - (1.0 - e)) / max(e, 1.0e-4), 0.0, 1.0);
+  float k = pow(dEdge, 1.5) * uFalloff;
+  vec3 result = base.rgb * (1.0 - 0.22 * k);
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uExpand", expand)
+        program.setFloatUniform("uFalloff", falloff)
+      }
+    )
+
+  private fun trendOrbit360(intensity: Float, speed: Float, reach: Float, twist: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendOrbit360",
+      intensity = intensity,
+      uniforms = "uniform float uSpeed;\nuniform float uReach;\nuniform float uTwist;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  float w = sin(uTime * uSpeed * 6.2831853);
+  float k = 1.0 + 1.6 * uReach;
+  float x = (uv.x - 0.5) * k + w * uReach;
+  float xx = atan(x) / atan(k) * 0.5 + 0.5;
+  float yy = (uv.y - 0.5) / (1.0 + 0.15 * uReach * (1.0 - w * 0.5)) + 0.5;
+  vec2 rr = rot2(uTwist * 0.35 * w) * vec2(xx - 0.5, yy - 0.5);
+  vec2 wuv = clamp(mix(uv, rr + 0.5, clamp(uIntensity, 0.0, 1.0)), 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, wuv);
+  float d = abs(uv.x - 0.5) * 2.0;
+  vec3 result = base.rgb * (1.0 - 0.25 * uReach * d * d);
+  gl_FragColor = vec4(clamp(mix(base.rgb, result, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uSpeed", speed)
+        program.setFloatUniform("uReach", reach)
+        program.setFloatUniform("uTwist", twist)
+      }
+    )
+
+  private fun trendLayerEcho(intensity: Float, offset: Float, scaleStep: Float, mixAmt: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendLayerEcho",
+      intensity = intensity,
+      uniforms = "uniform float uOffset;\nuniform float uScaleStep;\nuniform float uMixAmt;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, uv);
+  vec3 acc = base.rgb;
+  vec2 ctr = vec2(0.5);
+  for (int i = 1; i <= 3; i++) {
+    float fi = float(i);
+    float sc = max(1.0 - uScaleStep * fi * 0.15, 0.2);
+    vec2 o = vec2(uOffset * fi * 0.02, -uOffset * fi * 0.012);
+    vec2 s = clamp((uv - ctr) / sc + ctr + o, 0.0, 1.0);
+    vec3 layer = texture2D(uTexSampler, s).rgb;
+    acc = mix(acc, blendScreen(acc, layer), pow(0.62, fi) * uMixAmt);
+  }
+  gl_FragColor = vec4(clamp(mix(base.rgb, acc, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uOffset", offset)
+        program.setFloatUniform("uScaleStep", scaleStep)
+        program.setFloatUniform("uMixAmt", mixAmt)
+      }
+    )
+
+  private fun trendZoom3d(intensity: Float, zoom: Float, depth: Float, speed: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendZoom3d",
+      intensity = intensity,
+      uniforms = "uniform float uZoom;\nuniform float uDepth;\nuniform float uSpeed;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  float push = (sin(uTime * uSpeed * 3.14159265 - 1.5707963) + 1.0) * 0.5;
+  float z = 1.0 + uZoom * (0.10 + 0.35 * push);
+  float lum = luma709(texture2D(uTexSampler, clamp(uv, 0.0, 1.0)).rgb);
+  float parallax = (lum - 0.5) * uDepth * 0.12 * push;
+  vec2 drift = vec2(cos(uTime * 0.7), sin(uTime * 0.9)) * parallax * 0.5;
+  vec2 wuv = clamp(mix(uv, (uv - 0.5) / max(z, 0.1) + 0.5 + drift, clamp(uIntensity, 0.0, 1.0)), 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, wuv);
+  gl_FragColor = vec4(clamp(base.rgb, 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uZoom", zoom)
+        program.setFloatUniform("uDepth", depth)
+        program.setFloatUniform("uSpeed", speed)
+      }
+    )
+
+  private fun trendAiFilter(intensity: Float, warmth: Float, glow: Float, pop: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendAiFilter",
+      intensity = intensity,
+      uniforms = "uniform float uWarmth;\nuniform float uGlow;\nuniform float uPop;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, uv);
+  vec2 texel = max(uTexelSize, vec2(1.0e-5));
+  vec3 col = base.rgb;
+  vec3 blur = (texture2D(uTexSampler, clamp(uv + vec2(texel.x, 0.0), 0.0, 1.0)).rgb
+             + texture2D(uTexSampler, clamp(uv - vec2(texel.x, 0.0), 0.0, 1.0)).rgb
+             + texture2D(uTexSampler, clamp(uv + vec2(0.0, texel.y), 0.0, 1.0)).rgb
+             + texture2D(uTexSampler, clamp(uv - vec2(0.0, texel.y), 0.0, 1.0)).rgb) * 0.25;
+  float detail = abs(luma709(col) - luma709(blur));
+  col = mix(col, blur, clamp(0.65 - detail * 3.0, 0.0, 0.65));
+  float l = luma709(col);
+  vec3 shadowT = vec3(0.10, 0.24, 0.34);
+  vec3 highT = vec3(1.0, 0.78, 0.52);
+  vec3 toned = mix(col * shadowT * 2.2, highT * col * 1.4, smoothstep(0.35, 0.8, l));
+  col = mix(col, toned, 0.35 * uWarmth + 0.10);
+  float sat = maxc(col) - minc(col);
+  col = mix(vec3(l), col, 1.0 + 0.35 * uPop * (1.0 - sat));
+  col = clamp(col * 1.06 - 0.02, 0.0, 1.0);
+  col += max(blur - 0.65, vec3(0.0)) * uGlow * 1.6;
+  gl_FragColor = vec4(clamp(mix(base.rgb, col, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uWarmth", warmth)
+        program.setFloatUniform("uGlow", glow)
+        program.setFloatUniform("uPop", pop)
+      }
+    )
+
+  private fun trendSad(intensity: Float, mood: Float, vig: Float, grain: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendSad",
+      intensity = intensity,
+      uniforms = "uniform float uMood;\nuniform float uVig;\nuniform float uGrain;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec2 res = 1.0 / max(uTexelSize, vec2(1.0e-5));
+  vec4 base = texture2D(uTexSampler, uv);
+  vec3 col = base.rgb;
+  float l = luma709(col);
+  vec3 cold = mix(vec3(l), col, 0.45) * vec3(0.86, 0.94, 1.10);
+  cold = mix(cold, vec3(0.10, 0.16, 0.26), (1.0 - smoothstep(0.0, 0.45, l)) * 0.35);
+  col = mix(col, cold, uMood);
+  col *= 1.0 - 0.06 * uMood * (0.5 + 0.5 * sin(uTime * 0.9));
+  float aspect = res.x / max(res.y, 1.0);
+  float d = length((uv - 0.5) * vec2(aspect, 1.0));
+  col *= 1.0 - uVig * smoothstep(0.45, 0.95, d);
+  col += (hash21(uv * res + fract(uTime) * 61.7) - 0.5) * uGrain * 0.14;
+  gl_FragColor = vec4(clamp(mix(base.rgb, col, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uMood", mood)
+        program.setFloatUniform("uVig", vig)
+        program.setFloatUniform("uGrain", grain)
+      }
+    )
+
+  private fun trendCartoon3d(intensity: Float, levels: Float, outline: Float, sat: Float): CustomShaderGlEffect =
+    shader(
+      name = "PreviewTrendCartoon3d",
+      intensity = intensity,
+      uniforms = "uniform float uLevels;\nuniform float uOutline;\nuniform float uSat;\n" + TREND_LIB,
+      body = """
+  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
+  vec4 base = texture2D(uTexSampler, uv);
+  vec2 texel = max(uTexelSize, vec2(1.0e-5));
+  float lx = luma709(texture2D(uTexSampler, clamp(uv + vec2(texel.x * 1.5, 0.0), 0.0, 1.0)).rgb)
+           - luma709(texture2D(uTexSampler, clamp(uv - vec2(texel.x * 1.5, 0.0), 0.0, 1.0)).rgb);
+  float ly = luma709(texture2D(uTexSampler, clamp(uv + vec2(0.0, texel.y * 1.5), 0.0, 1.0)).rgb)
+           - luma709(texture2D(uTexSampler, clamp(uv - vec2(0.0, texel.y * 1.5), 0.0, 1.0)).rgb);
+  float edge = clamp(length(vec2(lx, ly)) * 6.0 - 0.12, 0.0, 1.0);
+  vec3 col = floor(base.rgb * uLevels + 0.5) / max(uLevels, 2.0);
+  float l = luma709(col);
+  col = mix(vec3(l), col, 1.0 + 0.5 * uSat);
+  float band = min(fract(l * uLevels), 1.0 - fract(l * uLevels)) * 2.0;
+  col *= 1.0 - 0.18 * (1.0 - band) * uSat;
+  col = mix(col, vec3(0.06), edge * uOutline);
+  gl_FragColor = vec4(clamp(mix(base.rgb, col, uIntensity), 0.0, 1.0), base.a);
+""",
+      binder = { program, _, _, _ ->
+        program.setFloatUniform("uLevels", levels)
+        program.setFloatUniform("uOutline", outline)
+        program.setFloatUniform("uSat", sat)
+      }
+    )
+
+  /**
    * Builds one Media3 shader node.
    *
    * `uIntensity` (blend, mirroring the export template) plus `uTime` (clip time for the temporal
@@ -615,16 +1226,19 @@ object PreviewVfxEffects {
     val usesTexel = body.contains("uTexelSize")
     val fragment = buildString {
       append("#version 100\n")
-      append("precision mediump float;\n")
+      // highp where the driver offers it (all modern GPUs): the trend mirrors reuse the
+      // compositor's fbm/hash bodies, whose big hash constants collapse on mediump floats.
+      append("#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n")
       append("uniform sampler2D uTexSampler;\n")
       if (usesIntensity) append("uniform float uIntensity;\n")
       if (usesTime) append("uniform float uTime;\n")
       if (usesTexel) append("uniform vec2 uTexelSize;\n")
-      if (uniforms.isNotBlank()) append(uniforms).append('\n')
       append("varying vec2 vTexSamplingCoord;\n\n")
       append("float hash21(vec2 p) {\n")
       append("  return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453);\n")
       append("}\n\n")
+      // Declared AFTER hash21 so a shared noise library in [uniforms] can call it.
+      if (uniforms.isNotBlank()) append(uniforms).append('\n')
       append("void main() {\n")
       append(body)
       append("\n}\n")
