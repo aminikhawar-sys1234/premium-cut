@@ -268,8 +268,11 @@ class TimelineEngineNLETest {
   fun testAdvancedNLEEditOperations() {
     val timeline = Timeline(
       videoClips = listOf(
-        VideoClip(id = "v1", name = "Clip 1", uri = "uri1", timelineStartMs = 0L, durationMs = 2000L, trackIndex = 0),
-        VideoClip(id = "v2", name = "Clip 2", uri = "uri2", timelineStartMs = 2000L, durationMs = 3000L, trackIndex = 0)
+        // Roll/slip are clamped to the clip's source window and known media length (source
+        // handles, exactly like real imported clips), so the fixtures carry both: v1 keeps 3s
+        // of unused tail and v2 keeps 5s. Fully-consumed windows make a cut immovable by design.
+        VideoClip(id = "v1", name = "Clip 1", uri = "uri1", timelineStartMs = 0L, durationMs = 2000L, sourceEndMs = 2000L, sourceTotalDurationMs = 5000L, trackIndex = 0),
+        VideoClip(id = "v2", name = "Clip 2", uri = "uri2", timelineStartMs = 2000L, durationMs = 3000L, sourceEndMs = 3000L, sourceTotalDurationMs = 8000L, trackIndex = 0)
       )
     )
     engine.loadTimeline(timeline)
