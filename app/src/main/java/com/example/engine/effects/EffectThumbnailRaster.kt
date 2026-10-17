@@ -495,7 +495,12 @@ object EffectThumbnailRaster {
       }
       "face:chubby" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
         val inFace = ellipse(uu, vv, 0.36f, 0.34f, 0.17f, 0.20f)
-        if (inFace > 0f) floatArrayOf(0.36f + (uu - 0.36f) * (1f - (0.18f + 0.06f * sin(TWO_PI * ph)) * inFace), vv) else floatArrayOf(uu, vv)
+        if (inFace > 0f) {
+          // Cheek factor alone peaks under 0.2px of displacement (sub-pixel = invisible on
+          // the tile), so the breathing pairs a small centre wobble with the cheek swing.
+          val cx = 0.36f + 0.012f * sin(TWO_PI * ph)
+          floatArrayOf(cx + (uu - cx) * (1f - (0.18f + 0.10f * sin(TWO_PI * ph)) * inFace), vv)
+        } else floatArrayOf(uu, vv)
       }
       "face:wink" -> warpIcon2D(src, x, y, w, h) { uu, vv ->
         val dl = hypot(uu - 0.31f, vv - 0.26f)
