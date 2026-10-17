@@ -23,21 +23,26 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.PathEffect
 import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.domain.model.*
+import com.example.engine.KeyframeInterpolator
 import com.example.engine.SelectedTrackElement
 import com.example.ui.StudioViewModel
 import com.example.ui.theme.*
@@ -586,6 +591,28 @@ private fun AdvMotionPathTabContent(
     val relTimeMs = (currentPosMs - targetStartMs).coerceIn(0L, targetDurationMs)
     val keyframes = viewModel.timelineEngine.getSelectedClipKeyframes()?.second ?: emptyList()
 
+    // REAL path: sampled with the exact same maths the renderer uses (KeyframeInterpolator),
+    // so the curve drawn here IS the motion the object follows in the video — no fake polyline.
+    val pathSamples = remember(keyframes) { KeyframeInterpolator.sampleMotionPath(keyframes, 28) }
+    val playheadPos = remember(keyframes, relTimeMs) {
+        KeyframeInterpolator.evaluatePathPosition(keyframes, relTimeMs)
+    }
+
+    // Uniform auto-fit view: the FULL path (and the real [-1..1] video frame) is always visible,
+    // nothing gets cut off no matter how far the points were dragged.
+    var canvasPx by remember { mutableStateOf(IntSize.Zero) }
+    val mapView = remember(pathSamples, canvasPx) {
+        MotionPathViewMapper.compute(pathSamples, keyframes, canvasPx.width.toFloat(), canvasPx.height.toFloat())
+    }
+
+    // Live copies for gesture callbacks: the detector is keyed on identity only and must never
+    // read the keyframes/playhead captured when it (re)started.
+    val currentKeys by rememberUpdatedState(keyframes)
+    val currentMap by rememberUpdatedState(mapView)
+    val currentRelMs by rememberUpdatedState(relTimeMs)
+    val currentTarget by rememberUpdatedState(targetId)
+    var dragNodeId by remember { mutableStateOf<String?>(null) }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -637,69 +664,162 @@ private fun AdvMotionPathTabContent(
             }
         }
 
-        // Draggable Motion Path Canvas
+        // Info strip: what you see is what the engine traces
+        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(
+                text = "LIVE PATH • ${keyframes.size} pts",
+                fontSize = 9.sp,
+                fontWeight = FontWeight.Bold,
+                color = AccentCyan
+            )
+            Text(
+                text = if (keyframes.size >= 2) "smooth curve • full path auto-fit" else "add 2+ points",
+                fontSize = 9.sp,
+                color = TextTertiary
+            )
+        }
+
+        // REAL Motion Path Editor — live curve, direction arrows, every node, playhead marker
         Surface(
             color = AdvControlSectionBg,
             shape = RoundedCornerShape(8.dp),
             border = BorderStroke(1.dp, AdvPanelBorder),
-            modifier = Modifier.fillMaxWidth().height(150.dp)
+            modifier = Modifier.fillMaxWidth().height(210.dp)
         ) {
             Box(modifier = Modifier.fillMaxSize()) {
                 Canvas(
                     modifier = Modifier
                         .fillMaxSize()
+                        .onSizeChanged { canvasPx = it }
                         .pointerInput(targetId) {
-                            detectDragGestures { change, _ ->
+                            detectDragGestures(
+                                onDragStart = { pos ->
+                                    val keys = currentKeys
+                                    var nodeId = nearestMotionPathNode(keys, pos, currentMap, 26.dp.toPx())
+                                    if (nodeId == null) {
+                                        // Playhead mode: reuse the node at the playhead, or create it
+                                        // exactly once per gesture so dragging never spawns duplicates.
+                                        val atPlayhead = keys.find { abs(it.timeMs - currentRelMs) <= 80L }
+                                        if (atPlayhead != null) {
+                                            nodeId = atPlayhead.id
+                                        } else {
+                                            val view = currentMap
+                                            if (view.scale > 0f) {
+                                                val nx = ((pos.x - view.cx) / view.scale).coerceIn(-1.6f, 1.6f)
+                                                val ny = ((pos.y - view.cy) / view.scale).coerceIn(-1.6f, 1.6f)
+                                                val created = ClipKeyframe(timeMs = currentRelMs, posX = nx, posY = ny)
+                                                viewModel.timelineEngine.updateClipKeyframes(currentTarget, keys + created)
+                                                nodeId = created.id
+                                            }
+                                        }
+                                    }
+                                    dragNodeId = nodeId
+                                },
+                                onDragEnd = { dragNodeId = null },
+                                onDragCancel = { dragNodeId = null }
+                            ) { change, _ ->
                                 change.consume()
-                                val normalizedX = ((change.position.x / size.width) - 0.5f) * 2f
-                                val normalizedY = ((change.position.y / size.height) - 0.5f) * 2f
-                                val currentKf = keyframes.find { abs(it.timeMs - relTimeMs) <= 150L }
-                                    ?: ClipKeyframe(timeMs = relTimeMs)
-                                viewModel.timelineEngine.addKeyframeToSelectedClip(
-                                    currentKf.copy(posX = normalizedX, posY = normalizedY)
-                                )
+                                val view = currentMap
+                                val id = dragNodeId ?: return@detectDragGestures
+                                if (view.scale <= 0f) return@detectDragGestures
+                                val nx = ((change.position.x - view.cx) / view.scale).coerceIn(-1.6f, 1.6f)
+                                val ny = ((change.position.y - view.cy) / view.scale).coerceIn(-1.6f, 1.6f)
+                                val keys = currentKeys
+                                val focused = keys.find { it.id == id } ?: return@detectDragGestures
+                                val updated = keys.map {
+                                    if (it.id == focused.id) it.copy(posX = nx, posY = ny) else it
+                                }
+                                viewModel.timelineEngine.updateClipKeyframes(currentTarget, updated)
                             }
                         }
                 ) {
                     val w = size.width
                     val h = size.height
-                    val centerX = w / 2f
-                    val centerY = h / 2f
 
-                    drawLine(color = Color(0xFF1E334E), start = Offset(0f, centerY), end = Offset(w, centerY), strokeWidth = 1f)
-                    drawLine(color = Color(0xFF1E334E), start = Offset(centerX, 0f), end = Offset(centerX, h), strokeWidth = 1f)
+                    // Center grid
+                    drawLine(color = Color(0xFF1E334E), start = Offset(0f, h / 2f), end = Offset(w, h / 2f), strokeWidth = 1f)
+                    drawLine(color = Color(0xFF1E334E), start = Offset(w / 2f, 0f), end = Offset(w / 2f, h), strokeWidth = 1f)
 
-                    if (keyframes.isNotEmpty()) {
-                        val path = Path()
-                        val sortedKfs = keyframes.sortedBy { it.timeMs }
-                        sortedKfs.forEachIndexed { i, kf ->
-                            val ptX = centerX + (kf.posX * (w / 2f))
-                            val ptY = centerY + (kf.posY * (h / 2f))
-                            if (i == 0) path.moveTo(ptX, ptY) else path.lineTo(ptX, ptY)
-                        }
-
-                        drawPath(
-                            path = path,
-                            color = AccentCyan,
-                            style = Stroke(width = 3f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(8f, 6f), 0f), cap = StrokeCap.Round)
+                    // Real video frame bounds ([-1..1]) so on/off-screen portions of the path are visible
+                    val frameTopLeft = mapView.toCanvas(-1f, -1f)
+                    val frameBottomRight = mapView.toCanvas(1f, 1f)
+                    if (frameBottomRight.x > frameTopLeft.x && frameBottomRight.y > frameTopLeft.y) {
+                        drawRoundRect(
+                            color = Color(0xFF2E5170),
+                            topLeft = frameTopLeft,
+                            size = Size(frameBottomRight.x - frameTopLeft.x, frameBottomRight.y - frameTopLeft.y),
+                            style = Stroke(width = 1.2f, pathEffect = PathEffect.dashPathEffect(floatArrayOf(6f, 5f)))
                         )
-
-                        sortedKfs.forEach { kf ->
-                            val ptX = centerX + (kf.posX * (w / 2f))
-                            val ptY = centerY + (kf.posY * (h / 2f))
-                            drawCircle(color = AccentEmerald, radius = 4.5f, center = Offset(ptX, ptY))
-                        }
                     }
 
-                    val curKf = keyframes.find { abs(it.timeMs - relTimeMs) <= 150L } ?: ClipKeyframe(timeMs = relTimeMs)
-                    val curX = centerX + (curKf.posX * (w / 2f))
-                    val curY = centerY + (curKf.posY * (h / 2f))
-                    drawCircle(color = Color.White, radius = 7f, center = Offset(curX, curY))
-                    drawCircle(color = AccentCyan, radius = 3.5f, center = Offset(curX, curY))
+                    // The REAL smooth path (same sampling the renderer traces at runtime)
+                    if (pathSamples.size >= 2) {
+                        val realPath = Path()
+                        val firstPt = mapView.toCanvas(pathSamples[0].first, pathSamples[0].second)
+                        realPath.moveTo(firstPt.x, firstPt.y)
+                        for (i in 1 until pathSamples.size) {
+                            val pt = mapView.toCanvas(pathSamples[i].first, pathSamples[i].second)
+                            realPath.lineTo(pt.x, pt.y)
+                        }
+                        drawPath(
+                            path = realPath,
+                            color = AccentCyan.copy(alpha = 0.22f),
+                            style = Stroke(width = 7f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+                        drawPath(
+                            path = realPath,
+                            color = AccentCyan,
+                            style = Stroke(width = 2.6f, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                        )
+
+                        // Direction arrows: the path shows WHERE the object travels
+                        val arrowStep = max(1, pathSamples.size / 12)
+                        var ai = arrowStep
+                        while (ai < pathSamples.size - 1) {
+                            val a = mapView.toCanvas(pathSamples[ai - 1].first, pathSamples[ai - 1].second)
+                            val b = mapView.toCanvas(pathSamples[ai + 1].first, pathSamples[ai + 1].second)
+                            var dx = b.x - a.x
+                            var dy = b.y - a.y
+                            val len = sqrt(dx * dx + dy * dy)
+                            if (len > 1f) {
+                                dx /= len
+                                dy /= len
+                                val tip = mapView.toCanvas(pathSamples[ai].first, pathSamples[ai].second)
+                                val wing = 6.5f
+                                val lx = tip.x + (-0.866f * dx - 0.5f * dy) * wing
+                                val ly = tip.y + (0.5f * dx - 0.866f * dy) * wing
+                                val rx = tip.x + (-0.866f * dx + 0.5f * dy) * wing
+                                val ry = tip.y + (-0.5f * dx - 0.866f * dy) * wing
+                                drawLine(Color.White.copy(alpha = 0.85f), tip, Offset(lx, ly), 1.6f)
+                                drawLine(Color.White.copy(alpha = 0.85f), tip, Offset(rx, ry), 1.6f)
+                            }
+                            ai += arrowStep
+                        }
+
+                        // Start (green) & End (red) markers
+                        val startPt = mapView.toCanvas(pathSamples.first().first, pathSamples.first().second)
+                        val endPt = mapView.toCanvas(pathSamples.last().first, pathSamples.last().second)
+                        drawCircle(Color(0xFF22C55E), radius = 6f, center = startPt)
+                        drawCircle(Color.White, radius = 2f, center = startPt)
+                        drawCircle(Color(0xFFEF4444), radius = 6f, center = endPt)
+                        drawCircle(Color.White, radius = 2f, center = endPt)
+                    }
+
+                    // Every added path point — pora path, kuch chhupa nahi
+                    keyframes.forEach { kf ->
+                        val c = mapView.toCanvas(kf.posX, kf.posY)
+                        drawCircle(Color(0xFF04121F), radius = 6f, center = c)
+                        drawCircle(AccentEmerald, radius = 4.5f, center = c)
+                    }
+
+                    // Playhead marker at the REAL engine position (curve + easing respected)
+                    val playPt = mapView.toCanvas(playheadPos.first, playheadPos.second)
+                    drawCircle(Color.White, radius = 7.5f, center = playPt, style = Stroke(width = 2f))
+                    drawCircle(AccentCyan, radius = 3.2f, center = playPt)
                 }
 
                 Text(
-                    text = "Drag canvas to adjust position node at playhead",
+                    text = "Drag a node to reshape • drag empty space to move/add the playhead point",
                     color = TextTertiary,
                     fontSize = 9.sp,
                     modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 4.dp)
@@ -707,6 +827,67 @@ private fun AdvMotionPathTabContent(
             }
         }
     }
+}
+
+/** Uniform auto-fit view model for the motion-path editor: normalized space -> canvas pixels. */
+private data class MotionPathView(val scale: Float, val cx: Float, val cy: Float) {
+    fun toCanvas(nx: Float, ny: Float) = Offset(cx + nx * scale, cy + ny * scale)
+}
+
+private object MotionPathViewMapper {
+    /** Fits the FULL path AND the real [-1..1] video frame into the canvas (8% margin). */
+    fun compute(
+        samples: List<Pair<Float, Float>>,
+        keys: List<ClipKeyframe>,
+        w: Float,
+        h: Float
+    ): MotionPathView {
+        if (w <= 0f || h <= 0f) return MotionPathView(0f, 0f, 0f)
+        var minX = -1f
+        var maxX = 1f
+        var minY = -1f
+        var maxY = 1f
+        samples.forEach { (x, y) ->
+            if (x < minX) minX = x
+            if (x > maxX) maxX = x
+            if (y < minY) minY = y
+            if (y > maxY) maxY = y
+        }
+        keys.forEach { kf ->
+            if (kf.posX < minX) minX = kf.posX
+            if (kf.posX > maxX) maxX = kf.posX
+            if (kf.posY < minY) minY = kf.posY
+            if (kf.posY > maxY) maxY = kf.posY
+        }
+        val extentX = (maxX - minX).coerceAtLeast(1e-4f)
+        val extentY = (maxY - minY).coerceAtLeast(1e-4f)
+        val scale = min(w * 0.92f / extentX, h * 0.92f / extentY)
+        val cx = w / 2f - ((minX + maxX) / 2f) * scale
+        val cy = h / 2f - ((minY + maxY) / 2f) * scale
+        return MotionPathView(scale, cx, cy)
+    }
+}
+
+/** Node hit-test for the motion-path editor (returns the keyframe id under the finger, if any). */
+private fun nearestMotionPathNode(
+    keys: List<ClipKeyframe>,
+    pos: Offset,
+    view: MotionPathView,
+    hitRadiusPx: Float
+): String? {
+    if (view.scale <= 0f) return null
+    var best: String? = null
+    var bestD = hitRadiusPx
+    keys.forEach { kf ->
+        val px = view.cx + kf.posX * view.scale
+        val py = view.cy + kf.posY * view.scale
+        val d = hypot(pos.x - px, pos.y - py)
+        if (d <= bestD) {
+            bestD = d
+            best = kf.id
+        }
+    }
+    return best
 }
 
 // -------------------------------------------------------------------------------------------------

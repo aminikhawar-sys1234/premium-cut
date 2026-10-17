@@ -3034,6 +3034,15 @@ private fun EditorBottomToolbar(
           onClick = { viewModel.setActiveToolbarTab(EditorToolbarTab.ANIMATIONS) }
         ),
         FuturisticNavItemData(
+          id = "pro_motion",
+          label = "Pro Motion",
+          icon = Icons.Default.Route,
+          theme = NavItemThemes.Animations,
+          isSelected = activeTab == EditorToolbarTab.ADVANCED_ANIMATION,
+          testTag = "tool_pro_motion_btn",
+          onClick = { viewModel.setActiveToolbarTab(EditorToolbarTab.ADVANCED_ANIMATION) }
+        ),
+        FuturisticNavItemData(
           id = "effects",
           label = "Effects",
           icon = Icons.Default.AutoFixHigh,

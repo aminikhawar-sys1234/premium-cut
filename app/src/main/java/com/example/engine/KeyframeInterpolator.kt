@@ -106,10 +106,12 @@ object KeyframeInterpolator {
 
     var before = keyframes.first()
     var after = keyframes.last()
+    var segIdx = 0
     for (i in 0 until keyframes.size - 1) {
       if (relTimeMs >= keyframes[i].timeMs && relTimeMs <= keyframes[i + 1].timeMs) {
         before = keyframes[i]
         after = keyframes[i + 1]
+        segIdx = i
         break
       }
     }
@@ -117,13 +119,14 @@ object KeyframeInterpolator {
     val range = (after.timeMs - before.timeMs).toFloat().coerceAtLeast(1f)
     val rawT = ((relTimeMs - before.timeMs) / range).coerceIn(0f, 1f)
     val factor = computeFactor(before.interpolation, before.customCurvePoints, rawT)
+    val pathPos = smoothPathPosition(keyframes, segIdx, factor)
 
     return InterpolatedClipTransform(
       scaleX = lerp(before.scaleX, after.scaleX, factor),
       scaleY = lerp(before.scaleY, after.scaleY, factor),
       rotation = lerp(before.rotation, after.rotation, factor),
-      posX = lerp(before.posX, after.posX, factor),
-      posY = lerp(before.posY, after.posY, factor),
+      posX = pathPos.first,
+      posY = pathPos.second,
       opacity = lerp(before.opacity, after.opacity, factor).coerceIn(0f, 1f),
       volume = 1.0f,
       blur = 0.0f,
@@ -174,10 +177,12 @@ object KeyframeInterpolator {
 
     var before = keyframes.first()
     var after = keyframes.last()
+    var segIdx = 0
     for (i in 0 until keyframes.size - 1) {
       if (relTimeMs >= keyframes[i].timeMs && relTimeMs <= keyframes[i + 1].timeMs) {
         before = keyframes[i]
         after = keyframes[i + 1]
+        segIdx = i
         break
       }
     }
@@ -185,13 +190,14 @@ object KeyframeInterpolator {
     val range = (after.timeMs - before.timeMs).toFloat().coerceAtLeast(1f)
     val rawT = ((relTimeMs - before.timeMs) / range).coerceIn(0f, 1f)
     val factor = computeFactor(before.interpolation, before.customCurvePoints, rawT)
+    val pathPos = smoothPathPosition(keyframes, segIdx, factor)
 
     return InterpolatedClipTransform(
       scaleX = lerp(before.scaleX, after.scaleX, factor),
       scaleY = lerp(before.scaleY, after.scaleY, factor),
       rotation = lerp(before.rotation, after.rotation, factor),
-      posX = lerp(before.posX, after.posX, factor),
-      posY = lerp(before.posY, after.posY, factor),
+      posX = pathPos.first,
+      posY = pathPos.second,
       opacity = lerp(before.opacity, after.opacity, factor).coerceIn(0f, 1f),
       volume = 1.0f,
       blur = 0.0f,
@@ -233,10 +239,12 @@ object KeyframeInterpolator {
     // Find bounding keyframes
     var before = keyframes.first()
     var after = keyframes.last()
+    var segIdx = 0
     for (i in 0 until keyframes.size - 1) {
       if (relTimeMs >= keyframes[i].timeMs && relTimeMs <= keyframes[i + 1].timeMs) {
         before = keyframes[i]
         after = keyframes[i + 1]
+        segIdx = i
         break
       }
     }
@@ -244,13 +252,14 @@ object KeyframeInterpolator {
     val range = (after.timeMs - before.timeMs).toFloat().coerceAtLeast(1f)
     val rawT = ((relTimeMs - before.timeMs) / range).coerceIn(0f, 1f)
     val factor = computeFactor(before.interpolation, before.customCurvePoints, rawT)
+    val pathPos = smoothPathPosition(keyframes, segIdx, factor)
 
     return InterpolatedClipTransform(
       scaleX = lerp(before.scaleX, after.scaleX, factor),
       scaleY = lerp(before.scaleY, after.scaleY, factor),
       rotation = lerp(before.rotation, after.rotation, factor),
-      posX = lerp(before.posX, after.posX, factor),
-      posY = lerp(before.posY, after.posY, factor),
+      posX = pathPos.first,
+      posY = pathPos.second,
       opacity = lerp(before.opacity, after.opacity, factor).coerceIn(0f, 1f),
       volume = lerp(before.volume, after.volume, factor).coerceAtLeast(0f),
       blur = lerp(before.blur, after.blur, factor).coerceIn(0f, 1f),
@@ -620,6 +629,95 @@ object KeyframeInterpolator {
       p1x.toDouble().coerceIn(0.0, 1.0), p1y.toDouble(), p2x.toDouble().coerceIn(0.0, 1.0), p2y.toDouble()
     )
     return b.progress(targetX.toDouble()).toFloat().coerceIn(0f, 1f)
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // Motion-path smoothing (finite-difference Catmull-Rom / cubic Hermite).
+  //
+  // POSITION follows a C1-continuous curve that passes exactly through every keyframe point,
+  // so a track drawn on the motion-path editor is the track the renderer actually traces —
+  // no sharp polyline corners, no zig-zag between nodes. Every other property (scale,
+  // rotation, opacity, ...) keeps the exact per-segment interpolation. Preview and export
+  // share this code, so what the panel draws is what the video shows.
+  // -----------------------------------------------------------------------------------------
+
+  /** Smooth position on segment [segmentIndex] (between sorted[segmentIndex] and +1) at eased factor [u]. */
+  private fun smoothPathPosition(
+    sorted: List<ClipKeyframe>,
+    segmentIndex: Int,
+    u: Float
+  ): Pair<Float, Float> {
+    val p1 = sorted[segmentIndex]
+    val p2 = sorted[segmentIndex + 1]
+    // HOLD keeps the object frozen at the segment start (no path travel).
+    if (p1.interpolation == KeyframeInterpolation.HOLD) return p1.posX to p1.posY
+
+    val p0 = if (segmentIndex > 0) sorted[segmentIndex - 1] else p1
+    val p3 = if (segmentIndex + 2 < sorted.size) sorted[segmentIndex + 2] else p2
+    val dt1 = (p2.timeMs - p1.timeMs).toFloat().coerceAtLeast(1f)
+    // Finite-difference tangents (Barry-Goldman); one-sided where a neighbour is missing so a
+    // 2-keyframe path degenerates to EXACT linear motion (back-compat with pinned behaviour).
+    val m1x = if (segmentIndex > 0) (p2.posX - p0.posX) / ((p1.timeMs - p0.timeMs).toFloat().coerceAtLeast(1f) + dt1) else (p2.posX - p1.posX) / dt1
+    val m1y = if (segmentIndex > 0) (p2.posY - p0.posY) / ((p1.timeMs - p0.timeMs).toFloat().coerceAtLeast(1f) + dt1) else (p2.posY - p1.posY) / dt1
+    val m2x = if (segmentIndex + 2 < sorted.size) (p3.posX - p1.posX) / (dt1 + (p3.timeMs - p2.timeMs).toFloat().coerceAtLeast(1f)) else (p2.posX - p1.posX) / dt1
+    val m2y = if (segmentIndex + 2 < sorted.size) (p3.posY - p1.posY) / (dt1 + (p3.timeMs - p2.timeMs).toFloat().coerceAtLeast(1f)) else (p2.posY - p1.posY) / dt1
+
+    val clamped = u.coerceIn(0f, 1f)
+    val u2 = clamped * clamped
+    val u3 = u2 * clamped
+    val h00 = 2f * u3 - 3f * u2 + 1f
+    val h10 = u3 - 2f * u2 + clamped
+    val h01 = -2f * u3 + 3f * u2
+    val h11 = u3 - u2
+    val x = h00 * p1.posX + h10 * dt1 * m1x + h01 * p2.posX + h11 * dt1 * m2x
+    val y = h00 * p1.posY + h10 * dt1 * m1y + h01 * p2.posY + h11 * dt1 * m2y
+    return x to y
+  }
+
+  /**
+   * Engine-accurate position on a clip's motion path at [relTimeMs] (easing respected).
+   * The motion-path editor uses this to place the playhead marker EXACTLY where the object is.
+   */
+  fun evaluatePathPosition(keyframes: List<ClipKeyframe>, relTimeMs: Long): Pair<Float, Float> {
+    val sorted = keyframes.sortedBy { it.timeMs }
+    if (sorted.isEmpty()) return 0f to 0f
+    if (relTimeMs <= sorted.first().timeMs) return sorted.first().posX to sorted.first().posY
+    if (relTimeMs >= sorted.last().timeMs) return sorted.last().posX to sorted.last().posY
+    var segIdx = 0
+    for (i in 0 until sorted.size - 1) {
+      if (relTimeMs >= sorted[i].timeMs && relTimeMs <= sorted[i + 1].timeMs) {
+        segIdx = i
+        break
+      }
+    }
+    val before = sorted[segIdx]
+    val after = sorted[segIdx + 1]
+    val range = (after.timeMs - before.timeMs).toFloat().coerceAtLeast(1f)
+    val rawT = ((relTimeMs - before.timeMs) / range).coerceIn(0f, 1f)
+    val factor = computeFactor(before.interpolation, before.customCurvePoints, rawT)
+    return smoothPathPosition(sorted, segIdx, factor)
+  }
+
+  /**
+   * Samples the REAL spatial path the object follows (same maths as the runtime, easing-independent
+   * because easing only changes speed along the curve, not its shape). The motion-path editor draws
+   * this so the panel always shows the true path, fully and at true shape.
+   */
+  fun sampleMotionPath(keyframes: List<ClipKeyframe>, samplesPerSegment: Int = 24): List<Pair<Float, Float>> {
+    val sorted = keyframes.sortedBy { it.timeMs }
+    if (sorted.isEmpty()) return emptyList()
+    if (sorted.size == 1) return listOf(sorted[0].posX to sorted[0].posY)
+    val n = samplesPerSegment.coerceIn(2, 128)
+    val out = ArrayList<Pair<Float, Float>>(n * (sorted.size - 1) + 1)
+    for (seg in 0 until sorted.size - 1) {
+      for (s in 0 until n) {
+        val u = s.toFloat() / n.toFloat()
+        out.add(smoothPathPosition(sorted, seg, u))
+      }
+    }
+    val last = sorted.last()
+    out.add(last.posX to last.posY)
+    return out
   }
 
   private fun keyframeToTransform(kf: ClipKeyframe): InterpolatedClipTransform {
