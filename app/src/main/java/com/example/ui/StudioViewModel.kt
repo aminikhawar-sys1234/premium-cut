@@ -888,10 +888,13 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       )
     }
     val nextResult = run {
-      val keepFullTrack = _motionTrackingState.value.activeResult != null &&
-        _motionTrackingState.value.activeResult!!.keyframes.size > 3 &&
-        _motionTrackingState.value.engineState == TrackingEngineState.COMPLETED
-      if (keepFullTrack) _motionTrackingState.value.activeResult else (seeded ?: _motionTrackingState.value.activeResult)
+      // Single snapshot: reading _motionTrackingState twice let the live-detection job (on
+      // Dispatchers.Default) clear activeResult between the null-check and the !! deref.
+      val snapshot = _motionTrackingState.value
+      val keepFullTrack = snapshot.activeResult != null &&
+        snapshot.activeResult!!.keyframes.size > 3 &&
+        snapshot.engineState == TrackingEngineState.COMPLETED
+      if (keepFullTrack) snapshot.activeResult else (seeded ?: snapshot.activeResult)
     }
     if (clip != null && nextResult != null && nextResult.keyframes.isNotEmpty()) {
       persistClipMotionTrack(clip, nextResult)
@@ -1464,11 +1467,26 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     }
   }
 
+  /** Result instance produced by the last smoothing pass, with the raw keyframes it started from. */
+  private var lastSmoothedResult: TrackingResult? = null
+  private var rawBeforeSmoothing: List<MotionKeyframe>? = null
+
   fun updateSmoothingFactor(factor: Float) {
     val clamped = factor.coerceIn(0f, 0.95f)
     val curResult = _motionTrackingState.value.activeResult
     val newResult = if (curResult != null && curResult.keyframes.size > 2) {
-      curResult.copy(keyframes = motionTrackerEngine.smoothKeyframes(curResult.keyframes, clamped))
+      // Smooth the RAW tracking data, not the previous smoothing output: activeResult is
+      // overwritten on every slider tick, so re-smoothing it compounded the filter N times
+      // per drag. A result we did not produce ourselves (identity change) is fresh raw data.
+      val rawKeyframes = if (curResult !== lastSmoothedResult) {
+        curResult.keyframes
+      } else {
+        rawBeforeSmoothing ?: curResult.keyframes
+      }
+      rawBeforeSmoothing = rawKeyframes
+      curResult.copy(keyframes = motionTrackerEngine.smoothKeyframes(rawKeyframes, clamped)).also {
+        lastSmoothedResult = it
+      }
     } else {
       curResult
     }
@@ -1597,8 +1615,10 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val detectedAspect = AspectRatio.fromDimensions(effWidth, effHeight)
     val detectedFps = when {
       frameRate >= 50f -> FrameRate.FPS_60
-      frameRate in 23.5f..26.5f -> FrameRate.FPS_24
+      // PAL 25 fps must be checked before the wider 24 fps band (23.5..26.5 fully contains
+      // 24.5..26.0, which made the 25 fps branch unreachable).
       frameRate in 24.5f..26.0f -> FrameRate.FPS_25
+      frameRate in 23.5f..26.5f -> FrameRate.FPS_24
       else -> FrameRate.FPS_30
     }
     val detectedResolution = when (detectedAspect) {
@@ -1676,8 +1696,9 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       val detectedFps = if (firstClip != null) {
         when {
           firstClip.frameRate >= 50f -> FrameRate.FPS_60
-          firstClip.frameRate in 23.5f..26.5f -> FrameRate.FPS_24
+          // PAL 25 fps before the wider 24 fps band (see checkAndAutoConfigureCanvasFromMedia).
           firstClip.frameRate in 24.5f..26.0f -> FrameRate.FPS_25
+          firstClip.frameRate in 23.5f..26.5f -> FrameRate.FPS_24
           else -> FrameRate.FPS_30
         }
       } else FrameRate.FPS_30
@@ -1713,38 +1734,46 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       _isCreatingProject.value = true
       viewModelScope.launch {
         val appContext = getApplication<Application>().applicationContext
-        val clips = withContext(Dispatchers.IO) {
-          val persistentUris = MediaPersistenceManager.persistMediaList(appContext, uris)
-          var runningStart = 0L
-          persistentUris.mapIndexed { index, uri ->
-            val meta = com.example.engine.media.MediaMetadataHelper.extractMetadata(appContext, uri)
-            val duration = meta.durationMs
-            val clip = VideoClip(
-              uri = uri,
-              name = if (meta.isVideo) "Video ${index + 1}" else "Photo ${index + 1}",
-              timelineStartMs = runningStart,
-              durationMs = duration,
-              sourceStartMs = 0L,
-              sourceEndMs = duration,
-              isVideo = meta.isVideo,
-              width = meta.width,
-              height = meta.height,
-              naturalRotation = meta.rotationDegrees,
-              frameRate = meta.frameRate,
-              mimeType = meta.mimeType,
-              hasAudio = meta.hasAudio
-            )
-            runningStart += duration
-            clip
+        try {
+          val clips = withContext(Dispatchers.IO) {
+            val persistentUris = MediaPersistenceManager.persistMediaList(appContext, uris)
+            var runningStart = 0L
+            persistentUris.mapIndexed { index, uri ->
+              val meta = com.example.engine.media.MediaMetadataHelper.extractMetadata(appContext, uri)
+              val duration = meta.durationMs
+              val clip = VideoClip(
+                uri = uri,
+                name = if (meta.isVideo) "Video ${index + 1}" else "Photo ${index + 1}",
+                timelineStartMs = runningStart,
+                durationMs = duration,
+                sourceStartMs = 0L,
+                sourceEndMs = duration,
+                isVideo = meta.isVideo,
+                width = meta.width,
+                height = meta.height,
+                naturalRotation = meta.rotationDegrees,
+                frameRate = meta.frameRate,
+                mimeType = meta.mimeType,
+                hasAudio = meta.hasAudio
+              )
+              runningStart += duration
+              clip
+            }
           }
+          createNewProject(
+            name = name,
+            aspectRatio = aspectRatio,
+            resolution = Resolution.RES_1080P,
+            fps = FrameRate.FPS_30,
+            initialMediaClips = clips
+          )
+        } catch (t: Throwable) {
+          // Without this the flag stayed true forever: one unreadable file left the UI showing
+          // the "creating project" spinner permanently and every later new-project click dead.
+          android.util.Log.e("StudioViewModel", "Project creation from media failed", t)
+        } finally {
+          _isCreatingProject.value = false
         }
-        createNewProject(
-          name = name,
-          aspectRatio = aspectRatio,
-          resolution = Resolution.RES_1080P,
-          fps = FrameRate.FPS_30,
-          initialMediaClips = clips
-        )
       }
     }
   }

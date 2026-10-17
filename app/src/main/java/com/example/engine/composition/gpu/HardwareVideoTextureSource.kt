@@ -141,6 +141,10 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
     try {
       // 1. Initialize MediaExtractor
       val ex = MediaExtractor()
+      // Assign to the field immediately: if setDataSource or the track scan below throws, the
+      // catch-all's release() must see the extractor - leaving it null leaked one native
+      // MediaExtractor per failed decoder-open (the retry ladder can fail several times per clip).
+      extractor = ex
       val uri = try { Uri.parse(clip.uri) } catch (_: Exception) { null }
       if (uri != null && (uri.scheme == "content" || uri.scheme == "file")) {
         ex.setDataSource(context, uri, null)
@@ -165,11 +169,11 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
         Log.w(TAG, "No valid video track found in ${clip.uri}")
         lastError = "no video track in ${clip.uri}"
         ex.release()
+        extractor = null
         return false
       }
 
       ex.selectTrack(trackIndex)
-      extractor = ex
 
       // 3. Extract dimensions and rotation metadata
       // Track duration only. MediaExtractor.durationUs() needs API 28 while this app runs on API 24+.
@@ -380,8 +384,12 @@ class HardwareVideoTextureSource : SurfaceTexture.OnFrameAvailableListener {
 
     val lastShownUs = if (lastRenderedPtsUs == Long.MIN_VALUE) lastRequestUs else lastRenderedPtsUs
     val needSeek = lastRequestUs == Long.MIN_VALUE ||
-      // jumped backwards past what is already on screen (tiny ms-rounding wobble must not trigger a seek)
-      targetUs < lastShownUs - frameDurUs ||
+      // any real backward step must seek: a forward-only decoder can never produce an earlier
+      // frame by decoding on. Reversed clips step back exactly one source frame per timeline
+      // frame, so with the old "more than a full frame back" threshold every other reversed
+      // frame was silently replaced by a duplicate of the previous picture. Only sub-half-frame
+      // wobble (ms rounding) stays seek-free.
+      targetUs < lastShownUs - halfWindowUs ||
       // jumped far forward: cheaper to seek than to decode through
       (targetUs - maxOf(lastShownUs, lastRequestUs) > JUMP_SEEK_THRESHOLD_US)
     if (needSeek) {

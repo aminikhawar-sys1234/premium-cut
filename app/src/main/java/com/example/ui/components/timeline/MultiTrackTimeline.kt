@@ -202,6 +202,8 @@ fun MultiTrackTimeline(
   val latestOnScrubProgress by rememberUpdatedState(onScrubProgress)
   val latestOnSeek by rememberUpdatedState(onSeek)
   val latestOnScrubStop by rememberUpdatedState(onScrubStop)
+  val latestZoom by rememberUpdatedState(zoom)
+  val latestCurrentPosMs by rememberUpdatedState(currentPosMs)
 
   // Ends a touch scrub: publishes the final needle time derived from the scroll offset, then stops scrubbing.
   fun finishTouchScrub() {
@@ -333,11 +335,14 @@ fun MultiTrackTimeline(
             modifier = Modifier
               .weight(1f)
               .fillMaxWidth()
-              .pointerInput(totalDuration, msPerPixel, isFrameSnapping, fps, density) {
+              .pointerInput(Unit) {
+                // Keyed on Unit: msPerPixel (a zoom function) restarted this detector on every
+                // zoom tick and aborted any simultaneous drag. Live values come from
+                // rememberUpdatedState above.
                 detectDragGestures(
                   onDragStart = {
                     dragDirectionLocked = null
-                    scrubAccumulatorMs = currentPosMs.toFloat()
+                    scrubAccumulatorMs = latestCurrentPosMs.toFloat()
                   },
                   onDragEnd = {
                     if (dragDirectionLocked == 1) {
@@ -376,11 +381,13 @@ fun MultiTrackTimeline(
                   }
                 )
               }
-              .pointerInput(zoom) {
+              .pointerInput(Unit) {
+                // Keyed on Unit: zoom is written by this very callback, so keying on zoom
+                // cancelled the detector after the first pinch increment. latestZoom is live.
                 detectTransformGestures { _, _, zoomChange, _ ->
                   if (kotlin.math.abs(zoomChange - 1f) > 0.005f) {
                     isPinching = true
-                    onZoomChange((zoom * zoomChange).coerceIn(0.25f, 8.0f))
+                    onZoomChange((latestZoom * zoomChange).coerceIn(0.25f, 8.0f))
                   }
                 }
               }
@@ -1106,6 +1113,9 @@ private fun TimelineRulerHeader(
   val hasVideoClips = remember(timeline) {
     timeline?.videoClips?.isNotEmpty() == true || timeline?.overlayClips?.any { it.isVideo } == true
   }
+  // Live zoom for the pinch callback: keying pointerInput on zoom restarted the detector after
+  // the first increment and killed the rest of the pinch.
+  val latestZoom by rememberUpdatedState(zoom)
   val trackContentWidthDp = (maxTimelineMs / msPerPixel).dp
   val totalRulerWidthDp = trackContentWidthDp + leftPaddingDp + rightPaddingDp
 
@@ -1118,11 +1128,11 @@ private fun TimelineRulerHeader(
     Box(
       modifier = Modifier
         .fillMaxSize()
-        .pointerInput(zoom) {
+        .pointerInput(Unit) {
           detectTransformGestures { _, _, zoomChange, _ ->
             if (kotlin.math.abs(zoomChange - 1f) > 0.005f) {
               onPinchStart()
-              onZoomChange((zoom * zoomChange).coerceIn(0.25f, 8.0f))
+              onZoomChange((latestZoom * zoomChange).coerceIn(0.25f, 8.0f))
             }
           }
         }

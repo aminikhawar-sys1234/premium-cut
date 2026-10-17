@@ -54,6 +54,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import androidx.compose.ui.viewinterop.AndroidView
@@ -201,7 +202,9 @@ fun EditorScreen(
   ) { uri ->
     val clipId = pendingReplaceClipId
     if (uri != null && clipId != null) {
-      coroutineScope.launch {
+      // Dispatchers.Default: extractMetadata (MediaMetadataRetriever) blocks for hundreds of ms
+      // per file - running it on the main dispatcher froze the UI / risked ANRs during import.
+      coroutineScope.launch(Dispatchers.Default) {
         val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(
           context = context,
           sourceUriString = uri.toString(),
@@ -222,7 +225,9 @@ fun EditorScreen(
     contract = ActivityResultContracts.GetMultipleContents()
   ) { uris: List<Uri> ->
     if (uris.isNotEmpty()) {
-      coroutineScope.launch {
+      // Dispatchers.Default: extractMetadata (MediaMetadataRetriever) blocks for hundreds of ms
+      // per file - running it on the main dispatcher froze the UI / risked ANRs during import.
+      coroutineScope.launch(Dispatchers.Default) {
         uris.forEach { uri ->
           try {
             val fileName = try {
@@ -286,7 +291,9 @@ fun EditorScreen(
     contract = ActivityResultContracts.PickMultipleVisualMedia()
   ) { uris: List<Uri> ->
     if (uris.isNotEmpty()) {
-      coroutineScope.launch {
+      // Dispatchers.Default: extractMetadata (MediaMetadataRetriever) blocks for hundreds of ms
+      // per file - running it on the main dispatcher froze the UI / risked ANRs during import.
+      coroutineScope.launch(Dispatchers.Default) {
         uris.forEach { uri ->
           try {
             val fileName = try {
@@ -365,7 +372,9 @@ fun EditorScreen(
     contract = ActivityResultContracts.PickMultipleVisualMedia()
   ) { uris: List<Uri> ->
     if (uris.isNotEmpty()) {
-      coroutineScope.launch {
+      // Dispatchers.Default: extractMetadata (MediaMetadataRetriever) blocks for hundreds of ms
+      // per file - running it on the main dispatcher froze the UI / risked ANRs during import.
+      coroutineScope.launch(Dispatchers.Default) {
         uris.forEach { uri ->
           try {
             val fileName = try {
@@ -421,7 +430,9 @@ fun EditorScreen(
     contract = ActivityResultContracts.GetMultipleContents()
   ) { uris: List<Uri> ->
     if (uris.isNotEmpty()) {
-      coroutineScope.launch {
+      // Dispatchers.Default: extractMetadata (MediaMetadataRetriever) blocks for hundreds of ms
+      // per file - running it on the main dispatcher froze the UI / risked ANRs during import.
+      coroutineScope.launch(Dispatchers.Default) {
         uris.forEach { uri ->
           try {
             val fileName = try {
@@ -493,7 +504,8 @@ fun EditorScreen(
       viewModel.cancelPendingTrackedAttachment()
       return@rememberLauncherForActivityResult
     }
-    coroutineScope.launch {
+    // Dispatchers.Default: blocking media work must not run on the main dispatcher.
+    coroutineScope.launch(Dispatchers.Default) {
       try {
         val fileName = try {
           var result: String? = null
@@ -549,7 +561,8 @@ fun EditorScreen(
       viewModel.cancelPendingTrackedAttachment()
       return@rememberLauncherForActivityResult
     }
-    coroutineScope.launch {
+    // Dispatchers.Default: blocking media work must not run on the main dispatcher.
+    coroutineScope.launch(Dispatchers.Default) {
       try {
         val fileName = uri.lastPathSegment ?: "Overlay Image"
         val persistentPath = com.example.engine.media.MediaPersistenceManager.persistMedia(

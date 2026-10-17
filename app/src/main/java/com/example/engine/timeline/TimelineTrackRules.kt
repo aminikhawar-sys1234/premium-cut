@@ -70,7 +70,20 @@ object TimelineTrackRules {
       clips[i] = clips[i].copy(timelineStartMs = cursor)
       cursor += clips[i].durationMs
     }
-    return timeline.copy(videoClips = clips)
+    // Transitions are index-based (between main clip i and i+1): reordering changes which clips
+    // an index points at, so remap every transition to the moved position of its clip pair and
+    // drop the ones whose clips are no longer adjacent.
+    fun newIndex(old: Int): Int = when {
+      old == fromIndex -> toIndex
+      old < fromIndex -> if (old >= toIndex) old + 1 else old
+      else -> if (old - 1 >= toIndex) old else old - 1
+    }
+    val remapped = timeline.transitions.mapNotNull { tr ->
+      val na = newIndex(tr.clipIndexBefore)
+      val nb = newIndex(tr.clipIndexBefore + 1)
+      if (nb == na + 1) tr.copy(clipIndexBefore = na) else null
+    }
+    return timeline.copy(videoClips = clips, transitions = remapped)
   }
 
   fun mainTrackEndMs(timeline: Timeline): Long? = timeline.videoClips.maxOfOrNull { it.timelineStartMs + it.durationMs }
@@ -104,14 +117,22 @@ object TimelineTrackRules {
   }
 
   /** Shifts clips starting at or after [fromMs] by [deltaMs] on every unlocked track. */
-  fun rippleFrom(timeline: Timeline, fromMs: Long, deltaMs: Long, isLocked: (TrackType) -> Boolean): Timeline {
+  fun rippleFrom(
+    timeline: Timeline,
+    fromMs: Long,
+    deltaMs: Long,
+    isLocked: (TrackType) -> Boolean,
+    /** False when the caller already shifted the main video track itself (e.g. addVideoClip) -
+     *  rippling MAIN_VIDEO again would double-shift every clip from [fromMs] onward. */
+    includeMainVideo: Boolean = true
+  ): Timeline {
     if (deltaMs == 0L) return timeline
     fun <C> List<C>.ripple(type: TrackType, lens: Lens<C>): List<C> =
       if (isLocked(type)) this
       else map { if (lens.start(it) >= fromMs) lens.withStart(it, (lens.start(it) + deltaMs).coerceAtLeast(0L)) else it }
         .sortedBy(lens.start)
     return timeline.copy(
-      videoClips = timeline.videoClips.ripple(TrackType.MAIN_VIDEO, videoLens),
+      videoClips = if (includeMainVideo) timeline.videoClips.ripple(TrackType.MAIN_VIDEO, videoLens) else timeline.videoClips,
       overlayClips = timeline.overlayClips.ripple(TrackType.OVERLAY, videoLens),
       audioClips = timeline.audioClips.ripple(TrackType.AUDIO, audioLens),
       textClips = timeline.textClips.ripple(TrackType.TEXT, textLens),

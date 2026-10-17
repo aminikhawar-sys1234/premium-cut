@@ -869,46 +869,54 @@ class AudioExportProcessor(
                 }
             }
 
+            // Drain loop: INFO_OUTPUT_FORMAT_CHANGED (-2) and INFO_TRY_AGAIN_LATER (-1) are
+            // negative, so the old "while (outIndex >= 0)" loop could never run the format-change
+            // branch and the audio track was never added to the muxer on this path.
             var outIndex = encoder.dequeueOutputBuffer(bufferInfo, TIMEOUT_US)
-            while (outIndex >= 0) {
-                if (outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                    synchronized(muxerLock) {
-                        val trackIdx = muxer.addTrack(encoder.outputFormat)
-                        setAudioTrackIndex(trackIdx)
-                        onMuxerReadyCheck()
-                    }
-                } else if (outIndex >= 0) {
-                    val encoded = encoder.getOutputBuffer(outIndex)
-                    val isEos = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                    if (encoded != null && bufferInfo.size > 0) {
-                        // Same bound as processAudioTrack: the muxer belongs to the video side, and a
-                        // sample that cannot be written because the muxer never started must fail the
-                        // export instead of parking this thread (and with it the export) forever.
-                        val muxerDeadlineMs = System.currentTimeMillis() + MUXER_START_DEADLINE_MS
-                        while (!isMuxerStarted()) {
-                            if (System.currentTimeMillis() > muxerDeadlineMs) {
-                                throw IllegalStateException(
-                                    "The MP4 muxer was not started within ${MUXER_START_DEADLINE_MS}ms; " +
-                                        "the encoded audio could not be written."
-                                )
-                            }
-                            Thread.sleep(5)
-                        }
+            while (true) {
+                when {
+                    outIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
                         synchronized(muxerLock) {
-                            val trackIdx = getAudioTrackIndex()
-                            if (trackIdx >= 0 && isMuxerStarted()) {
-                                try {
-                                    muxer.writeSampleData(trackIdx, encoded, bufferInfo)
-                                } catch (e: Exception) {
-                                    Log.w(TAG, "Safe catch during audio muxer writeSampleData: ${e.message}")
+                            val trackIdx = muxer.addTrack(encoder.outputFormat)
+                            setAudioTrackIndex(trackIdx)
+                            onMuxerReadyCheck()
+                        }
+                        outIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
+                    }
+                    outIndex >= 0 -> {
+                        val encoded = encoder.getOutputBuffer(outIndex)
+                        val eosFrame = (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                        if (encoded != null && bufferInfo.size > 0) {
+                            // Same bound as processAudioTrack: the muxer belongs to the video side, and a
+                            // sample that cannot be written because the muxer never started must fail the
+                            // export instead of parking this thread (and with it the export) forever.
+                            val muxerDeadlineMs = System.currentTimeMillis() + MUXER_START_DEADLINE_MS
+                            while (!isMuxerStarted()) {
+                                if (System.currentTimeMillis() > muxerDeadlineMs) {
+                                    throw IllegalStateException(
+                                        "The MP4 muxer was not started within ${MUXER_START_DEADLINE_MS}ms; " +
+                                            "the encoded audio could not be written."
+                                    )
+                                }
+                                Thread.sleep(5)
+                            }
+                            synchronized(muxerLock) {
+                                val trackIdx = getAudioTrackIndex()
+                                if (trackIdx >= 0 && isMuxerStarted()) {
+                                    try {
+                                        muxer.writeSampleData(trackIdx, encoded, bufferInfo)
+                                    } catch (e: Exception) {
+                                        Log.w(TAG, "Safe catch during audio muxer writeSampleData: ${e.message}")
+                                    }
                                 }
                             }
                         }
+                        encoder.releaseOutputBuffer(outIndex, false)
+                        if (eosFrame) break
+                        outIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
                     }
-                    encoder.releaseOutputBuffer(outIndex, false)
-                    if (isEos) break
+                    else -> break // INFO_TRY_AGAIN_LATER: nothing drained this round
                 }
-                outIndex = encoder.dequeueOutputBuffer(bufferInfo, 0)
             }
         }
     }

@@ -65,7 +65,12 @@ object TimelineSourceEdits {
     val prev = clips[index - 1]
     val clip = clips[index]
     val next = clips[index + 1]
-    val delta = deltaMs.coerceIn(-(prev.durationMs - MIN_SLIDE_NEIGHBOR_MS), next.durationMs - MIN_SLIDE_NEIGHBOR_MS)
+    // coerceIn throws when min > max, which happens whenever a neighbour is shorter than
+    // MIN_SLIDE_NEIGHBOR_MS (or the two limits cross). Order the bounds so short neighbours
+    // simply limit the slide to 0 instead of crashing the gesture.
+    val minDelta = -(prev.durationMs - MIN_SLIDE_NEIGHBOR_MS)
+    val maxDelta = next.durationMs - MIN_SLIDE_NEIGHBOR_MS
+    val delta = deltaMs.coerceIn(minOf(minDelta, maxDelta), maxOf(minDelta, maxDelta))
     val list = clips.toMutableList()
     list[index - 1] = prev.copy(
       durationMs = prev.durationMs + delta,

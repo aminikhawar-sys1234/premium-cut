@@ -88,8 +88,8 @@ import kotlin.math.sqrt
  * All drag events are consumed so parent views never scroll or zoom accidentally.
  */
 suspend fun PointerInputScope.detectElementTouchGestures(
-  rotationDegrees: Float,
-  scale: Float,
+  /** Read once per gesture (not per detector): rotation changes while the detector stays alive. */
+  rotationDegreesProvider: () -> Float,
   parentWidthPx: Float,
   parentHeightPx: Float,
   onSelect: () -> Unit,
@@ -98,13 +98,16 @@ suspend fun PointerInputScope.detectElementTouchGestures(
   onTap: (() -> Unit)? = null,
   onDoubleTap: (() -> Unit)? = null
 ) {
-  val rad = Math.toRadians(rotationDegrees.toDouble())
-  val cosVal = cos(rad).toFloat()
-  val sinVal = sin(rad).toFloat()
-
   var lastTapTime = 0L
 
   awaitEachGesture {
+    // Refresh the rotation for THIS gesture: a rotate handle may have changed it since the
+    // detector (keyed on element identity only) was started.
+    val rotationDegrees = rotationDegreesProvider()
+    val rad = Math.toRadians(rotationDegrees.toDouble())
+    val cosVal = cos(rad).toFloat()
+    val sinVal = sin(rad).toFloat()
+
     val down = awaitFirstDown(requireUnconsumed = false)
 
     var isDrag = false
@@ -258,6 +261,10 @@ fun InteractiveTransformOverlay(
 
     if (parentWidthPx <= 0f || parentHeightPx <= 0f) return@BoxWithConstraints
 
+    // Live playhead for gesture callbacks: a pointerInput detector keyed on element identity only
+    // must not keep using the playhead captured when it (re)started.
+    val currentPosMsState by rememberUpdatedState(currentPosMs)
+
     // 1. Render Active Overlays (PIP / Picture-in-Picture)
     activeOverlays.filter { !it.isHidden }.forEach { overlay ->
       val isSelected = selectedElement is SelectedTrackElement.Overlay &&
@@ -266,6 +273,8 @@ fun InteractiveTransformOverlay(
       val currentOverlay by rememberUpdatedState(overlay)
       val relTime = currentPosMs - overlay.timelineStartMs
       val kf = KeyframeInterpolator.interpolate(overlay, relTime)
+      // Live interpolated transform for gesture math (the detector is not restarted on updates).
+      val currentKf by rememberUpdatedState(kf)
 
       // Base unscaled size
       val baseWidthDp = 160.dp
@@ -301,10 +310,12 @@ fun InteractiveTransformOverlay(
             },
             shape = RoundedCornerShape(8.dp)
           )
-          .pointerInput(overlay.id, kf.rotation, kf.scale, overlay.isLocked) {
+          .pointerInput(overlay.id, overlay.isLocked) {
+            // Keyed on identity only: including kf.rotation/kf.scale here restarted the detector
+            // on every transform callback, so a pinch applied exactly one increment and then died
+            // (the restarted detector waits in awaitFirstDown for a NEW touch).
             detectElementTouchGestures(
-              rotationDegrees = kf.rotation,
-              scale = kf.scale,
+              rotationDegreesProvider = { currentKf.rotation },
               parentWidthPx = parentWidthPx,
               parentHeightPx = parentHeightPx,
               onSelect = {
@@ -313,7 +324,7 @@ fun InteractiveTransformOverlay(
               onMoveDelta = { deltaNormX, deltaNormY ->
                 if (currentOverlay.isLocked) return@detectElementTouchGestures
                 val clip = currentOverlay
-                val rel = currentPosMs - clip.timelineStartMs
+                val rel = currentPosMsState - clip.timelineStartMs
                 val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
                 if (activeKf != null) {
                   val updatedKeyframes = clip.keyframes.map { kfItem ->
@@ -333,7 +344,7 @@ fun InteractiveTransformOverlay(
               },
               onTwoFingerTransform = if (overlay.isLocked) null else { scaleFactor, rotDelta ->
                 val clip = currentOverlay
-                val rel = currentPosMs - clip.timelineStartMs
+                val rel = currentPosMsState - clip.timelineStartMs
                 val activeKf = clip.keyframes.find { abs(it.timeMs - rel) <= 150L }
                 if (activeKf != null) {
                   val updatedKeyframes = clip.keyframes.map { kfItem ->
@@ -541,6 +552,8 @@ fun InteractiveTransformOverlay(
       val baseHeightPx = with(density) { baseHeightDp.toPx() }
 
       val animState = StickerLayerRenderer.evaluateAnimation(sticker, currentPosMs)
+      // Live animated transform for gesture math (detector is not restarted on updates).
+      val currentAnimState by rememberUpdatedState(animState)
 
       val centerXPx = (parentWidthPx / 2f) + (animState.posX * parentWidthPx / 2f)
       val centerYPx = (parentHeightPx / 2f) + (animState.posY * parentHeightPx / 2f)
@@ -562,10 +575,11 @@ fun InteractiveTransformOverlay(
             color = if (isSelected) (if (sticker.isLocked) RedAccent else AmberAccent) else Color.Transparent,
             shape = RoundedCornerShape(12.dp)
           )
-          .pointerInput(sticker.id, animState.rotation, animState.scale, sticker.isLocked) {
+          .pointerInput(sticker.id, sticker.isLocked) {
+            // Identity-only keys (see the overlay detector comment): animState.rotation/.scale
+            // change on every callback and used to restart the detector mid-gesture.
             detectElementTouchGestures(
-              rotationDegrees = animState.rotation,
-              scale = animState.scale,
+              rotationDegreesProvider = { currentAnimState.rotation },
               parentWidthPx = parentWidthPx,
               parentHeightPx = parentHeightPx,
               onSelect = {
@@ -578,7 +592,7 @@ fun InteractiveTransformOverlay(
                     currentSticker,
                     deltaNormX,
                     deltaNormY,
-                    currentPosMs
+                    currentPosMsState
                   )
                 )
               },
@@ -588,7 +602,7 @@ fun InteractiveTransformOverlay(
                     currentSticker,
                     scaleFactor,
                     rotDelta,
-                    currentPosMs
+                    currentPosMsState
                   )
                 )
               },
@@ -705,6 +719,9 @@ fun InteractiveTransformOverlay(
       val currentWidthPx = textBounds.widthPx
       val currentHeightPx = textBounds.heightPx
 
+      // Live measured bounds for gesture math (detector is not restarted on updates).
+      val currentTextBounds by rememberUpdatedState(textBounds)
+
       val currentWidthDp = with(density) { currentWidthPx.toDp() }
       val currentHeightDp = with(density) { currentHeightPx.toDp() }
 
@@ -723,10 +740,11 @@ fun InteractiveTransformOverlay(
           )
           .size(currentWidthDp, currentHeightDp)
           .rotate(textBounds.rotation)
-          .pointerInput(textClip.id, textBounds.rotation, textClip.scale, textClip.isLocked) {
+          .pointerInput(textClip.id, textClip.isLocked) {
+            // Identity-only keys (see the overlay detector comment): textBounds.rotation and
+            // textClip.scale change on every callback and used to restart the detector mid-gesture.
             detectElementTouchGestures(
-              rotationDegrees = textBounds.rotation,
-              scale = textClip.scale,
+              rotationDegreesProvider = { currentTextBounds.rotation },
               parentWidthPx = parentWidthPx,
               parentHeightPx = parentHeightPx,
               onSelect = {
@@ -877,6 +895,16 @@ private fun TextFourCornerControlsBox(
     val rawBrX = centerXPx + (halfW * cos(rad) - (halfH) * sin(rad)).toFloat()
     val rawBrY = centerYPx + (halfW * sin(rad) + (halfH) * cos(rad)).toFloat()
 
+    // Live corner/center positions for the gesture closures: pointerInput(Unit) never restarts,
+    // so its lambdas kept the coordinates captured by the FIRST composition - every drag after
+    // the element moved/scaled/rotated measured against a stale pivot and jumped.
+    val liveCenterXPx by rememberUpdatedState(centerXPx)
+    val liveCenterYPx by rememberUpdatedState(centerYPx)
+    val liveRawBlX by rememberUpdatedState(rawBlX)
+    val liveRawBlY by rememberUpdatedState(rawBlY)
+    val liveRawBrX by rememberUpdatedState(rawBrX)
+    val liveRawBrY by rememberUpdatedState(rawBrY)
+
     // Clamp handle rendering coordinates to visible viewport so buttons are never clipped
     val tlX = rawTlX.coerceIn(minX, maxX)
     val tlY = rawTlY.coerceIn(minY, maxY)
@@ -963,18 +991,18 @@ private fun TextFourCornerControlsBox(
         .pointerInput(Unit) {
           detectDragGestures(
             onDragStart = { offset ->
-              blTouchXPx = rawBlX + offset.x
-              blTouchYPx = rawBlY + offset.y
-              val dx = blTouchXPx - centerXPx
-              val dy = blTouchYPx - centerYPx
+              blTouchXPx = liveRawBlX + offset.x
+              blTouchYPx = liveRawBlY + offset.y
+              val dx = blTouchXPx - liveCenterXPx
+              val dy = blTouchYPx - liveCenterYPx
               blTouchDist = hypot(dx, dy).coerceAtLeast(10f)
             },
             onDrag = { change, dragAmount ->
               change.consume()
               blTouchXPx += dragAmount.x
               blTouchYPx += dragAmount.y
-              val dx = blTouchXPx - centerXPx
-              val dy = blTouchYPx - centerYPx
+              val dx = blTouchXPx - liveCenterXPx
+              val dy = blTouchYPx - liveCenterYPx
               val currentDist = hypot(dx, dy).coerceAtLeast(10f)
 
               if (blTouchDist > 0f) {
@@ -1015,10 +1043,10 @@ private fun TextFourCornerControlsBox(
         .pointerInput(Unit) {
           detectDragGestures(
             onDragStart = { offset ->
-              brTouchXPx = rawBrX + offset.x
-              brTouchYPx = rawBrY + offset.y
-              val dx = brTouchXPx - centerXPx
-              val dy = brTouchYPx - centerYPx
+              brTouchXPx = liveRawBrX + offset.x
+              brTouchYPx = liveRawBrY + offset.y
+              val dx = brTouchXPx - liveCenterXPx
+              val dy = brTouchYPx - liveCenterYPx
               brTouchDist = hypot(dx, dy).coerceAtLeast(10f)
               brTouchAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
             },
@@ -1026,8 +1054,8 @@ private fun TextFourCornerControlsBox(
               change.consume()
               brTouchXPx += dragAmount.x
               brTouchYPx += dragAmount.y
-              val dx = brTouchXPx - centerXPx
-              val dy = brTouchYPx - centerYPx
+              val dx = brTouchXPx - liveCenterXPx
+              val dy = brTouchYPx - liveCenterYPx
 
               val currentDist = hypot(dx, dy).coerceAtLeast(10f)
               val currentAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
@@ -1129,6 +1157,14 @@ private fun TransformHandlesBox(
     val blX = centerXPx + ((-halfW) * cos(rad) - (halfH) * sin(rad)).toFloat()
     val blY = centerYPx + ((-halfW) * sin(rad) + (halfH) * cos(rad)).toFloat()
 
+    // Live corner/center positions for the gesture closures (pointerInput(Unit) never restarts,
+    // so without these every drag after the first one measured against the FIRST composition's
+    // pivot and the scale/rotation jumped erratically).
+    val liveBrX by rememberUpdatedState(brX)
+    val liveBrY by rememberUpdatedState(brY)
+    val liveCenterXPx by rememberUpdatedState(centerXPx)
+    val liveCenterYPx by rememberUpdatedState(centerYPx)
+
     // Convert corners to DP
     val trXDp = with(density) { trX.toDp() }
     val trYDp = with(density) { trY.toDp() }
@@ -1222,10 +1258,10 @@ private fun TransformHandlesBox(
         .pointerInput(Unit) {
           detectDragGestures(
             onDragStart = { offset ->
-              touchPointXPx = brX + offset.x
-              touchPointYPx = brY + offset.y
-              val dx = touchPointXPx - centerXPx
-              val dy = touchPointYPx - centerYPx
+              touchPointXPx = liveBrX + offset.x
+              touchPointYPx = liveBrY + offset.y
+              val dx = touchPointXPx - liveCenterXPx
+              val dy = touchPointYPx - liveCenterYPx
               lastTouchDist = hypot(dx, dy).coerceAtLeast(10f)
               lastTouchAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()
             },
@@ -1233,8 +1269,8 @@ private fun TransformHandlesBox(
               change.consume()
               touchPointXPx += dragAmount.x
               touchPointYPx += dragAmount.y
-              val dx = touchPointXPx - centerXPx
-              val dy = touchPointYPx - centerYPx
+              val dx = touchPointXPx - liveCenterXPx
+              val dy = touchPointYPx - liveCenterYPx
 
               val currentDist = hypot(dx, dy).coerceAtLeast(10f)
               val currentAngle = Math.toDegrees(atan2(dy.toDouble(), dx.toDouble())).toFloat()

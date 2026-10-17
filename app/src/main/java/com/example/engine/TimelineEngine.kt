@@ -711,10 +711,12 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
 
   // --- Video Clip Operations ---
 
-  fun rippleDownstreamClips(fromTimeMs: Long, deltaMs: Long) {
+  fun rippleDownstreamClips(fromTimeMs: Long, deltaMs: Long, includeMainVideo: Boolean = true) {
     withStateLock {
       if (deltaMs == 0L) return
-      _timeline.value = TimelineTrackRules.rippleFrom(_timeline.value, fromTimeMs, deltaMs, ::isTrackLocked)
+      _timeline.value = TimelineTrackRules.rippleFrom(
+        _timeline.value, fromTimeMs, deltaMs, ::isTrackLocked, includeMainVideo
+      )
     }
   }
 
@@ -922,8 +924,12 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     currentClips.add(newClip)
     currentClips.sortBy { it.timelineStartMs }
 
-    if (_isTracksSyncEnabled.value && insertionMode == InsertionMode.RIPPLE && startMs > 0L && startMs < currentMaxEnd) {
-      rippleDownstreamClips(fromTimeMs = startMs, deltaMs = alignedDuration)
+    // Companion tracks must follow the manual main-video shift above. The video lane itself is
+    // NOT re-rippled (includeMainVideo = false) - it was already shifted, and doing it twice made
+    // every clip from the insert point jump by 2x. There is also no startMs > 0 special case:
+    // companion clips starting at t=0 must shift just like they do for any other insert point.
+    if (_isTracksSyncEnabled.value && insertionMode == InsertionMode.RIPPLE && startMs < currentMaxEnd) {
+      rippleDownstreamClips(fromTimeMs = startMs, deltaMs = alignedDuration, includeMainVideo = false)
     }
 
     _timeline.value = _timeline.value.copy(videoClips = currentClips)
@@ -2117,15 +2123,22 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     } else if (selected is SelectedTrackElement.Overlay) {
       val clip = _timeline.value.overlayClips.find { it.id == selected.clipId } ?: return false
       recordHistory()
+      val playhead = _currentPositionMs.value
+      // Source position must go through timelineToSourceMs: a raw timeline offset ignores the
+      // clip's speed / speed curve / reverse, freezing the wrong frame whenever speed != 1.
+      val freezeSource = clip.timelineToSourceMs(playhead)
       val freezeClip = VideoClip(
         id = UUID.randomUUID().toString(),
         uri = clip.uri,
         name = "${clip.name} (Freeze)",
         isVideo = false,
-        timelineStartMs = _currentPositionMs.value,
+        timelineStartMs = playhead,
         durationMs = freezeDurationMs,
-        sourceStartMs = (_currentPositionMs.value - clip.timelineStartMs).coerceAtLeast(0L),
-        sourceEndMs = (_currentPositionMs.value - clip.timelineStartMs).coerceAtLeast(0L),
+        sourceStartMs = freezeSource,
+        sourceEndMs = freezeSource + 1L,
+        speed = 1.0f,
+        isReversed = false,
+        speedCurve = SpeedCurve(),
         cropScale = clip.cropScale,
         cropOffsetX = clip.cropOffsetX,
         cropOffsetY = clip.cropOffsetY,
@@ -2453,12 +2466,9 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
       return true
     }
 
-    // Fallback if targetId wasn't matched explicitly
-    val fallbackVideoClips = _timeline.value.videoClips.map { clip ->
-      clip.copy(volume = clampedVol, isMuted = clampedVol == 0f)
-    }
-    _timeline.value = _timeline.value.copy(videoClips = fallbackVideoClips)
-    return true
+    // Target matched no video/overlay/audio clip (e.g. a text or sticker selection):
+    // do nothing instead of silently rewriting the volume of every video clip.
+    return false
   }
 
   // --- Masking, Blending, Speed Curves & Audio Effects ---
@@ -2754,13 +2764,9 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
       return true
     }
 
-    val fallbackVideoClips = _timeline.value.videoClips.map { clip ->
-      val newMute = !clip.isMuted
-      val newVol = if (newMute) clip.volume else (if (clip.volume == 0f) 1.0f else clip.volume)
-      clip.copy(isMuted = newMute, volume = newVol)
-    }
-    _timeline.value = _timeline.value.copy(videoClips = fallbackVideoClips)
-    return true
+    // Target matched no video/overlay/audio clip (e.g. a text or sticker selection):
+    // do nothing instead of silently muting/unmuting every video clip.
+    return false
   }
 
   fun increaseClipVolume(clipId: String? = null, step: Float = 0.10f): Boolean {
@@ -5907,6 +5913,7 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
 
   /**
    * Professional NLE Roll Edit: Adjusts the edit point between two adjacent clips on the same track.
+   * The source windows move with the cut so the timeline duration keeps matching the source span.
    */
   fun rollEditClip(clipAId: String, clipBId: String, deltaMs: Long): Boolean = withStateLock {
     if (isTrackLocked(TrackType.MAIN_VIDEO)) return@withStateLock false
@@ -5914,18 +5921,68 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
     val clipA = cur.videoClips.firstOrNull { it.id == clipAId } ?: return@withStateLock false
     val clipB = cur.videoClips.firstOrNull { it.id == clipBId } ?: return@withStateLock false
     if (clipA.trackIndex != clipB.trackIndex) return@withStateLock false
+    // Roll only makes sense for directly adjacent clips sharing the cut point; touching a
+    // non-adjacent pair would silently corrupt both clips' timings.
+    if (clipA.timelineStartMs + clipA.durationMs != clipB.timelineStartMs) return@withStateLock false
     recordHistory(TimelineActionType.TRIM_RIGHT, "Roll Edit", setOf(clipAId, clipBId))
 
     val newDurationA = (clipA.durationMs + deltaMs).coerceAtLeast(100L)
-    val actualDelta = newDurationA - clipA.durationMs
+    val newDurationB = (clipB.durationMs - (newDurationA - clipA.durationMs)).coerceAtLeast(100L)
+    var actualDelta = clipB.durationMs - newDurationB
+
+    // Keep the source windows in sync with the timeline change and inside the available media.
+    // "growing" reads the room on the side the cut maps to: for clipA (non-reversed) that is the
+    // window END, for clipB (non-reversed) the window START. Speed ramps are compared with the
+    // constant-speed integral (duration * speed); the window width change is the same either way.
+    fun mediaRoomAtCutSide(clip: VideoClip, growing: Boolean): Long {
+      val media = clip.totalMediaDurationMs
+      return when {
+        !clip.isReversed && growing -> (media - clip.sourceEndMs).coerceAtLeast(0L)
+        !clip.isReversed && !growing -> clip.sourceStartMs.coerceAtLeast(0L)
+        clip.isReversed && growing -> clip.sourceStartMs.coerceAtLeast(0L)
+        else -> (media - clip.sourceEndMs).coerceAtLeast(0L)
+      }
+    }
+    actualDelta = when {
+      actualDelta > 0 && clipA.speed > 0f -> {
+        // A grows into B's head: A's cut side is its source window end (start when reversed).
+        val maxBySource = (mediaRoomAtCutSide(clipA, growing = true) / clipA.speed).toLong()
+        minOf(actualDelta, maxBySource)
+      }
+      actualDelta < 0 && clipB.speed > 0f -> {
+        // B grows into A's tail: B's cut side is its source window start (end when reversed).
+        val maxBySource = (mediaRoomAtCutSide(clipB, growing = false) / clipB.speed).toLong()
+        maxOf(actualDelta, -maxBySource)
+      }
+      else -> actualDelta
+    }
+    if (actualDelta == 0L) return@withStateLock false
+
+    val finalDurationA = clipA.durationMs + actualDelta
+    val finalDurationB = clipB.durationMs - actualDelta
+    val sourceShiftA = (actualDelta * clipA.speed).toLong()
+    val sourceShiftB = (actualDelta * clipB.speed).toLong()
 
     val updatedVideoClips = cur.videoClips.map { clip ->
       when (clip.id) {
-        clipAId -> clip.copy(durationMs = newDurationA)
-        clipBId -> clip.copy(
-          timelineStartMs = clip.timelineStartMs + actualDelta,
-          durationMs = (clip.durationMs - actualDelta).coerceAtLeast(100L)
-        )
+        clipAId -> if (clipA.isReversed) {
+          clip.copy(durationMs = finalDurationA, sourceStartMs = clip.sourceStartMs - sourceShiftA)
+        } else {
+          clip.copy(durationMs = finalDurationA, sourceEndMs = clip.sourceEndMs + sourceShiftA)
+        }
+        clipBId -> if (clipB.isReversed) {
+          clip.copy(
+            timelineStartMs = clip.timelineStartMs + actualDelta,
+            durationMs = finalDurationB,
+            sourceEndMs = clip.sourceEndMs - sourceShiftB
+          )
+        } else {
+          clip.copy(
+            timelineStartMs = clip.timelineStartMs + actualDelta,
+            durationMs = finalDurationB,
+            sourceStartMs = clip.sourceStartMs + sourceShiftB
+          )
+        }
         else -> clip
       }
     }
@@ -5934,17 +5991,31 @@ class TimelineEngine : com.example.engine.integration.UnifiedAdvancedTimeline {
   }
 
   /**
-   * Professional NLE Slip Edit: Shifts the source media range inside a clip without changing timeline position.
+   * Professional NLE Slip Edit: Shifts the source media range inside a clip without changing timeline
+   * position. The whole window translates (start AND end) and is clamped to the available media.
    */
   fun slipEditClip(clipId: String, sourceDeltaMs: Long): Boolean = withStateLock {
     if (isTrackLocked(TrackType.MAIN_VIDEO)) return@withStateLock false
     val cur = _timeline.value
     val clip = cur.videoClips.firstOrNull { it.id == clipId } ?: return@withStateLock false
+    if (sourceDeltaMs == 0L) return@withStateLock false
     recordHistory(TimelineActionType.TRIM_LEFT, "Slip Edit", setOf(clipId))
 
-    val newSourceStart = (clip.sourceStartMs + sourceDeltaMs).coerceAtLeast(0L)
+    // Translate the whole source window (a slip must not change the window's width).
+    val lo = minOf(clip.sourceStartMs, clip.sourceEndMs)
+    val hi = maxOf(clip.sourceStartMs, clip.sourceEndMs)
+    val media = clip.totalMediaDurationMs
+    // Clamp so the translated window stays inside [0, media] without shrinking it.
+    val clampedDelta = when {
+      sourceDeltaMs > 0 -> minOf(sourceDeltaMs, (media - hi).coerceAtLeast(0L))
+      else -> maxOf(sourceDeltaMs, -lo)
+    }
+    if (clampedDelta == 0L) return@withStateLock false
+
     val updatedVideoClips = cur.videoClips.map { c ->
-      if (c.id == clipId) c.copy(sourceStartMs = newSourceStart) else c
+      if (c.id == clipId) {
+        c.copy(sourceStartMs = c.sourceStartMs + clampedDelta, sourceEndMs = c.sourceEndMs + clampedDelta)
+      } else c
     }
     _timeline.value = cur.copy(videoClips = updatedVideoClips)
     true

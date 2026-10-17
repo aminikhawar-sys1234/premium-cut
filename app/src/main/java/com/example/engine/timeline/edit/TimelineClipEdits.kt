@@ -5,6 +5,7 @@ import com.example.engine.timeline.CompoundClipOps
 import com.example.domain.model.TrackType
 import com.example.engine.timeline.ClipTrimMath
 import com.example.engine.timeline.ClipView
+import com.example.engine.timeline.TimelineRangeOps
 import com.example.engine.timeline.TimelineTrackManager
 import com.example.engine.timeline.clipView
 import com.example.engine.timeline.withClipRange
@@ -166,13 +167,19 @@ object TimelineClipEdits {
 
   fun normalDelete(timeline: Timeline, clipIds: Set<String>): Timeline? {
     if (clipIds.isEmpty()) return null
-    val newVideo = if (!isTrackLocked(timeline, TrackType.MAIN_VIDEO)) timeline.videoClips.filterNot { it.id in clipIds } else timeline.videoClips
+    val mainLocked = isTrackLocked(timeline, TrackType.MAIN_VIDEO)
+    val newVideo = if (!mainLocked) timeline.videoClips.filterNot { it.id in clipIds } else timeline.videoClips
     val newOverlay = if (!isTrackLocked(timeline, TrackType.OVERLAY)) timeline.overlayClips.filterNot { it.id in clipIds } else timeline.overlayClips
     val newAudio = if (!isTrackLocked(timeline, TrackType.AUDIO)) timeline.audioClips.filterNot { it.id in clipIds } else timeline.audioClips
     val newText = if (!isTrackLocked(timeline, TrackType.TEXT)) timeline.textClips.filterNot { it.id in clipIds } else timeline.textClips
     val newSticker = if (!isTrackLocked(timeline, TrackType.STICKER)) timeline.stickerClips.filterNot { it.id in clipIds } else timeline.stickerClips
     val newEffect = if (!isTrackLocked(timeline, TrackType.EFFECT)) timeline.effectClips.filterNot { it.id in clipIds } else timeline.effectClips
-    val validTransitions = timeline.transitions.filter { it.clipIndexBefore < (newVideo.size - 1).coerceAtLeast(0) }
+    // Transitions are index-based: deleting main clips shifts every later cut, so the survivors
+    // must be re-indexed (and transitions touching a removed clip dropped), not just filtered.
+    val removedMain = if (!mainLocked) {
+      timeline.videoClips.mapIndexedNotNull { idx, clip -> if (clip.id in clipIds) idx else null }.toSet()
+    } else emptySet()
+    val validTransitions = TimelineRangeOps.reindexTransitions(timeline.transitions, removedMain)
     return CompoundClipOps.droppingOrphanCompounds(
       timeline.copy(
         videoClips = newVideo,
@@ -241,7 +248,12 @@ object TimelineClipEdits {
       { it.id }, { it.timelineStartMs }, { it.durationMs },
       { c, start -> c.copy(timelineStartMs = start) }, { it.timelineStartMs }
     )
-    val validTransitions = timeline.transitions.filter { it.clipIndexBefore < (newVideo.size - 1).coerceAtLeast(0) }
+    // Transitions are index-based: ripple-deleting main clips shifts every later cut, so the
+    // survivors must be re-indexed (and transitions touching a removed clip dropped).
+    val removedMain = if (!isTrackLocked(timeline, TrackType.MAIN_VIDEO)) {
+      timeline.videoClips.mapIndexedNotNull { idx, clip -> if (clip.id in clipIds) idx else null }.toSet()
+    } else emptySet()
+    val validTransitions = TimelineRangeOps.reindexTransitions(timeline.transitions, removedMain)
     return CompoundClipOps.droppingOrphanCompounds(
       timeline.copy(
         videoClips = newVideo,

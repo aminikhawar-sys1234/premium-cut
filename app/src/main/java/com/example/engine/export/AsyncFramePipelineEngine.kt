@@ -223,6 +223,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
   private val userCancelled = AtomicBoolean(false)
   private val exportRunning = AtomicBoolean(false)
   private val cleanupPending = AtomicBoolean(false)
+  /** True once the current attempt has produced a validated output file (reset at attempt start). */
+  @Volatile private var attemptSucceeded = false
   @Volatile private var currentStop: AtomicBoolean? = null
   private val composition = VideoCompositionEngine(context)
   private val audioProcessor = AudioExportProcessor(context)
@@ -349,6 +351,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
       if (cleanupPending.get()) {
         throw ExportPipelineException("Previous GPU export cleanup is still pending; wait or restart the editor.", retryable = false)
       }
+      // Set once the attempt has produced a validated file. Lets the finally block tell a
+      // "teardown was slow" apart from a real failure without throwing out of the finally block
+      // (a throw from finally replaces the attempt's own result or exception).
+      attemptSucceeded = false
       userCancelled.set(false)
       stallFailure = null
       lastFrameSubmittedMs = 0L
@@ -1793,6 +1799,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
           "(${String.format(Locale.US, "%.2f", realtimeSpeed)}x realtime) | ${metrics.describe()}"
       )
       ExportDiagnostics.finished(outputFile.absolutePath, exportWidth, exportHeight, durationMs, outputFile.length())
+      attemptSucceeded = true
       return outputFile
     } finally {
       stop.set(true)
@@ -1853,11 +1860,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
           "Export teardown timed out; cleanup deferred on render thread, retries disabled " +
             "(renderStopped=$renderStopped drainStopped=$drainStopped phase=$currentPhase)"
         )
-        throw ExportPipelineException(
-          "GPU/codec teardown timed out after the export was in '${currentPhase.label}' " +
-            "(${currentPhase.detail}); export aborted safely. Check Logcat for the stalled worker.",
-          retryable = false
-        )
+        // Never throw from finally: it would (a) discard a fully rendered, validated file when
+        // cleanup was merely slow, or (b) mask the attempt's real failure with this generic
+        // message. cleanupPending stays true, so the NEXT export is blocked until the deferred
+        // GL-thread cleanup actually completes - which is the safe behaviour.
+        if (attemptSucceeded) {
+          Log.w(tag, "Keeping the finished export despite the deferred cleanup (cleanupPending=true)")
+        }
       }
     }
   }
@@ -1952,7 +1961,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
   private fun formatGlErrors(errors: List<Int>): String =
     errors.joinToString(prefix = "[", postfix = "]") { "0x${Integer.toHexString(it)}" }
 
-  private val fallbackRetrievers = mutableMapOf<String, MediaMetadataRetriever>()
+  // Concurrent: written by the AH-StillFrame worker (getOrPut) and cleared by the GL-thread
+  // cleanup task. A plain HashMap corrupted under that race (lost entries / CME / resize loops).
+  private val fallbackRetrievers = java.util.concurrent.ConcurrentHashMap<String, MediaMetadataRetriever>()
 
   /**
    * Policy of the still-frame fallback for the current attempt (see [ExportFallbackBudget]): every
@@ -2003,6 +2014,11 @@ class AsyncFramePipelineEngine(private val context: Context) {
       bitmap
     } catch (_: java.util.concurrent.TimeoutException) {
       future.cancel(true)
+      // Retire the retriever from the shared map BEFORE cleanup runs: the timed-out worker is
+      // abandoned inside native getFrameAtTime and cannot be interrupted, so cleanup releasing
+      // this retriever would be a use-after-free. The retriever is held until process exit
+      // instead (same policy as abandoned codecs).
+      fallbackRetrievers.remove(clip.uri)
       val retired = budget.recordCall(clip.id, budget.perCallDeadlineMs, timedOut = true)
       // The worker is inside native code and cannot be interrupted. Drop the executor so a later
       // clip's retriever call is not queued behind it; the clip itself is retired below.

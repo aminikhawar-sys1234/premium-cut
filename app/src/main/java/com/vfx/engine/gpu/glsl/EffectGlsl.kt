@@ -113,6 +113,8 @@ uniform vec3 u_shadows;
 uniform vec3 u_midtones;
 uniform vec3 u_highlights;
 uniform float u_preserveLuma;
+// Declared before use: GLSL requires functions to be defined before they are called.
+float l0Guard(float l){ return l; }
 vec4 process(vec4 c, vec2 uv){
     float l = luma709(c.rgb);
     float sw = pow(1.0 - l, 2.0);
@@ -125,8 +127,7 @@ vec4 process(vec4 c, vec2 uv){
     }
     c.rgb = adj;
     return c;
-}
-float l0Guard(float l){ return l; }"""
+}"""
 
     const val CHANNEL_MIXER = """
 uniform vec3 u_rowR;

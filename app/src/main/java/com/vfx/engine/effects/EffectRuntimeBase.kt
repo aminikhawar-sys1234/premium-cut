@@ -81,7 +81,10 @@ open class SinglePassRuntime(
         }
         val es3b = ctx.caps.glesMajor >= 3
         val combine = ctx.programs.get("mask.combine", ShaderTemplate.vertex(es3b),
-            ShaderTemplate.fragment(es3b, EffectGlsl.MASK_COMBINE, chunkExtras = ShaderChunks.BLEND))
+            // MASK_COMBINE calls sdRoundBox/sdBox (MASK_SDF chunk) and blendComposite (BLEND chunk);
+            // both chunks must be present or the program can never link.
+            ShaderTemplate.fragment(es3b, EffectGlsl.MASK_COMBINE,
+                chunkExtras = ShaderChunks.BLEND + "\n" + ShaderChunks.MASK_SDF))
         builder.addSecondaryInput("u_effect", effOut)
         if (mask is Mask.Texture)
             builder.addSecondaryInput("u_maskTex",

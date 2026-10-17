@@ -391,6 +391,21 @@ class GpuCompositionRenderer(private val context: Context) {
     programEffect = GlShaderUtil.createProgram(GpuShaders.VERTEX_SHADER, GpuShaders.EFFECT_FRAGMENT_SHADER)
     programBlit = GlShaderUtil.createProgram(GpuShaders.ENCODER_BLIT_VERTEX_SHADER, GpuShaders.BLIT_FRAGMENT_SHADER)
 
+    // A failed program must never fail silently: blitToSurface draws nothing when its program is 0,
+    // which used to look exactly like the "healthy report, black export" defect class.
+    val failedPrograms = buildList {
+      if (program2D == 0) add("program2D")
+      if (programOes == 0) add("programOes")
+      if (programTransition == 0) add("programTransition")
+      if (programEffect == 0) add("programEffect")
+      if (programBlit == 0) add("programBlit")
+      if (programStab2D == 0) add("programStab2D")
+      if (programStabOes == 0) add("programStabOes")
+    }
+    if (failedPrograms.isNotEmpty()) {
+      Log.e(TAG, "initGl: shader program creation failed for $failedPrograms - output will be black")
+    }
+
     isInitialized = true
   }
 
@@ -1477,7 +1492,7 @@ class GpuCompositionRenderer(private val context: Context) {
         )
       },
       grainSeed = (frame.clipSourcePosMs % 10000L).toFloat() / 1000f,
-      isBaseLayer = false
+      isBaseLayer = true
     )
 
     val scissorTransition = transitionClipStart >= 0f && transitionClipEnd > transitionClipStart
@@ -1698,7 +1713,10 @@ class GpuCompositionRenderer(private val context: Context) {
         overlay.clip.motionTrackJson,
         overlay.sourcePosMs * 1000L
       ),
-      grainSeed = (overlay.sourcePosMs % 10000L).toFloat() / 1000f
+      grainSeed = (overlay.sourcePosMs % 10000L).toFloat() / 1000f,
+      // Contract (bindCommonUniforms): true only for the main picture. An overlay must never bake
+      // the shared chroma background texture - it would move and scale with the overlay's matrix.
+      isBaseLayer = false
     )
 
     drawQuad(program)
@@ -2141,17 +2159,17 @@ class GpuCompositionRenderer(private val context: Context) {
         )
 
         // Background: 0 transparent, 1 solid colour, 2 image / video frame (already a 2D texture).
-        val wantsTexture = isBaseLayer &&
-          ChromaKeyResolver.backgroundModeId(chromaKey) == ChromaKeyResolver.BACKGROUND_MODE_TEXTURE
-        val bgMode = if (wantsTexture && chromaBackgroundTextureId > 0) {
-          ChromaKeyResolver.BACKGROUND_MODE_TEXTURE
-        } else {
-          if (wantsTexture) {
+        val requestedMode = ChromaKeyResolver.backgroundModeId(chromaKey)
+        val wantsTexture = isBaseLayer && requestedMode == ChromaKeyResolver.BACKGROUND_MODE_TEXTURE
+        val bgMode = when {
+          wantsTexture && chromaBackgroundTextureId > 0 -> ChromaKeyResolver.BACKGROUND_MODE_TEXTURE
+          wantsTexture -> {
             // No background texture available: a transparent key is honest, a black frame is not.
             0
-          } else {
-            ChromaKeyResolver.backgroundModeId(chromaKey)
           }
+          // Overlays must not sample the main layer's background texture; fall back to transparency.
+          !isBaseLayer && requestedMode == ChromaKeyResolver.BACKGROUND_MODE_TEXTURE -> 0
+          else -> requestedMode
         }
         GLES20.glUniform1i(GLES20.glGetUniformLocation(program, "uChromaBgType"), bgMode)
         val bgColor = chromaKey.backgroundColor.toInt()
@@ -2365,6 +2383,14 @@ class GpuCompositionRenderer(private val context: Context) {
     if (programBlit != 0) {
       GLES20.glDeleteProgram(programBlit)
       programBlit = 0
+    }
+    if (programStab2D != 0) {
+      GLES20.glDeleteProgram(programStab2D)
+      programStab2D = 0
+    }
+    if (programStabOes != 0) {
+      GLES20.glDeleteProgram(programStabOes)
+      programStabOes = 0
     }
 
     isInitialized = false

@@ -30,12 +30,17 @@ object GlShaderUtil {
     if (vertexShader == 0) return 0
 
     val pixelShader = loadShader(GLES20.GL_FRAGMENT_SHADER, fragmentSource)
-    if (pixelShader == 0) return 0
+    if (pixelShader == 0) {
+      GLES20.glDeleteShader(vertexShader)
+      return 0
+    }
 
     var program = GLES20.glCreateProgram()
     checkGlError("glCreateProgram")
     if (program == 0) {
       Log.e(TAG, "Could not create program")
+      GLES20.glDeleteShader(vertexShader)
+      GLES20.glDeleteShader(pixelShader)
       return 0
     }
     GLES20.glAttachShader(program, vertexShader)
@@ -51,6 +56,11 @@ object GlShaderUtil {
       GLES20.glDeleteProgram(program)
       program = 0
     }
+    // Flagged for deletion: the objects stay alive while attached to the program and are freed
+    // automatically when the program is deleted. Without this, two shader objects leaked per
+    // program creation (and initGl re-creates 7 programs after every context loss).
+    GLES20.glDeleteShader(vertexShader)
+    GLES20.glDeleteShader(pixelShader)
     return program
   }
 
