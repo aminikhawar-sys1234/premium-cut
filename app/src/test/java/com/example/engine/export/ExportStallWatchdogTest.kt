@@ -36,7 +36,9 @@ class ExportStallWatchdogTest {
     sinceLastFrameSubmittedMs: Long = -1L,
     sinceLastEncodedMs: Long = -1L,
     swapPending: Boolean = false,
-    paused: Boolean = false
+    paused: Boolean = false,
+    awaitingAudioMix: Boolean = false,
+    sinceAudioPipelineProgressMs: Long = -1L
   ) = ExportStallWatchdog.Heartbeat(
     phase = phase,
     attemptElapsedMs = attemptElapsedMs,
@@ -48,7 +50,9 @@ class ExportStallWatchdogTest {
     sinceLastFrameSubmittedMs = sinceLastFrameSubmittedMs,
     sinceLastEncodedMs = sinceLastEncodedMs,
     swapPending = swapPending,
-    paused = paused
+    paused = paused,
+    awaitingAudioMix = awaitingAudioMix,
+    sinceAudioPipelineProgressMs = sinceAudioPipelineProgressMs
   )
 
   // ------------------------------------------------------------------ the reported state
