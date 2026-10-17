@@ -299,6 +299,22 @@ class AsyncFramePipelineEngine(private val context: Context) {
     private set
 
   /**
+   * `System.currentTimeMillis()` of the background audio path's last observable progress (a mix
+   * chunk or an audio-feed batch). Read by the audio-feed await and the watchdog's backpressure
+   * rule; the video frame clock says nothing about this path once the mix runs beside the encode.
+   */
+  @Volatile var lastAudioPipelineProgressMs: Long = 0L
+    private set
+
+  /**
+   * Non-zero while the drain thread is intentionally throttling the video encoder because the
+   * muxer is waiting for the audio track (background PCM mix/encode still running). Switches the
+   * watchdog from the frame clock to [lastAudioPipelineProgressMs] for that window.
+   */
+  @Volatile var audioBackpressureSinceMs: Long = 0L
+    private set
+
+  /**
    * Set when the stall watchdog abandoned the attempt. The export thread reads it and fails with
    * this exact message (rather than spinning on a worker that will never return).
    */
@@ -347,6 +363,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
     if (!exportRunning.compareAndSet(false, true)) {
       throw ExportPipelineException("An export is already running on this engine.", retryable = false)
     }
+    // Attempt-failure cancel for the audio-mix thread, separate from userCancelled: the mix thread
+    // is a daemon that only observed user cancellation, so after a non-cancel attempt failure it
+    // kept decoding/mixing the whole timeline in the background (minutes of CPU/IO and the ~115MB
+    // PCM of a 10-minute project held until it finished). Declared OUTSIDE the try so the finally
+    // block can stop the mix on EVERY exit path (success, failure, cancellation).
+    val mixCancelled = AtomicBoolean(false)
     try {
       if (cleanupPending.get()) {
         throw ExportPipelineException("Previous GPU export cleanup is still pending; wait or restart the editor.", retryable = false)
@@ -386,8 +408,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
                 audioProcessor.mixTimelineAudio(
                   timeline = timeline,
                   totalDurationMs = durationMs,
-                  isCancelled = { userCancelled.get() },
-                  onProgress = { fraction -> reportPhaseFraction(fraction) }
+                  isCancelled = { userCancelled.get() || mixCancelled.get() },
+                  onProgress = { fraction ->
+                    // Liveness of the background audio path (read by the audio-feed await and the
+                    // watchdog's backpressure rule), as well as the phase fraction.
+                    lastAudioPipelineProgressMs = System.currentTimeMillis()
+                    reportPhaseFraction(fraction)
+                  }
                 )
               }
             )
@@ -406,7 +433,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       // Pick codec/size/fps/bitrate the device encoder really supports (4K degrades gracefully).
       val firstPlan = ExportEncoderPlanner.plan(config, requestedWidth, requestedHeight, requestedFps)
-      val attempts = buildAttempts(firstPlan)
+      // Mutable: a black output on the LAST entry of the ladder still gets its dedicated
+      // Kotlin-compositor retry (one synthetic extra attempt) instead of silently ending the loop.
+      val attempts = buildAttempts(firstPlan).toMutableList()
 
       checkUserCancelled()
       val audioSampleRate = 48000
@@ -456,6 +485,14 @@ class AsyncFramePipelineEngine(private val context: Context) {
               throw t
             }
             Log.w(tag, "Black output on attempt $attemptNo; retrying with the fallback compositor")
+            // The dedicated Kotlin-compositor retry must actually exist: if the black output
+            // landed on the last ladder entry, `continue` would end the loop with the fallback
+            // never run and the real black-frame reason wrapped away as a generic failure.
+            // Clone the current plan once so the next attempt number flips the compositor.
+            if (index == attempts.size - 1) {
+              attempts += plan
+              Log.i(tag, "Black output on the last encoder plan; adding one Kotlin-compositor retry")
+            }
             continue
           }
           val retryable = (t as? ExportPipelineException)?.retryable ?: true
@@ -466,6 +503,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
       throw if (root is ExportPipelineException && !root.retryable) root
       else ExportPipelineException("Video export failed: ${root?.message ?: "unknown error"}", root)
     } finally {
+      // Stop the mix thread on every exit path (success, failure, cancellation). On success the
+      // mix already finished (its latch was awaited), so this is a no-op there.
+      mixCancelled.set(true)
       exportRunning.set(false)
     }
   }
@@ -720,7 +760,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
       sinceLastFrameSubmittedMs = if (lastFrameSubmittedMs > 0L) now - lastFrameSubmittedMs else -1L,
       sinceLastEncodedMs = if (lastEncodedSampleMs > 0L) now - lastEncodedSampleMs else -1L,
       swapPending = swapPending.get(),
-      paused = isPaused()
+      paused = isPaused(),
+      awaitingAudioMix = audioBackpressureSinceMs > 0L,
+      sinceAudioPipelineProgressMs =
+        if (lastAudioPipelineProgressMs > 0L) now - lastAudioPipelineProgressMs else -1L
     )
   }
 
@@ -748,6 +791,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
     attemptStartedMs = System.currentTimeMillis()
     lastFrameSubmittedMs = 0L
     lastEncodedSampleMs = 0L
+    lastAudioPipelineProgressMs = System.currentTimeMillis()
+    audioBackpressureSinceMs = 0L
     enterPhase(ExportPhase.LOADING_ASSETS)
     // Wall clock from here to the first encoded frame: the UI shows the preparation state for that
     // whole stretch, so its length is worth a log line (see the "audio-mix" / "preroll" stages).
@@ -793,6 +838,9 @@ class AsyncFramePipelineEngine(private val context: Context) {
     val decoders = mutableMapOf<String, HardwareClipDecoder>()
     val imageBitmaps = mutableMapOf<String, Bitmap>()
     val imageTextures = mutableMapOf<String, Int>()
+    // Owned by THIS attempt (see StillFrameFallback): engine-level state was released by this
+    // attempt's async cleanup while the next attempt was already using it.
+    val stillFrames = StillFrameFallback()
 
     try {
       // 1. Pre-load images (clamped to export resolution to avoid texture bloat). Chroma-key background
@@ -911,35 +959,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
       failure.get()?.let { throw wrap("GPU initialization failed", it) }
 
-      // Audio mix runs in parallel with encoder/EGL setup. Wait here so the 5% screen is not
-      // blocked on PCM decode before the GPU pipeline is even opened.
-      //
-      // The wait is stall-aware now: the watchdogs below judge the mix phase by its own per-chunk
-      // progress, so a mix that stops moving (a hung decoder, a device thrashing) is reported with
-      // the phase name instead of holding the export thread on a latch forever.
-      enterPhase(ExportPhase.MIXING_AUDIO)
-      val mixWaitStartMs = System.currentTimeMillis()
-      while (!mixLatch.await(1, TimeUnit.SECONDS)) {
-        stallFailure?.let { throw it }
-        checkUserCancelled()
-        val waitedMs = System.currentTimeMillis() - mixWaitStartMs
-        if (waitedMs > phaseBudget(ExportPhase.MIXING_AUDIO).hardMs) {
-          throw ExportPipelineException(
-            "Timed out mixing timeline audio after ${ExportStallWatchdog.seconds(waitedMs)}.",
-            retryable = false
-          )
-        }
-      }
-      mixError.get()?.let { throw wrap("Audio mix failed", it) }
-      val masterPcm = mixResult.get() ?: ShortArray(0)
-      val encodeAudio = hasAudio && masterPcm.isNotEmpty()
-      // How long a long project's PCM mix really takes on the user's device: the render loop cannot
-      // start before this, so it is the phase a "0% for two minutes" report is about.
-      ExportDiagnostics.stage(
-        "audio-mix",
-        System.currentTimeMillis() - attemptStartMs,
-        "active=$hasAudio samples=${masterPcm.size} channels=$audioChannels rate=$audioSampleRate"
-      )
+      // Audio: the PCM mix runs on its own thread (started in export()) and is awaited by the
+      // dedicated audio-feed thread further below - the video pipeline no longer waits for it.
+      // That is the CapCut-style overlap: frames start encoding while the mix is still running,
+      // so the export's wall clock is max(mix, encode) instead of mix + encode, and the panel
+      // shows one continuous frame-driven progress with no separate "Mixing audio" stage.
+      val encodeAudio = hasAudio
 
       // 4. Audio encoder. If the timeline has audio, failing to encode it is an error, not a silent drop.
       var audioEncoder: MediaCodec? = null
@@ -991,6 +1016,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
 
       // 6. Drain thread: the ONLY consumer of encoder output (video + audio) -> muxer.
       val drainDone = CountDownLatch(1)
+      // Encoded video the muxer may hold in memory while it waits for the audio track (~12s of
+      // 16Mbps output) before the drain throttles the encoder itself. Hard-capped far below the
+      // coordinator's abort limit, so the overlap can never balloon memory.
+      val audioBackpressureSoftCapBytes = 24L * 1024L * 1024L
       // The drain thread feeds the muxer; if it is starved, eglSwapBuffers blocks the render
       // thread and the whole export slows down with it.
       val drain = Executors.newSingleThreadExecutor { r ->
@@ -1012,44 +1041,71 @@ class AsyncFramePipelineEngine(private val context: Context) {
             var drainedSomething = false
 
             if (!videoEos.get()) {
-              while (!videoEos.get() && !stop.get()) {
-                val vIndex = videoEncoder.dequeueOutputBuffer(vInfo, if (drainedSomething) 0L else 2_000L)
-                if (vIndex >= 0) {
-                  drainedSomething = true
-                  lastOutputNs.set(System.nanoTime())
-                  lastEncodedSampleMs = System.currentTimeMillis()
-                  val isEos = (vInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
-                  try {
-                    // CODEC_CONFIG buffers go to the coordinator too: some encoders put the first IDR
-                    // picture in the same buffer as SPS/PPS, and dropping it leaves no decodable first frame.
-                    if (vInfo.size > 0) {
-                      val out = videoEncoder.getOutputBuffer(vIndex)
-                        ?: throw IllegalStateException("Video encoder returned a null output buffer")
-                      when (coordinator.writeVideoSample(out, vInfo)) {
-                        MuxerCoordinator.VideoSampleResult.WRITTEN -> metrics.encodedFrames.incrementAndGet()
-                        MuxerCoordinator.VideoSampleResult.DROPPED_BEFORE_KEYFRAME -> {
-                          metrics.encodedFrames.incrementAndGet()
-                          requestSyncFrame(videoEncoder, "first encoder output was not a key frame")
+              // Intentional backpressure (the memory guard of the CapCut-style overlap): the
+              // muxer cannot start before the audio track exists, so early encoded video parks
+              // in the coordinator's bounded queue. Past the soft cap this iteration SKIPS
+              // pulling from the video encoder - the codec's own output buffers then throttle
+              // the render loop - until the background audio path registers its track. The audio
+              // section below still runs EVERY iteration (it is what delivers the audio format
+              // that starts the muxer), so the throttle can never deadlock the start it waits
+              // for. A wedged mix is failed by the audio-feed await and the watchdog's
+              // awaitingAudioMix rule, never by memory.
+              val videoBackpressured = aenc != null && !coordinator.isStarted &&
+                coordinator.pendingVideoBacklogBytes() > audioBackpressureSoftCapBytes
+              if (videoBackpressured) {
+                if (audioBackpressureSinceMs == 0L) audioBackpressureSinceMs = System.currentTimeMillis()
+                val backpressuredForMs = System.currentTimeMillis() - audioBackpressureSinceMs
+                if (backpressuredForMs > phaseBudget(ExportPhase.MIXING_AUDIO).hardMs + 120_000L) {
+                  throw ExportPipelineException(
+                    "The muxer never received the audio track (video backlog " +
+                      "${coordinator.pendingVideoBacklogBytes() / (1024L * 1024L)}MB, waited " +
+                      ExportStallWatchdog.seconds(backpressuredForMs) + ").",
+                    retryable = false
+                  )
+                }
+              } else {
+                audioBackpressureSinceMs = 0L
+              }
+              if (!videoBackpressured) {
+                while (!videoEos.get() && !stop.get()) {
+                  val vIndex = videoEncoder.dequeueOutputBuffer(vInfo, if (drainedSomething) 0L else 2_000L)
+                  if (vIndex >= 0) {
+                    drainedSomething = true
+                    lastOutputNs.set(System.nanoTime())
+                    lastEncodedSampleMs = System.currentTimeMillis()
+                    val isEos = (vInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0
+                    try {
+                      // CODEC_CONFIG buffers go to the coordinator too: some encoders put the first IDR
+                      // picture in the same buffer as SPS/PPS, and dropping it leaves no decodable first frame.
+                      if (vInfo.size > 0) {
+                        val out = videoEncoder.getOutputBuffer(vIndex)
+                          ?: throw IllegalStateException("Video encoder returned a null output buffer")
+                        when (coordinator.writeVideoSample(out, vInfo)) {
+                          MuxerCoordinator.VideoSampleResult.WRITTEN -> metrics.encodedFrames.incrementAndGet()
+                          MuxerCoordinator.VideoSampleResult.DROPPED_BEFORE_KEYFRAME -> {
+                            metrics.encodedFrames.incrementAndGet()
+                            requestSyncFrame(videoEncoder, "first encoder output was not a key frame")
+                          }
+                          else -> Unit
                         }
-                        else -> Unit
                       }
+                    } finally {
+                      videoEncoder.releaseOutputBuffer(vIndex, false)
                     }
-                  } finally {
-                    videoEncoder.releaseOutputBuffer(vIndex, false)
+                    if (isEos) {
+                      videoEos.set(true)
+                      Log.i(tag, "Video encoder signaled BUFFER_FLAG_END_OF_STREAM")
+                      break
+                    }
+                  } else if (vIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                    drainedSomething = true
+                    val newFormat = videoEncoder.outputFormat
+                    Log.i(tag, "Video encoder output format changed: $newFormat")
+                    ExportDiagnostics.encoderOutputFormat(newFormat)
+                    coordinator.setVideoFormat(newFormat)
+                  } else {
+                    break // INFO_TRY_AGAIN_LATER (or buffers-changed): nothing more right now
                   }
-                  if (isEos) {
-                    videoEos.set(true)
-                    Log.i(tag, "Video encoder signaled BUFFER_FLAG_END_OF_STREAM")
-                    break
-                  }
-                } else if (vIndex == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                  drainedSomething = true
-                  val newFormat = videoEncoder.outputFormat
-                  Log.i(tag, "Video encoder output format changed: $newFormat")
-                  ExportDiagnostics.encoderOutputFormat(newFormat)
-                  coordinator.setVideoFormat(newFormat)
-                } else {
-                  break // INFO_TRY_AGAIN_LATER (or buffers-changed): nothing more right now
                 }
               }
             }
@@ -1098,41 +1154,147 @@ class AsyncFramePipelineEngine(private val context: Context) {
         }
       }
 
-      // 7. Audio feeding (PCM -> AAC encoder) with sample-exact timestamps.
-      val totalAudioFrames = if (aenc != null) masterPcm.size / audioChannels else 0
-      var fedAudioFrames = 0
+      // 7. Audio feeding (PCM -> AAC encoder) on its own thread, with sample-exact timestamps.
+      // The PCM mix is awaited HERE, not before the render loop: video frames encode while the
+      // mix is still running, and the muxer - which cannot start until the audio track exists -
+      // buffers the early video samples (bounded by the drain's backpressure above).
+      lastAudioPipelineProgressMs = System.currentTimeMillis()
 
-      /** Feeds PCM up to [upToFrames]; [waitUs] is how long to wait for a free input buffer. */
-      fun feedAudio(upToFrames: Int, waitUs: Long, maxBuffers: Int = Int.MAX_VALUE): Boolean {
-        val enc = aenc ?: return true
-        val target = min(upToFrames, totalAudioFrames)
+      /** Feeds PCM up to [upToFrames] frames; returns the fed frame count. [waitUs] = input wait. */
+      fun feedAudio(enc: MediaCodec, pcm: ShortArray, fedSoFar: Int, upToFrames: Int, waitUs: Long, maxBuffers: Int = Int.MAX_VALUE): Int {
+        val target = min(upToFrames, pcm.size / audioChannels)
+        var fed = fedSoFar
         var buffers = 0
-        while (fedAudioFrames < target && !stop.get() && buffers < maxBuffers) {
-          val framesToFeed = min(1024, target - fedAudioFrames)
+        while (fed < target && !stop.get() && buffers < maxBuffers) {
+          val framesToFeed = min(1024, target - fed)
           val inputIndex = enc.dequeueInputBuffer(waitUs)
-          if (inputIndex < 0) return false
-          val inputBuffer = enc.getInputBuffer(inputIndex) ?: return false
+          if (inputIndex < 0) return fed
+          val inputBuffer = enc.getInputBuffer(inputIndex) ?: return fed
           inputBuffer.clear()
           inputBuffer.order(ByteOrder.nativeOrder())
           val samplesToFeed = framesToFeed * audioChannels
-          val startIdx = fedAudioFrames * audioChannels
+          val startIdx = fed * audioChannels
           val shortView = inputBuffer.asShortBuffer()
-          val available = (masterPcm.size - startIdx).coerceAtLeast(0)
+          val available = (pcm.size - startIdx).coerceAtLeast(0)
           val copy = min(samplesToFeed, available)
-          if (copy > 0) shortView.put(masterPcm, startIdx, copy)
+          if (copy > 0) shortView.put(pcm, startIdx, copy)
           if (copy < samplesToFeed) {
             repeat(samplesToFeed - copy) { shortView.put(0) }
           }
-          val audioPtsUs = (fedAudioFrames.toLong() * 1_000_000L) / audioSampleRate
+          val audioPtsUs = (fed.toLong() * 1_000_000L) / audioSampleRate
           enc.queueInputBuffer(inputIndex, 0, samplesToFeed * 2, audioPtsUs, 0)
-          fedAudioFrames += framesToFeed
+          fed += framesToFeed
           buffers++
         }
-        return true
+        return fed
       }
 
-      // Prime the audio encoder so its output format (needed to start the muxer) appears early.
-      if (aenc != null && totalAudioFrames > 0) feedAudio(2048, 10_000L)
+      if (aenc != null) {
+        Thread({
+          val enc = aenc ?: return@Thread
+          try {
+            // Stall-aware await of the PCM mix: the same rules the pre-render wait used to apply
+            // (hard budget, no-progress heartbeats, watchdog verdict, cancellation) enforced where
+            // the wait actually lives now - the audio path, never the video pipeline.
+            val awaitStartMs = System.currentTimeMillis()
+            while (!mixLatch.await(1, TimeUnit.SECONDS)) {
+              stallFailure?.let { t -> failure.compareAndSet(null, t); stop.set(true); return@Thread }
+              if (stop.get()) return@Thread
+              val waitedMs = System.currentTimeMillis() - awaitStartMs
+              if (waitedMs > phaseBudget(ExportPhase.MIXING_AUDIO).hardMs) {
+                failure.compareAndSet(null, ExportPipelineException(
+                  "Timed out mixing timeline audio after ${ExportStallWatchdog.seconds(waitedMs)}.",
+                  retryable = false
+                ))
+                stop.set(true)
+                return@Thread
+              }
+              val mixSilentMs = System.currentTimeMillis() - lastAudioPipelineProgressMs
+              if (mixSilentMs > phaseBudget(ExportPhase.MIXING_AUDIO).noProgressMs) {
+                failure.compareAndSet(null, ExportPipelineException(
+                  "Audio mixing stopped making progress for ${ExportStallWatchdog.seconds(mixSilentMs)}.",
+                  retryable = false
+                ))
+                stop.set(true)
+                return@Thread
+              }
+            }
+            if (stop.get()) return@Thread
+            mixError.get()?.let { t ->
+              failure.compareAndSet(null, wrap("Audio mix failed", t))
+              stop.set(true)
+              return@Thread
+            }
+            val masterPcm = mixResult.get() ?: ShortArray(0)
+            ExportDiagnostics.stage(
+              "audio-mix",
+              System.currentTimeMillis() - attemptStartMs,
+              "active=$hasAudio samples=${masterPcm.size} channels=$audioChannels rate=$audioSampleRate"
+            )
+            // A mix that produced no PCM (every track muted/empty) still has to give the muxer its
+            // audio track: feed a short silence so the encoder announces its format and the file
+            // stays a valid A/V MP4 instead of hanging on a track that never arrives.
+            val silenceOnly = masterPcm.size < audioChannels
+            val pcm = if (silenceOnly) ShortArray(2048 * audioChannels) else masterPcm
+            val totalAudioFrames = pcm.size / audioChannels
+            var fedAudioFrames = 0
+            // Feed paced against the video render progress (half a second of lead), so the MP4's
+            // tracks stay interleaved; the encoder's input buffers are the only backpressure. Once
+            // the video reached its EOS the pace cap is lifted and the remainder flushes.
+            val paceLeadFrames = audioSampleRate / 2
+            while (fedAudioFrames < totalAudioFrames && !stop.get()) {
+              val pacedTarget = if (videoEos.get()) totalAudioFrames
+              else ((metrics.gpuFrames.get() + 1L) * audioSampleRate / fps).toInt() + paceLeadFrames
+              val before = fedAudioFrames
+              fedAudioFrames = feedAudio(enc, pcm, fedAudioFrames, pacedTarget, 10_000L)
+              if (fedAudioFrames > before) {
+                lastAudioPipelineProgressMs = System.currentTimeMillis()
+              } else if (fedAudioFrames < pacedTarget && fedAudioFrames < totalAudioFrames) {
+                // The encoder is refusing input below the pace cap (its input queue is full or
+                // the drain is congested); give both a moment, then fail if it never recovers.
+                Thread.sleep(10)
+                if (System.currentTimeMillis() - lastAudioPipelineProgressMs > 30_000L) {
+                  failure.compareAndSet(null, ExportPipelineException(
+                    "The audio encoder stopped accepting input (fed $fedAudioFrames of $totalAudioFrames frames)."
+                  ))
+                  stop.set(true)
+                  return@Thread
+                }
+              } else {
+                // At the pace cap: the video render progress defines the rate; wait for it.
+                // (This is the overlap's normal resting state, never a failure.)
+                Thread.sleep(10)
+              }
+            }
+            if (stop.get()) return@Thread
+            val eosDeadline = System.nanoTime() + 30_000_000_000L
+            while (!stop.get()) {
+              val inputIndex = enc.dequeueInputBuffer(10_000L)
+              if (inputIndex >= 0) {
+                val audioPtsUs = (fedAudioFrames.toLong() * 1_000_000L) / audioSampleRate
+                enc.queueInputBuffer(inputIndex, 0, 0, audioPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                Log.i(tag, "Audio encoder EOS queued at audioPtsUs=$audioPtsUs")
+                break
+              }
+              if (System.nanoTime() > eosDeadline) {
+                failure.compareAndSet(null, ExportPipelineException("The audio encoder never accepted the end-of-stream marker."))
+                stop.set(true)
+                break
+              }
+            }
+          } catch (t: Throwable) {
+            if (stop.get()) {
+              // The export is already ending (cancel/watchdog/drain failure): a codec exception
+              // from codecs being torn down under the feeder is noise, not the reason.
+              Log.w(tag, "Audio feed thread ended with the export: ${t.message}")
+            } else {
+              Log.e(tag, "Audio feed thread failed", t)
+              failure.compareAndSet(null, t)
+              stop.set(true)
+            }
+          }
+        }, "AH-AudioFeed").apply { isDaemon = true; start() }
+      }
 
       /**
        * Why the last decode of a clip produced no picture. Written by the decoder pre-open (this
@@ -1303,7 +1465,17 @@ class AsyncFramePipelineEngine(private val context: Context) {
           clip.timelineStartMs < durationMs && (clip.timelineStartMs + clip.durationMs) > 0L
       }
       if (firstVideoClip != null) {
-        getOrCreateDecoder(firstVideoClip, setOf(firstVideoClip.id), emptySet())
+        // Bounded: this pre-open runs setDataSource / metadata extraction / codec configure+start
+        // with no watchdog behind it yet and no deadline of its own - the exact unbounded vendor
+        // call the pre-roll bounds exist for. A hung open (cloud-backed URI, a driver wedge) used
+        // to park the export in "Preparing the MP4 muxer" forever, before frame 0.
+        runBoundedStage(
+          label = "opening the first clip decoder ('${firstVideoClip.name.ifBlank { "clip" }}')",
+          timeoutMs = phaseBudget(ExportPhase.OPENING_MUXER).hardMs,
+          stalled = { stallFailure }
+        ) {
+          getOrCreateDecoder(firstVideoClip, setOf(firstVideoClip.id), emptySet())
+        }
       }
 
       /**
@@ -1363,8 +1535,19 @@ class AsyncFramePipelineEngine(private val context: Context) {
       TrackingHealth.reset()
       enterPhase(ExportPhase.WARMING_TRACKERS)
       val prewarmStartMs = System.currentTimeMillis()
-      runCatching { ExportTrackingPrewarm.warm(timeline, fps) }
-        .onFailure { Log.w(tag, "Tracking prewarm failed; the render loop will track per frame", it) }
+      // Bounded like every other pre-roll vendor call: warm()'s own 10s budget is only checked
+      // BETWEEN samples, and one blocking facesAt()/poseAt() (a retriever frame extraction plus
+      // an ML Kit inference) cannot be preempted. A tracker wedged inside one call used to park
+      // the export in "Warming tracked effects" for minutes with no verdict; the phase's 120s
+      // budget is enforced by this bound. The abandoned-worker policy matches runBoundedStage.
+      runBoundedStage(
+        label = "warming the tracked effects",
+        timeoutMs = phaseBudget(ExportPhase.WARMING_TRACKERS).hardMs,
+        stalled = { stallFailure }
+      ) {
+        runCatching { ExportTrackingPrewarm.warm(timeline, fps) }
+          .onFailure { Log.w(tag, "Tracking prewarm failed; the render loop will track per frame", it) }
+      }
       ExportDiagnostics.stage(
         "tracking-prewarm",
         System.currentTimeMillis() - prewarmStartMs,
@@ -1481,7 +1664,7 @@ class AsyncFramePipelineEngine(private val context: Context) {
             }
             fun rememberFallback(clip: VideoClip, key: String, srcPosMs: Long) {
               if (clip.id in decoded) return
-              val bmp = fetchFallbackBitmap(clip, srcPosMs, exportWidth, exportHeight) ?: return
+              val bmp = fetchFallbackBitmap(clip, srcPosMs, exportWidth, exportHeight, stillFrames) ?: return
               val texId = gpuRenderer?.uploadImageTexture(key, bmp) ?: 0
               bmp.recycle()
               if (texId > 0) {
@@ -1625,12 +1808,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
             // Heartbeat for the stall watchdog and the progress panel: a frame really did reach the
             // encoder just now.
             lastFrameSubmittedMs = System.currentTimeMillis()
-
-            // 4. Audio, pro-rata with the video position. Cap buffers per frame so a catch-up
-            // burst cannot stall the GL/encoder pipeline around the midpoint of a long export.
-            if (aenc != null) {
-              feedAudio((((frameIndex + 1).toDouble() * audioSampleRate) / fps).toInt(), 0L, maxBuffers = 3)
-            }
+            // (Audio no longer rides along per frame: the dedicated AH-AudioFeed thread paces the
+            // PCM against the render progress on its own, so the GL thread only renders.)
           }
 
           if (!stop.get()) {
@@ -1699,29 +1878,8 @@ class AsyncFramePipelineEngine(private val context: Context) {
         Log.e(tag, "signalEndOfInputStream failed codec=${videoEncoder.name} submitted=${metrics.gpuFrames.get()}", e)
         throw ExportPipelineException("Video encoder rejected end-of-stream", e)
       }
-
-      if (aenc != null) {
-        // Flush the remaining PCM (deadline based, never silently truncated), then EOS at the exact end PTS.
-        val flushDeadline = System.nanoTime() + 30_000_000_000L
-        while (fedAudioFrames < totalAudioFrames && !stop.get()) {
-          if (!feedAudio(totalAudioFrames, 10_000L) && System.nanoTime() > flushDeadline) {
-            throw ExportPipelineException("The audio encoder stopped accepting input (fed $fedAudioFrames of $totalAudioFrames frames).")
-          }
-        }
-        val eosDeadline = System.nanoTime() + 30_000_000_000L
-        var audioEosSent = false
-        while (!audioEosSent && !stop.get()) {
-          val inputIndex = aenc.dequeueInputBuffer(10_000L)
-          if (inputIndex >= 0) {
-            val audioPtsUs = (fedAudioFrames.toLong() * 1_000_000L) / audioSampleRate
-            aenc.queueInputBuffer(inputIndex, 0, 0, audioPtsUs, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-            audioEosSent = true
-            Log.i(tag, "Audio encoder EOS queued at audioPtsUs=$audioPtsUs")
-          } else if (System.nanoTime() > eosDeadline) {
-            throw ExportPipelineException("The audio encoder never accepted the end-of-stream marker.")
-          }
-        }
-      }
+      // (The audio feeder thread flushes the remaining PCM and queues the audio EOS on its own;
+      // with the video EOS set its pace cap is lifted, so the tail never lags behind.)
 
       // 10. Wait until the encoders have emitted their own EOS and the drain thread consumed everything.
       //     Own phase: the panel says so (this is the "Finalizing..."-forever row of the report) and
@@ -1730,8 +1888,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
       while (!drainDone.await(1, TimeUnit.SECONDS)) {
         stallFailure?.let { throw it }
         if (stop.get()) break
+        // The audio feeder may legitimately still be awaiting/mixing/feeding the PCM after the
+        // video EOS (the overlap makes this the normal order for a short video with long audio):
+        // judge liveness by the background audio path's progress, not raw encoder output.
+        val audioAlive = aenc != null && !audioEos.get() &&
+          System.currentTimeMillis() - lastAudioPipelineProgressMs < 60_000L
         val idleSec = (System.nanoTime() - lastOutputNs.get()) / 1_000_000_000L
-        if (idleSec > 30) {
+        if (idleSec > 30 && !audioAlive) {
           throw ExportPipelineException("The encoder did not finish after end of stream (video EOS=${videoEos.get()}, audio EOS=${audioEos.get()}, idle ${idleSec}s).")
         }
       }
@@ -1774,11 +1937,39 @@ class AsyncFramePipelineEngine(private val context: Context) {
       }
       if (coordinator.timestampCorrections > 0L) {
         Log.w(tag, "Muxer corrected ${coordinator.timestampCorrections} non-monotonic timestamp(s)")
+        // A handful of +1us nudges are harmless boundary corrections, but a stream worth of them
+        // means the encoder emitted B-frames (decode order) on an API level that cannot opt out
+        // (KEY_MAX_B_FRAMES requires API 29). Muxing that as-is writes pictures in decode order
+        // with rewritten timestamps - visible temporal artifacts. Failing the attempt lets the
+        // ladder try a different encoder instead of shipping a reordered stream.
+        val correctionLimit = (totalFrames / 10).coerceAtLeast(100L)
+        if (coordinator.timestampCorrections > correctionLimit) {
+          throw ExportPipelineException(
+            "The video encoder produced ${coordinator.timestampCorrections} out-of-order timestamps " +
+              "(frame reordering this export path cannot represent). Retrying with a different encoder.",
+            retryable = true
+          )
+        }
       }
       // Decode a few frames of the finished file. The in-loop back-buffer probe can be unavailable
       // (some encoder surfaces refuse glReadPixels), and a black output is invisible to every
       // container statistic above - this is what lets the attempt ladder retry it.
-      val frameCheck = ExportValidator.checkDecodedFrames(outputFile)
+      //
+      // Own phase + bounded: checkDecodedFrames runs MediaMetadataRetriever/extractor calls with
+      // no timeout of their own (the same vendor-call hazard the pre-roll stages are bounded
+      // against). Unbounded, a hung verify kept the attempt thread blocked forever - the watchdog
+      // verdict could not unblock it (only encoder.stop() can) and was never re-checked, so
+      // runAttempt never returned, the finally never ran and the engine stayed "running" until
+      // process death. The bounded-stage timeout fails the attempt with a named step instead.
+      enterPhase(ExportPhase.VERIFYING)
+      val frameCheck = runBoundedStage(
+        label = "verifying the finished file",
+        timeoutMs = phaseBudget(ExportPhase.VERIFYING).hardMs,
+        stalled = { stallFailure }
+      ) { ExportValidator.checkDecodedFrames(outputFile) }
+      // The watchdog may have fired while the verify ran; its verdict is the real reason and
+      // must not be discarded by the success path below.
+      stallFailure?.let { throw it }
       Log.i(tag, "Decoded-frame check: ${frameCheck.detail}")
       if (frameCheck.failure == ExportFailure.ALL_FRAMES_BLACK) {
         throw ExportPipelineException(
@@ -1834,15 +2025,18 @@ class AsyncFramePipelineEngine(private val context: Context) {
           cleanup("unbind EGL") { eglCore?.makeNothingCurrent() }
           cleanup("EGL surface") { windowSurface?.release() }
           cleanup("EGL context") { eglCore?.release() }
-          cleanup("still-frame worker") { fallbackExecutor?.shutdownNow() }
-          fallbackExecutor = null
-          fallbackRetrievers.values.forEach { retriever -> cleanup("retriever") { retriever.release() } }
-          fallbackRetrievers.clear()
+          cleanup("still-frame worker") { stillFrames.executor?.shutdownNow() }
+          stillFrames.executor = null
+          stillFrames.retrievers.values.forEach { retriever -> cleanup("retriever") { retriever.release() } }
+          stillFrames.retrievers.clear()
           imageBitmaps.values.forEach { bitmap -> cleanup("bitmap") { bitmap.recycle() } }
           imageBitmaps.clear()
-          cleanup("encoder input surface") { encoderInputSurface?.release() }
+          // Canonical release order: stop the codec, release it, THEN retire its input surface.
+          // The previous order abandoned the surface while the codec was still in started state;
+          // vendor codecs log surface-abandoned errors (or throw at stop()) for exactly that.
           cleanup("video stop") { videoEncoderRef?.stop() }
           cleanup("video release") { videoEncoderRef?.release() }
+          cleanup("encoder input surface") { encoderInputSurface?.release() }
           cleanup("audio stop") { audioEncoderRef?.stop() }
           cleanup("audio release") { audioEncoderRef?.release() }
           cleanup("muxer") { if (muxerCoordinator?.isStopped == false) muxerCoordinator?.stopAndRelease() }
@@ -1961,9 +2155,22 @@ class AsyncFramePipelineEngine(private val context: Context) {
   private fun formatGlErrors(errors: List<Int>): String =
     errors.joinToString(prefix = "[", postfix = "]") { "0x${Integer.toHexString(it)}" }
 
-  // Concurrent: written by the AH-StillFrame worker (getOrPut) and cleared by the GL-thread
-  // cleanup task. A plain HashMap corrupted under that race (lost entries / CME / resize loops).
-  private val fallbackRetrievers = java.util.concurrent.ConcurrentHashMap<String, MediaMetadataRetriever>()
+  /**
+   * Per-attempt still-frame fallback state. It used to live on the engine: attempt N's GL cleanup
+   * (async, and its 10s teardown wait can expire with the cleanup still running) released and
+   * cleared it while attempt N+1 was already putting live retrievers into it and submitting calls
+   * to its executor - a MediaMetadataRetriever released under a running native call
+   * (use-after-free) or a RejectedExecutionException from the shutdown executor failing a
+   * healthy attempt. Owning the state per attempt removes the cross-attempt race entirely.
+   */
+  private class StillFrameFallback {
+    // Concurrent: written by the AH-StillFrame worker (getOrPut) and cleared by the GL-thread
+    // cleanup task. A plain HashMap corrupted under that race (lost entries / CME / resize loops).
+    val retrievers = java.util.concurrent.ConcurrentHashMap<String, MediaMetadataRetriever>()
+
+    /** One worker for retriever calls, so a hung call can be abandoned without blocking the GL thread. */
+    var executor: ExecutorService? = null
+  }
 
   /**
    * Policy of the still-frame fallback for the current attempt (see [ExportFallbackBudget]): every
@@ -1982,10 +2189,13 @@ class AsyncFramePipelineEngine(private val context: Context) {
     private const val IMAGE_LOAD_DEADLINE_MS = 20_000L
   }
 
-  /** One worker for retriever calls, so a hung call can be abandoned without blocking the GL thread. */
-  private var fallbackExecutor: ExecutorService? = null
-
-  private fun fetchFallbackBitmap(clip: VideoClip, sourcePosMs: Long, maxW: Int, maxH: Int): Bitmap? {
+  private fun fetchFallbackBitmap(
+    clip: VideoClip,
+    sourcePosMs: Long,
+    maxW: Int,
+    maxH: Int,
+    fallback: StillFrameFallback
+  ): Bitmap? {
     val budget = fallbackBudget
     if (!budget.mayUse(clip.id)) return null
     val startedNs = System.nanoTime()
@@ -1996,10 +2206,10 @@ class AsyncFramePipelineEngine(private val context: Context) {
           "MediaMetadataRetriever still-frame extraction for this clip (much slower per frame)."
       )
     }
-    val executor = fallbackExecutor ?: Executors.newSingleThreadExecutor { runnable ->
+    val executor = fallback.executor ?: Executors.newSingleThreadExecutor { runnable ->
       Thread(runnable, "AH-StillFrame").apply { isDaemon = true }
-    }.also { fallbackExecutor = it }
-    val future = executor.submit(java.util.concurrent.Callable { extractFallbackBitmap(clip, sourcePosMs, maxW, maxH) })
+    }.also { fallback.executor = it }
+    val future = executor.submit(java.util.concurrent.Callable { extractFallbackBitmap(clip, sourcePosMs, maxW, maxH, fallback) })
     return try {
       val bitmap = future.get(budget.perCallDeadlineMs, TimeUnit.MILLISECONDS)
       budget.recordCall(clip.id, (System.nanoTime() - startedNs) / 1_000_000L, timedOut = false)
@@ -2018,12 +2228,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
       // abandoned inside native getFrameAtTime and cannot be interrupted, so cleanup releasing
       // this retriever would be a use-after-free. The retriever is held until process exit
       // instead (same policy as abandoned codecs).
-      fallbackRetrievers.remove(clip.uri)
+      fallback.retrievers.remove(clip.uri)
       val retired = budget.recordCall(clip.id, budget.perCallDeadlineMs, timedOut = true)
       // The worker is inside native code and cannot be interrupted. Drop the executor so a later
       // clip's retriever call is not queued behind it; the clip itself is retired below.
-      runCatching { fallbackExecutor?.shutdownNow() }
-      fallbackExecutor = null
+      runCatching { fallback.executor?.shutdownNow() }
+      fallback.executor = null
       Log.e(
         tag,
         "Still-frame extraction timed out after ${budget.perCallDeadlineMs}ms for '${clip.name}' " +
@@ -2042,9 +2252,15 @@ class AsyncFramePipelineEngine(private val context: Context) {
     }
   }
 
-  private fun extractFallbackBitmap(clip: VideoClip, sourcePosMs: Long, maxW: Int, maxH: Int): Bitmap? {
+  private fun extractFallbackBitmap(
+    clip: VideoClip,
+    sourcePosMs: Long,
+    maxW: Int,
+    maxH: Int,
+    fallback: StillFrameFallback
+  ): Bitmap? {
     return try {
-      val retriever = fallbackRetrievers.getOrPut(clip.uri) {
+      val retriever = fallback.retrievers.getOrPut(clip.uri) {
         MediaMetadataRetriever().apply {
           val uri = try { Uri.parse(clip.uri) } catch (_: Exception) { null }
           if (uri != null && (uri.scheme == "content" || uri.scheme == "file")) {

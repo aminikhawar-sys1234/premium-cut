@@ -238,6 +238,9 @@ class AudioEngine(private val context: Context) {
       return outputFile
     } catch (e: Exception) {
       Log.e(tag, "Audio extraction failed", e)
+      // A truncated .m4a (no moov box) is unplayable; leaving it in the cache only wastes space
+      // and risks handing a dead file to a later caller.
+      runCatching { outputFile.delete() }
       return null
     } finally {
       extractor.release()

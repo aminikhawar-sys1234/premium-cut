@@ -88,13 +88,19 @@ class AacM4aWriter(file: File, private val sampleRate: Int, private val channels
 
     override fun write(interleaved: FloatArray, frames: Int) {
         var offset = 0; var remaining = frames * channels
+        // Bounded: if the codec stops handing out input buffers, the old loop spun forever.
+        var starvedSinceMs = System.currentTimeMillis()
         while (remaining > 0) {
             val inIdx = codec.dequeueInputBuffer(10_000)
             if (inIdx >= 0) {
+                starvedSinceMs = System.currentTimeMillis()
                 val ib = codec.getInputBuffer(inIdx)!!
                 ib.clear()
                 val cap = ib.remaining() / 2
-                val n = minOf(remaining, cap)
+                // Whole frames only, so the sample counter (PTS) advances exactly with the data;
+                // the old unaligned `n` truncated the frame count and stalled the final PTS.
+                val n = minOf(remaining, cap).let { it - (it % channels) }
+                if (n <= 0) throw IllegalStateException("The AAC encoder input buffer is smaller than one frame (${channels}ch).")
                 for (i in 0 until n) {
                     val v = (interleaved[offset + i].coerceIn(-1f, 1f) * 32767f).toInt()
                     ib.putShort(v.toShort())
@@ -102,6 +108,8 @@ class AacM4aWriter(file: File, private val sampleRate: Int, private val channels
                 codec.queueInputBuffer(inIdx, 0, n * 2, sampleIndex * 1_000_000L / sampleRate, 0)
                 sampleIndex += n / channels
                 offset += n; remaining -= n
+            } else if (System.currentTimeMillis() - starvedSinceMs > 10_000L) {
+                throw IllegalStateException("The AAC encoder stopped accepting input; the audio export cannot continue.")
             }
             drain(eos = false)
         }
@@ -109,36 +117,54 @@ class AacM4aWriter(file: File, private val sampleRate: Int, private val channels
     }
 
     override fun finish() {
-        var tries = 0
-        while (tries < 50) {
-            val inIdx = codec.dequeueInputBuffer(10_000)
-            if (inIdx >= 0) {
-                codec.queueInputBuffer(inIdx, 0, 0, sampleIndex * 1_000_000L / sampleRate, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
-                break
+        try {
+            var tries = 0
+            var eosQueued = false
+            while (tries < 50 && !eosQueued) {
+                val inIdx = codec.dequeueInputBuffer(10_000)
+                if (inIdx >= 0) {
+                    codec.queueInputBuffer(inIdx, 0, 0, sampleIndex * 1_000_000L / sampleRate, MediaCodec.BUFFER_FLAG_END_OF_STREAM)
+                    eosQueued = true
+                }
+                tries++
             }
-            tries++
+            // Failing to queue EOS used to fall through to muxer.stop() and finalise a truncated
+            // file as a success; a named failure lets the caller delete the partial output.
+            check(eosQueued) { "The AAC encoder never accepted the end-of-stream marker." }
+            drain(eos = true)
+        } finally {
+            // Teardown used to sit after drain() unwound on the happy path only - an exception in
+            // between leaked the codec and the muxer (open file descriptors) for the process life.
+            runCatching { codec.stop() }
+            runCatching { codec.release() }
+            if (muxerStarted) runCatching { muxer.stop() }
+            runCatching { muxer.release() }
         }
-        drain(eos = true)
-        runCatching { codec.stop() }; codec.release()
-        if (muxerStarted) { muxer.stop() }
-        muxer.release()
     }
 
     private fun drain(eos: Boolean) {
+        // eos=true: keep draining (bounded) until the encoder's own EOS-flagged output arrives -
+        // the old single pass broke on the first TRY_AGAIN and truncated the tail of the track.
+        val deadlineMs = if (eos) System.currentTimeMillis() + 10_000L else 0L
         while (true) {
             val outIdx = codec.dequeueOutputBuffer(bufferInfo, if (eos) 10_000 else 0)
-            if (outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                trackIndex = muxer.addTrack(codec.outputFormat)
-                muxer.start(); muxerStarted = true
-            } else if (outIdx >= 0) {
-                val ob = codec.getOutputBuffer(outIdx)!!
-                if (bufferInfo.size > 0 && muxerStarted && trackIndex >= 0) {
-                    ob.position(bufferInfo.offset); ob.limit(bufferInfo.offset + bufferInfo.size)
-                    muxer.writeSampleData(trackIndex, ob, bufferInfo)
+            when {
+                outIdx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED -> {
+                    trackIndex = muxer.addTrack(codec.outputFormat)
+                    muxer.start(); muxerStarted = true
                 }
-                codec.releaseOutputBuffer(outIdx, false)
-                if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
-            } else break
+                outIdx >= 0 -> {
+                    val ob = codec.getOutputBuffer(outIdx)!!
+                    if (bufferInfo.size > 0 && muxerStarted && trackIndex >= 0) {
+                        ob.position(bufferInfo.offset); ob.limit(bufferInfo.offset + bufferInfo.size)
+                        muxer.writeSampleData(trackIndex, ob, bufferInfo)
+                    }
+                    codec.releaseOutputBuffer(outIdx, false)
+                    if (bufferInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) break
+                }
+                eos && System.currentTimeMillis() < deadlineMs -> continue
+                else -> break
+            }
         }
     }
 }
@@ -154,7 +180,14 @@ object AudioMuxerAdapter {
     }
 }
 
-/** [WIRE] Sink onto the host video-export MediaMuxer so audio muxes with video in ONE file. */
+/**
+ * [WIRE] Sink onto the host video-export MediaMuxer so audio muxes with video in ONE file.
+ *
+ * NOTE: this writes RAW 16-bit PCM samples. The track registered with the muxer must therefore be
+ * a PCM format - wiring this adapter onto an AAC-registered track (as
+ * [AudioMuxerAdapter.createAudioMediaFormat] advertises) muxes PCM bytes into an AAC track, which
+ * players reject. Encode through MediaCodec first (as the main pipeline does) or register PCM.
+ */
 class MediaMuxerAudioSinkAdapter(
     private val muxer: MediaMuxer,
     val trackIndex: Int,
@@ -166,7 +199,11 @@ class MediaMuxerAudioSinkAdapter(
     override fun write(interleaved: FloatArray, frames: Int) {
         val ch = if (frames > 0) interleaved.size / frames else 1
         val bb = ByteBuffer.allocateDirect(frames * ch * 2).order(ByteOrder.LITTLE_ENDIAN)
-        for (v in interleaved) bb.putShort(((v.coerceIn(-1f, 1f) * 32767f).toInt()).toShort())
+        // Only the first frames*ch samples are valid: AudioBuffer.interleave fills exactly that
+        // prefix of the REUSED scratch array, and iterating the whole array wrote stale samples
+        // from the previous block while PTS advanced by only `frames` - corrupted audio and
+        // diverging timestamps on every partial block, plus stale audio repeated at the tail.
+        for (i in 0 until frames * ch) bb.putShort(((interleaved[i].coerceIn(-1f, 1f) * 32767f).toInt()).toShort())
         bb.flip()
         bufferInfo.set(0, bb.remaining(), sampleIndex * 1_000_000L / sampleRate, 0)
         muxer.writeSampleData(trackIndex, bb, bufferInfo)
@@ -248,12 +285,29 @@ class AudioExportEngine(private val cache: DecodedAudioCache, private val format
         }
         sink.prepare()
         val totalSec = (end - config.startSec).coerceAtLeast(1e-6)
-        val result = AudioPcmRenderer(cache, format, config.blockSize).render(effective, config.startSec, end) { inter, frames, t ->
-            sink.write(inter, frames)
-            progress?.invoke(AudioExportProgress(((t - config.startSec) / totalSec).toFloat().coerceIn(0f, 1f), t))
-            job?.isActive != false
+        try {
+            val result = AudioPcmRenderer(cache, format, config.blockSize).render(effective, config.startSec, end) { inter, frames, t ->
+                sink.write(inter, frames)
+                progress?.invoke(AudioExportProgress(((t - config.startSec) / totalSec).toFloat().coerceIn(0f, 1f), t))
+                job?.isActive != false
+            }
+            // render() returns file=null when its onBlock returned false (cancelled). The old code
+            // still called finish() - finalising the partial file - and returned it as a SUCCESS
+            // with the truncated file attached. Cancel now releases the sink, deletes the partial
+            // output and propagates a real cancellation.
+            if (result.file == null && job?.isActive == false) {
+                sink.release()
+                runCatching { config.outFile.delete() }
+                throw kotlinx.coroutines.CancellationException("Audio export cancelled")
+            }
+            sink.finish()
+            result.copy(file = config.outFile)
+        } catch (t: Throwable) {
+            // No try/finally here used to leak the muxer/codec (open FDs) and leave the partial
+            // file behind whenever render or finish threw.
+            sink.release()
+            runCatching { config.outFile.delete() }
+            throw t
         }
-        sink.finish()
-        result.copy(file = config.outFile)
     }
 }

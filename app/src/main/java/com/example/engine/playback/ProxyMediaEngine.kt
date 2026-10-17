@@ -389,8 +389,18 @@ class ProxyMediaEngine(private val context: Context) {
       var inputDone = false
       var decodeDone = false
       var encodeDone = false
+      // Wall-clock bound: if the encoder stops returning buffers and never signals EOS (a vendor
+      // codec wedge), the old `while (!encodeDone)` loop spun forever on the caller's dispatcher,
+      // the proxy job never completed and activeProxyJobs never cleared. Ten minutes is generous
+      // for a 540p proxy; a healthy transcode of any realistic clip finishes far inside it.
+      val transcodeDeadlineMs = System.currentTimeMillis() + 10 * 60_000L
+      var transcodeCompleted = false
 
       while (!encodeDone) {
+        if (System.currentTimeMillis() > transcodeDeadlineMs) {
+          Log.w(tag, "Proxy transcode exceeded its 10min bound; abandoning this proxy")
+          break
+        }
         if (!inputDone) {
           val inIndex = decoder.dequeueInputBuffer(timeoutUs)
           if (inIndex >= 0) {
@@ -438,6 +448,7 @@ class ProxyMediaEngine(private val context: Context) {
           encoder.releaseOutputBuffer(encOutIndex, false)
           if (isEos) {
             encodeDone = true
+            transcodeCompleted = muxerStarted
           }
         }
       }
@@ -448,10 +459,18 @@ class ProxyMediaEngine(private val context: Context) {
         try { muxer.stop() } catch (_: Exception) {}
       }
 
-      if (tempFile.exists() && tempFile.length() > 0) {
-        tempFile.renameTo(outputFile)
-        return true
+      // Only a completed transcode may be renamed into place, and renameTo's result must be
+      // honoured: the old code returned true even when the rename failed, reporting a proxy that
+      // did not exist at the promised path.
+      if (transcodeCompleted && tempFile.exists() && tempFile.length() > 0) {
+        if (tempFile.renameTo(outputFile)) {
+          return true
+        }
+        Log.w(tag, "Proxy rename ${tempFile.name} -> ${outputFile.name} failed")
+        runCatching { tempFile.delete() }
+        return false
       }
+      runCatching { tempFile.delete() }
       return false
     } catch (e: Exception) {
       Log.w(tag, "Proxy transcode fallback: ${e.message}")

@@ -285,13 +285,31 @@ object TimelineAudioMixer {
       val gain = gainAt(trackIndex, relativeFrame, durationFrames, targetSampleRate)
       if (gain == 0f) continue
       for (ch in 0 until channels) {
-        val sample: Short = if (srcChannels == 1) {
-          src[srcIndex]
-        } else {
-          val idx = srcIndex * srcChannels + (if (ch < srcChannels) ch else ch % srcChannels)
-          if (idx < src.size) src[idx] else 0
+        // A source with MORE channels than the timeline (5.1/6ch camera audio into stereo) used to
+        // be mapped with `ch % srcChannels`, which silently dropped the centre channel (dialogue)
+        // and the side channels. A weighted downmix (front + 0.707 centre + 0.5 side) keeps them.
+        val sample: Float = when {
+          srcChannels == 1 -> src[srcIndex].toFloat()
+          srcChannels <= channels -> {
+            val idx = srcIndex * srcChannels + ch
+            if (idx < src.size) src[idx].toFloat() else 0f
+          }
+          else -> {
+            var v = 0f
+            val front = srcIndex * srcChannels + ch
+            if (front < src.size) v += src[front]
+            if (srcChannels >= 3) {
+              val center = srcIndex * srcChannels + 2
+              if (center < src.size) v += src[center] * 0.707f
+            }
+            if (srcChannels >= 6) {
+              val side = srcIndex * srcChannels + (4 + ch) // 4 = back-left, 5 = back-right
+              if (side < src.size) v += src[side] * 0.5f
+            }
+            v
+          }
         }
-        if (sample.toInt() == 0) continue
+        if (sample == 0f) continue
         val outIdx = scratchFrame * channels + ch
         if (outIdx in scratch.indices) scratch[outIdx] += sample * gain
       }

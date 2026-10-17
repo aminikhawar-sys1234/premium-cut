@@ -16,6 +16,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -142,6 +143,14 @@ class MuxerCoordinator(
   }
 
   private val pendingQueue = mutableListOf<QueuedPacket>()
+
+  /**
+   * Bytes of encoded samples currently buffered while the muxer waits for the remaining track
+   * format(s). The drain thread reads this as its backpressure signal: past the soft cap it stops
+   * pulling from the video encoder until the background audio path registers its track.
+   */
+  @Synchronized
+  fun pendingVideoBacklogBytes(): Long = pendingBytes
 
   @Synchronized
   fun setOrientationHint(rotation: Int) {
@@ -643,16 +652,20 @@ class VideoExporter(private val context: Context) {
     estimatedRemainingSec: Int = 0,
     phaseLabel: String? = null
   ) {
-    val current = _exportState.value as? ExportState.Rendering ?: return
-    _exportState.value = current.copy(
-      progressPercent = progress.coerceIn(0f, 1f),
-      status = status,
-      currentFrame = currentFrame,
-      totalFrames = totalFrames,
-      fps = fps,
-      estimatedRemainingSec = estimatedRemainingSec.coerceAtLeast(0),
-      phaseLabel = phaseLabel
-    )
+    // Atomic read-modify-write: the old read-then-write could interleave with the completion
+    // write from the export coroutine, replacing Success/Error with a stale Rendering frame -
+    // the panel then stayed on "exporting" (with a cancel nobody observes) until process death.
+    _exportState.update { current ->
+      (current as? ExportState.Rendering)?.copy(
+        progressPercent = progress.coerceIn(0f, 1f),
+        status = status,
+        currentFrame = currentFrame,
+        totalFrames = totalFrames,
+        fps = fps,
+        estimatedRemainingSec = estimatedRemainingSec.coerceAtLeast(0),
+        phaseLabel = phaseLabel
+      ) ?: current
+    }
   }
 
   fun completeExternalExport(file: File, durationMs: Long) {
@@ -745,6 +758,45 @@ class VideoExporter(private val context: Context) {
   }
 
   /**
+   * Shifts a clip's source window for a segment export [startMs]..[endMs]. Cutting [startMs] off
+   * the head of a clip that began earlier must advance the source window by the same amount
+   * (scaled by playback speed, mirrored for reversed clips), so the exported segment shows the
+   * same source pictures the preview shows at those timeline positions. Speed-curve clips
+   * approximate their ramp by the constant [speed] (the curve is not re-integrated here).
+   *
+   * @return the shifted `(sourceStartMs, sourceEndMs)` pair, clamped to the original window.
+   */
+  private fun cutSourceWindow(
+    timelineStartMs: Long,
+    durationMs: Long,
+    sourceStartMs: Long,
+    sourceEndMs: Long,
+    speed: Float,
+    isReversed: Boolean,
+    startMs: Long,
+    endMs: Long
+  ): Pair<Long, Long> {
+    val headCutMs = (startMs - timelineStartMs).coerceAtLeast(0L)
+    val tailCutMs = ((timelineStartMs + durationMs) - endMs).coerceAtLeast(0L)
+    val effectiveSpeed = speed.coerceAtLeast(0.01f)
+    val srcLo = minOf(sourceStartMs, sourceEndMs)
+    val srcHi = maxOf(sourceStartMs, sourceEndMs)
+    // Forward playback consumes source [start..end]; a head cut eats the LOW source times and a
+    // tail cut eats the HIGH ones. Reversed playback consumes [end..start], so the cuts mirror.
+    val shiftedStart = if (isReversed) {
+      sourceStartMs + (tailCutMs * effectiveSpeed).toLong()
+    } else {
+      sourceStartMs + (headCutMs * effectiveSpeed).toLong()
+    }
+    val shiftedEnd = if (isReversed) {
+      sourceEndMs - (headCutMs * effectiveSpeed).toLong()
+    } else {
+      sourceEndMs - (tailCutMs * effectiveSpeed).toLong()
+    }
+    return shiftedStart.coerceIn(srcLo, srcHi) to shiftedEnd.coerceIn(srcLo, srcHi)
+  }
+
+  /**
    * Exports one slice of a timeline through the authoritative pipeline.
    * Returns true only if a file with a valid video track was written.
    */
@@ -762,7 +814,15 @@ class VideoExporter(private val context: Context) {
       else {
         val newStart = (clip.timelineStartMs - startMs).coerceAtLeast(0L)
         val newEnd = (clipEnd - startMs).coerceIn(0L, segmentDuration)
-        clip.copy(timelineStartMs = newStart, durationMs = maxOf(100L, newEnd - newStart))
+        if (newEnd <= newStart) return@mapNotNull null
+        val (srcStart, srcEnd) = cutSourceWindow(
+          clip.timelineStartMs, clip.durationMs, clip.sourceStartMs, clip.sourceEndMs,
+          clip.speed, clip.isReversed, startMs, endMs
+        )
+        // Source window shifted with the cut: the old mapping kept sourceStartMs/sourceEndMs,
+        // so every partially-visible clip restarted from its SOURCE BEGINNING inside the
+        // exported segment - a different picture than the preview shows at that position.
+        clip.copy(timelineStartMs = newStart, durationMs = newEnd - newStart, sourceStartMs = srcStart, sourceEndMs = srcEnd)
       }
     }
     val shiftedAudio = timeline.audioClips.mapNotNull { clip ->
@@ -771,7 +831,12 @@ class VideoExporter(private val context: Context) {
       else {
         val newStart = (clip.timelineStartMs - startMs).coerceAtLeast(0L)
         val newEnd = (clipEnd - startMs).coerceIn(0L, segmentDuration)
-        clip.copy(timelineStartMs = newStart, durationMs = maxOf(100L, newEnd - newStart))
+        if (newEnd <= newStart) return@mapNotNull null
+        val (srcStart, srcEnd) = cutSourceWindow(
+          clip.timelineStartMs, clip.durationMs, clip.sourceStartMs, clip.sourceEndMs,
+          clip.speed, clip.isReversed, startMs, endMs
+        )
+        clip.copy(timelineStartMs = newStart, durationMs = newEnd - newStart, sourceStartMs = srcStart, sourceEndMs = srcEnd)
       }
     }
     val segmentTimeline = timeline.copy(
