@@ -58,7 +58,10 @@ fun EffectsCategoryPanel(
 ) {
   val context = LocalContext.current
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
-  val clip = remember(timeline) { viewModel.targetClipForEffects() }
+  val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
+  // Selection-only changes must retarget the panel: keying the target clip on the timeline
+  // alone kept resolving (and writing to) whichever clip was selected before the last tap.
+  val clip = remember(timeline, selectedElement) { viewModel.targetClipForEffects() }
   val registrySnapshot = EffectsAssetRegistry.snapshot()
 
   var searchQuery by remember(category) { mutableStateOf("") }

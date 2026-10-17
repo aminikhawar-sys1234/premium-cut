@@ -15,11 +15,15 @@ import com.example.engine.composition.ChromaKeyResolver
 object PreviewCompositionPolicy {
 
   /**
-   * True when some layer of [timeline] needs per-pixel work (a chroma key that is switched on, or a
-   * background-removal clip). Such a project must not silently fall back to the player path: the effect
-   * would simply be missing from the preview while it is present in the export.
+   * True when some layer of [timeline] cannot be drawn by the plain player path: a per-pixel key or
+   * segmentation mask (chroma key / background removal), or any effect the Media3 player graph has no
+   * implementation for — registry VFX without a preview shader, face / body reshape, AR overlays,
+   * colour-engine grades beyond a LUT, clip-local looks on overlay clips, tracked effect clips
+   * (see [PreviewCoveragePolicy]). Such a project must not silently fall back to the player path:
+   * the effect would simply be missing from the preview while it is present in the export.
    */
-  fun requiresCompositor(timeline: Timeline): Boolean = ChromaKeyResolver.requiresComposition(timeline)
+  fun requiresCompositor(timeline: Timeline): Boolean =
+    ChromaKeyResolver.requiresComposition(timeline) || PreviewCoveragePolicy.requiresComposition(timeline)
 
   /**
    * @param alwaysOn the user turned the GPU preview on in Settings (kept as an explicit override).
@@ -51,10 +55,10 @@ object PreviewCompositionPolicy {
       compositorFailed -> "GPU preview unavailable after a failure; using the player path"
       trimPreviewActive -> "Trimming preview owns the player"
       !sourcesPlayable -> "A layer cannot be decoded by the compositor"
-      required && alwaysOn -> "GPU preview on (chroma key / background removal, always-on setting)"
-      required -> "GPU preview on (chroma key / background removal)"
+      required && alwaysOn -> "GPU preview on (player-unsupported effects, always-on setting)"
+      required -> "GPU preview on (an effect the player path cannot draw)"
       alwaysOn -> "GPU preview on (always-on setting)"
-      else -> "Player path (no per-pixel effect in this project)"
+      else -> "Player path (no effect that requires the compositor in this project)"
     }
   }
 }

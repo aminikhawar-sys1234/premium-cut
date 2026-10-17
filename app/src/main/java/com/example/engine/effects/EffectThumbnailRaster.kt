@@ -227,11 +227,6 @@ object EffectThumbnailRaster {
         val dx = ((u - 0.5f) * 5f).toInt()
         pack(red(sample(src, x + dx, y, w, h)), green(sample(src, x, y, w, h)), blue(sample(src, x - dx, y, w, h)))
       }
-      "vfx:noise.filmGrain" -> {
-        val c = src[y * w + x]
-        val g = (hash(x.toFloat(), y.toFloat()) - 0.5f) * 0.45f
-        pack(red(c) + g, green(c) + g, blue(c) + g)
-      }
       "vfx:light.leak" -> {
         val c = src[y * w + x]
         val blob = exp(-hypot(u - 0.18f, v - 0.78f) * 3.2f)

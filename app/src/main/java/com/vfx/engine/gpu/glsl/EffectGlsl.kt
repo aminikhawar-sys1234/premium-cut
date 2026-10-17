@@ -7,8 +7,6 @@ package com.vfx.engine.gpu.glsl
  */
 object EffectGlsl {
 
-    const val PASSTHROUGH = "vec4 process(vec4 c, vec2 uv){ return c; }"
-
     // ---------------- COLOR ----------------
     const val BRIGHTNESS = """
 uniform float u_amount;
@@ -179,49 +177,6 @@ vec4 process(vec4 c, vec2 uv){
         cmy = clamp(cmy + delta * w, vec3(0.0), vec3(1.0));
     }
     c.rgb = clamp(vec3(1.0) - cmy, vec3(0.0), vec3(1.0));
-    return c;
-}"""
-
-    // ---------------- LUT ----------------
-    const val LUT_SAMPLERS_3D = """
-uniform sampler3D u_lut;
-vec3 applyLut(vec3 c) {
-    vec3 tc = (c * (u_lutSize - 1.0) + 0.5) / u_lutSize;
-    return texture(u_lut, clamp(tc, vec3(0.0), vec3(1.0))).rgb;
-}"""
-
-    const val LUT_SAMPLERS_2D = """
-uniform sampler2D u_lut;
-vec3 applyLut(vec3 c) {
-    float n = u_lutSize;
-    float blue = clamp(c.b, 0.0, 1.0) * (n - 1.0);
-    float b0 = floor(blue);
-    float bf = blue - b0;
-    float x0 = (b0 * n + c.r * (n - 1.0) + 0.5) / (n * n);
-    float x1 = ((b0 + 1.0) * n + c.r * (n - 1.0) + 0.5) / (n * n);
-    float y = (c.g * (n - 1.0) + 0.5) / n;
-    vec3 s0 = texture(u_lut, vec2(clamp(x0, 0.0, 1.0), clamp(y, 0.0, 1.0))).rgb;
-    vec3 s1 = texture(u_lut, vec2(clamp(x1, 0.0, 1.0), clamp(y, 0.0, 1.0))).rgb;
-    return mix(s0, s1, bf);
-}"""
-
-    const val LUT_APPLY = """
-uniform float u_lutSize;
-uniform float u_lutIntensity;
-vec4 process(vec4 c, vec2 uv){
-    c.rgb = mix(c.rgb, applyLut(clamp(c.rgb, 0.0, 1.0)), clamp(u_lutIntensity, 0.0, 1.0));
-    return c;
-}"""
-
-    const val LUT_1D = """
-uniform sampler2D u_lut1d;
-uniform float u_lutIntensity;
-vec4 process(vec4 c, vec2 uv){
-    vec3 g = vec3(
-        texture(u_lut1d, vec2(clamp(c.r, 0.0, 1.0), 0.5)).r,
-        texture(u_lut1d, vec2(clamp(c.g, 0.0, 1.0), 0.5)).g,
-        texture(u_lut1d, vec2(clamp(c.b, 0.0, 1.0), 0.5)).b);
-    c.rgb = mix(c.rgb, g, clamp(u_lutIntensity, 0.0, 1.0));
     return c;
 }"""
 
@@ -433,15 +388,6 @@ vec2 warpUV(vec2 uv){
 }
 vec4 process(vec4 c, vec2 uv){ return c; }"""
 
-    const val DISPLACEMENT = """
-uniform sampler2D u_dispMap;
-uniform float u_dispScale;
-vec2 warpUV(vec2 uv){
-    vec2 d = texture(u_dispMap, clampUv(uv)).rg - 0.5;
-    return clampUv(uv + d * u_dispScale);
-}
-vec4 process(vec4 c, vec2 uv){ return c; }"""
-
     const val TURBULENCE = """
 uniform float u_turbFreq;
 uniform float u_turbAmp;
@@ -561,20 +507,6 @@ vec4 process(vec4 c, vec2 uv){
 }"""
 
     // ---------------- NOISE ----------------
-    const val FILM_GRAIN = """
-uniform float u_grainAmount;
-uniform float u_grainSize;
-uniform float u_seed;
-uniform float u_lumBias;
-vec4 process(vec4 c, vec2 uv){
-    vec2 gp = uv * u_resolution / max(u_grainSize, 0.25)
-            + vec2(u_seed + u_time * 37.7, u_seed * 1.7 + u_time * 53.3);
-    float g = hash21(gp) - 0.5;
-    float l = luma709(c.rgb);
-    c.rgb += g * u_grainAmount * mix(1.0, 1.0 - l, u_lumBias);
-    return c;
-}"""
-
     const val DIGITAL_NOISE = """
 uniform float u_noiseAmount;
 uniform float u_noiseSeed;
@@ -675,47 +607,6 @@ vec4 process(vec4 c, vec2 uv){
     c.r = texture(u_tex, clampUv(uv + off)).r;
     c.g = texture(u_tex, uv).g;
     c.b = texture(u_tex, clampUv(uv - off)).b;
-    return c;
-}"""
-
-    // ---------------- LUT ----------------
-    const val LUT_3D = """
-uniform mediump sampler3D u_lut;
-uniform float u_lutSize;
-vec4 process(vec4 c, vec2 uv){
-    vec3 scale = (vec3(u_lutSize) - 1.0) / vec3(u_lutSize);
-    vec3 offset = 1.0 / (2.0 * vec3(u_lutSize));
-    vec3 lutCoord = clamp(c.rgb, 0.0, 1.0) * scale + offset;
-    c.rgb = texture(u_lut, lutCoord).rgb;
-    return c;
-}"""
-
-    const val LUT_2D_ATLAS = """
-uniform sampler2D u_lut;
-uniform float u_lutSize;
-vec4 process(vec4 c, vec2 uv){
-    vec3 col = clamp(c.rgb, 0.0, 1.0);
-    float blueCell = col.b * (u_lutSize - 1.0);
-    float cellLow = floor(blueCell);
-    float cellHigh = ceil(blueCell);
-    float fracBlue = fract(blueCell);
-    
-    float cellsPerRow = 8.0;
-    float atlasW = u_lutSize * cellsPerRow;
-    float atlasH = u_lutSize * ceil(u_lutSize / cellsPerRow);
-    
-    vec2 uvLow = vec2(
-        (mod(cellLow, cellsPerRow) * u_lutSize + col.r * (u_lutSize - 1.0) + 0.5) / atlasW,
-        (floor(cellLow / cellsPerRow) * u_lutSize + col.g * (u_lutSize - 1.0) + 0.5) / atlasH
-    );
-    vec2 uvHigh = vec2(
-        (mod(cellHigh, cellsPerRow) * u_lutSize + col.r * (u_lutSize - 1.0) + 0.5) / atlasW,
-        (floor(cellHigh / cellsPerRow) * u_lutSize + col.g * (u_lutSize - 1.0) + 0.5) / atlasH
-    );
-    
-    vec3 colLow = texture(u_lut, uvLow).rgb;
-    vec3 colHigh = texture(u_lut, uvHigh).rgb;
-    c.rgb = mix(colLow, colHigh, fracBlue);
     return c;
 }"""
 

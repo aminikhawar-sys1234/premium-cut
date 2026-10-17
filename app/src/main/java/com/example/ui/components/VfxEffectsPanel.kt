@@ -53,7 +53,10 @@ fun VfxEffectsPanel(
 ) {
   val context = LocalContext.current
   val timeline by viewModel.timelineEngine.timeline.collectAsState()
-  val clip = remember(timeline) { viewModel.getSelectedVideoClip() }
+  val selectedElement by viewModel.timelineEngine.selectedElement.collectAsState()
+  // Selection changes must retarget the panel even when the timeline itself did not change;
+  // remembering on the timeline alone kept writing to the previously selected clip.
+  val clip = remember(timeline, selectedElement) { viewModel.getSelectedVideoClip() }
   val clipId = clip?.id
   val json = clip?.vfxStackJson
   val stack = remember(json) { VfxEffectsHost.decode(json) }
@@ -82,10 +85,14 @@ fun VfxEffectsPanel(
   var category by remember { mutableStateOf<EffectCategory?>(null) }
   var expanded by remember(clipId) { mutableIntStateOf(-1) }
 
-  fun commit(next: String?) {
+  fun commit(next: String?, reveal: Boolean = false) {
     val id = clipId ?: return
     viewModel.timelineEngine.setClipVfxStack(id, next)
-    viewModel.refreshCurrentFrame()
+    // A newly added effect must be visible immediately, CapCut-style: bring the clip under the
+    // playhead when it is off-screen, then repaint the held frame with the new stack. Slider
+    // ticks pass reveal = false so dragging never seeks.
+    if (reveal) viewModel.revealClipForLookPreview(clip)
+    viewModel.refreshCurrentFrame(preferClipId = id)
   }
 
   Column(
@@ -138,7 +145,7 @@ fun VfxEffectsPanel(
                 .clip(RoundedCornerShape(8.dp))
                 .background(StudioSurfaceVariant.copy(alpha = 0.35f))
                 .clickable {
-                  commit(VfxEffectsHost.addEffect(json, def.id))
+                  commit(VfxEffectsHost.addEffect(json, def.id), reveal = true)
                   expanded = stack.size
                   showCatalog = false
                 }

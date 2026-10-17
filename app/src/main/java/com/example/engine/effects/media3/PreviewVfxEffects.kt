@@ -114,7 +114,6 @@ object PreviewVfxEffects {
       "distort.glitch" -> Media3EffectPipeline.createGlitchEffect(intensity)
       "chromatic.aberration", "chromatic.rgbSplit" -> Media3EffectPipeline.createRgbSplitEffect(intensity)
       "blur.directional" -> directionalBlur(intensity)
-      "noise.filmGrain" -> filmGrain(intensity)
       "light.leak" -> lightLeak(intensity)
       "color.hdr" -> hdr(intensity)
       "color.pop" -> colorPop(intensity)
@@ -497,18 +496,6 @@ object PreviewVfxEffects {
   acc += texture2D(uTexSampler, clamp(uv + step, 0.0, 1.0)) * 0.20;
   acc += texture2D(uTexSampler, clamp(uv + 2.0 * step, 0.0, 1.0)) * 0.15;
   gl_FragColor = acc;
-"""
-  )
-
-  private fun filmGrain(intensity: Float) = shader(
-    name = "PreviewFilmGrain",
-    intensity = intensity,
-    body = """
-  vec2 uv = clamp(vTexSamplingCoord, 0.0, 1.0);
-  vec4 color = texture2D(uTexSampler, uv);
-  float n = fract(sin(dot(uv * 240.0, vec2(12.9898, 78.233))) * 43758.5453);
-  color.rgb += (n - 0.5) * (0.04 + 0.22 * uIntensity);
-  gl_FragColor = color;
 """
   )
 

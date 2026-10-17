@@ -235,7 +235,17 @@ fun ArEffectSelectorPanel(
                                 .fillMaxWidth()
                                 .height(82.dp)
                                 .clip(RoundedCornerShape(10.dp))
-                                .clickable { viewModel.selectArFilter(if (isSelected) null else item) }
+                                .clickable {
+                                    if (isSelected) {
+                                        viewModel.selectArFilter(null)
+                                    } else {
+                                        // CapCut-style one-tap apply: picking a filter immediately bakes it
+                                        // onto the selected clip (face-tracked mosaic waits for a detection
+                                        // and reports its status instead of silently doing nothing).
+                                        viewModel.selectArFilter(item)
+                                        viewModel.applyArFilterToTimeline()
+                                    }
+                                }
                                 .testTag("ar_item_${item.id}")
                         ) {
                             Column(

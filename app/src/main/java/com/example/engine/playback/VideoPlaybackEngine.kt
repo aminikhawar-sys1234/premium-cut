@@ -88,6 +88,10 @@ class VideoPlaybackEngine(
      * the LAST value still reaches the screen instead of being swallowed by the throttle.
      */
     private const val PAUSED_REPAINT_INTERVAL_MS = 40L
+    /** How often a failed Media3 graph may retry one rebuild (device recovered, new look, ...). */
+    private const val LOOK_FALLBACK_RETRY_MS = 5_000L
+    /** Minimum gap between two compositor playability disk-probes (see refreshCompositorMode). */
+    private const val PLAYABLE_PROBE_THROTTLE_MS = 1_200L
   }
 
   private val scope = CoroutineScope(Dispatchers.Main.immediate + SupervisorJob())
@@ -190,6 +194,13 @@ class VideoPlaybackEngine(
   @Volatile private var deferredLooksPending = false
   /** True while the device could only run the identity passthrough (no grading node available). */
   @Volatile private var lookFallbackActive = false
+
+  /** Cooldown before [lookFallbackActive] is allowed one more graph retry (see applyActiveLookToPlayers). */
+  private var lastLookFallbackAtElapsedMs = 0L
+
+  /** Disk-probe throttle for the compositor playability check (no cache inside isRealPlayableMedia). */
+  private var lastPlayableProbeAtElapsedMs = 0L
+  private var lastPlayableProbeResult = false
   private var lastPresentAtElapsedMs = 0L
   private var lastPresentPosMs = -1L
   private var spatialLookJob: Job? = null
@@ -255,14 +266,29 @@ class VideoPlaybackEngine(
     // uses either effect therefore switches the compositor on by itself; the Settings switch stays as an
     // explicit "always use the GPU preview".
     val requiresComposition = PreviewCompositionPolicy.requiresCompositor(currentTimeline)
+    val alwaysOn = PreviewCompositorSettings.enabled.value
+    val active = _compositorActive.value
+    // The playability probe below touches the disk for every clip (no cache inside
+    // isRealPlayableMedia). Skip it entirely when the decision cannot depend on it: nothing needs
+    // the compositor, none is running, and the user did not ask for the always-on GPU preview.
+    // Look-only edits (slider ticks) reach this on every tick and must stay pure-Kotlin cheap.
+    if (!alwaysOn && !requiresComposition && !active) return
+    val sourcesPlayable = if (SystemClock.elapsedRealtime() - lastPlayableProbeAtElapsedMs < PLAYABLE_PROBE_THROTTLE_MS) {
+      lastPlayableProbeResult
+    } else {
+      val probed = PreviewFramePlan.canComposite(currentTimeline, ::isPlayableInPlayer)
+      lastPlayableProbeAtElapsedMs = SystemClock.elapsedRealtime()
+      lastPlayableProbeResult = probed
+      probed
+    }
     val wanted = PreviewCompositionPolicy.shouldActivate(
-      alwaysOn = PreviewCompositorSettings.enabled.value,
+      alwaysOn = alwaysOn,
       compositorFailed = compositorFailed,
       trimPreviewActive = isTrimPreviewMode,
-      sourcesPlayable = PreviewFramePlan.canComposite(currentTimeline, ::isPlayableInPlayer),
+      sourcesPlayable = sourcesPlayable,
       requiresPixelEffects = requiresComposition
     )
-    if (wanted == _compositorActive.value) {
+    if (wanted == active) {
       if (wanted) compositor?.updateTimeline(currentTimeline)
       return
     }
@@ -415,6 +441,12 @@ class VideoPlaybackEngine(
    */
   fun replaceTimelineLooks(timeline: Timeline, look: LivePreviewLook? = null) {
     currentTimeline = timeline
+    // A look-only edit can be the first project change that needs the GPU compositor (a VFX the
+    // player path cannot draw, a colour-engine grade, an overlay look). Re-evaluate the mode here
+    // as well: the structural path (updateTimeline) already does. When the mode is unchanged this
+    // is a cheap no-op, and when the compositor is already active the branch below forwards the
+    // timeline, so only the player→compositor transition is handled here.
+    if (!_compositorActive.value) refreshCompositorMode()
     _activeClip.value = findClipAt(currentPosMs)
     if (_compositorActive.value) {
       compositor?.updateTimeline(timeline)
@@ -509,6 +541,12 @@ class VideoPlaybackEngine(
     if (_compositorActive.value) {
       compositor?.requestRender()
       return
+    }
+    if (lookFallbackActive && SystemClock.elapsedRealtime() - lastLookFallbackAtElapsedMs > LOOK_FALLBACK_RETRY_MS) {
+      // One bounded retry per cooldown window: the device failed the graph once, but a new clip /
+      // LUT / effect may well be fine. Retrying per slider tick only swung setVideoEffects without
+      // ever restoring the look; never retrying made the effects disappear for the whole session.
+      lookFallbackActive = false
     }
     val preferred = preferClipId?.let { id -> currentTimeline.videoClips.find { it.id == id } }
     val clip = preferred ?: _activeClip.value
@@ -632,6 +670,7 @@ class VideoPlaybackEngine(
         lastMedia3GraphSignature = graphSig
         lastMedia3Signature = valueSig
         boundMainGrading = null
+        lastLookFallbackAtElapsedMs = SystemClock.elapsedRealtime()
         // The device cannot run the grading graph. Stop trying to rebuild it on every slider
         // tick: that only swings setVideoEffects repeatedly and never restores the look.
         lookFallbackActive = true

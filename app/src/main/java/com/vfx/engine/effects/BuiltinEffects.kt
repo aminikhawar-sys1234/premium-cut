@@ -17,7 +17,6 @@ object BuiltinEffects {
             addAll(LightEffects.all())
             addAll(DistortEffects.all())
             addAll(StylizeEffects.all())
-            addAll(LutEffects.all())
             addAll(TemporalEffects.all())
             // The production catalog's Video Effects assets (video.vhs, light.halation, ...).
             addAll(VideoEffects.all())

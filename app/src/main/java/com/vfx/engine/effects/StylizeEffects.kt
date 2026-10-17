@@ -66,18 +66,7 @@ object StylizeEffects {
             p.setVec4("u_duoLight", s.floats("light"))
             p.setFloat("u_duoDetail", s.float("detail")) },
 
-        // NOISE category
-        simpleEffect("noise.filmGrain", "Film Grain", EffectCategory.NOISE,
-            listOf(FloatP("amount", "Amount", 0f, 0.5f, 0.005f, 0.08f),
-                   FloatP("size", "Grain Size", 0.5f, 4f, 0.1f, 1.2f),
-                   FloatP("seed", "Seed", 0f, 1000f, 1f, 0f),
-                   FloatP("lumBias", "Luminance Bias", 0f, 1f, 0.01f, 0.5f)), EffectGlsl.FILM_GRAIN)
-        { p, s, _ ->
-            p.setFloat("u_grainAmount", s.float("amount"))
-            p.setFloat("u_grainSize", s.float("size"))
-            p.setFloat("u_seed", s.float("seed"))
-            p.setFloat("u_lumBias", s.float("lumBias")) },
-
+        // NOISE category: Film Grain lives once, as `noise.grain` (VideoEffects, FILM_GRAIN_PRO).
         simpleEffect("noise.digital", "Digital Noise", EffectCategory.NOISE,
             listOf(FloatP("amount", "Amount", 0f, 0.5f, 0.005f, 0.1f),
                    FloatP("seed", "Seed", 0f, 1000f, 1f, 0f)), EffectGlsl.DIGITAL_NOISE)

@@ -179,6 +179,9 @@ fun FilterToolsPanel(
     currentAdjustments = adj
     // Publish `adj`, never the remembered state: the shader must receive this exact tick's
     // value so the last drag position is the one on screen.
+    // Same reveal the filter taps do: Adjust / Quality edits on a selected-but-offscreen clip
+    // must move the playhead, otherwise the change is invisible until the playhead reaches it.
+    viewModel.revealClipForLookPreview(selectedClip)
     viewModel.publishLiveLook(selectedClip?.id, adj, currentFilter)
   }
 

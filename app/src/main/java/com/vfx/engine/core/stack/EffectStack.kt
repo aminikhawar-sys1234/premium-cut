@@ -172,12 +172,3 @@ class EffectStack(val registry: EffectRegistry = EffectRegistry()) {
         const val EFFECT_EPSILON = 1e-4f
     }
 }
-
-object StackEvaluator {
-    fun evaluateStackAtTime(
-        stack: EffectStack,
-        pts: com.vfx.engine.core.Microseconds
-    ): List<Pair<EffectInstance, com.vfx.engine.core.params.ParamMap>> {
-        return stack.effects.filter { it.enabled }.map { it to it.parameters }
-    }
-}

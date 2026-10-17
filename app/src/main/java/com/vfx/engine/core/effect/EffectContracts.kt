@@ -88,23 +88,6 @@ class EffectDefinition(
 ) {
     val displayName: String get() = name
 
-    constructor(
-        id: String,
-        displayName: String,
-        category: EffectCategory,
-        parameters: List<com.vfx.engine.core.params.ParameterDescriptor> = emptyList(),
-        requirements: RenderRequirements = RenderRequirements()
-    ) : this(
-        id = id,
-        name = displayName,
-        category = category,
-        params = emptyList(),
-        description = "",
-        requirements = requirements,
-        aliases = emptyList(),
-        runtimeFactory = { object : EffectRuntime { override val workingSpace = WorkingSpace.GAMMA } }
-    )
-
     init {
         require(id.isNotBlank()) { "Effect id required" }
         val dupes = params.groupBy { it.id }.filterValues { it.size > 1 }.keys
@@ -158,7 +141,6 @@ class EffectInstance(val definition: EffectDefinition) {
     val effectId: String get() = definition.id
     val isEnabled: Boolean get() = enabled
     val instanceId: String = java.util.UUID.randomUUID().toString()
-    val parameters: com.vfx.engine.core.params.ParamMap get() = com.vfx.engine.core.params.ParamMap()
 
     fun paramIds(): Set<String> = values.keys
     fun hasParam(pid: String): Boolean = values.containsKey(pid)

@@ -2519,10 +2519,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     hydrateBodyReshape(media)
     hydrateBgRemoval(timelineEngine.timeline.value)
     runCatching { engineController.invalidateClip(clip.id) }
+    // CapCut-style instant feedback: every repaint below draws the playhead frame, so an effect
+    // on a selected-but-off-screen clip looked like a no-op. Bring the clip under the playhead
+    // first (no-op when it already is), then grade/paint exactly that clip.
+    revealClipForLookPreview(clip)
     if (playbackEngineDelegate.isInitialized()) {
-      runCatching { playbackEngine.applyActiveLookToPlayers() }
+      runCatching { playbackEngine.applyActiveLookToPlayers(force = false, preferClipId = clip.id) }
     }
-    refreshCurrentFrame()
+    refreshCurrentFrame(preferClipId = clip.id)
   }
 
   /** Selected main video, selected overlay, or the main clip under the playhead. */
