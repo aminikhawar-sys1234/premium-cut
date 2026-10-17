@@ -21,7 +21,10 @@ import com.example.engine.InterpolatedClipTransform
 class FaceWarpStage {
   private val pass = FaceWarpPass()
   private val fbo = GlFramebuffer()
-  private var disabled = false
+  // Quarantine, not a session latch: a failed frame is skipped for a short cooldown and the
+  // stage retries, so one GL hiccup cannot silently remove the reshape from the preview for
+  // the rest of the session while export still applies it.
+  private var cooldownUntilElapsedMs = 0L
 
   fun apply(
     clip: VideoClip?,
@@ -34,7 +37,8 @@ class FaceWarpStage {
     /** The matrix-exact placement the compositor used for this frame's main clip (preferred). */
     placementOverride: FaceWarpMapper.Placement? = null
   ): Int {
-    if (disabled || clip == null || srcTex <= 0 || width <= 0 || height <= 0) return srcTex
+    if (clip == null || srcTex <= 0 || width <= 0 || height <= 0) return srcTex
+    if (!blocking && System.currentTimeMillis() < cooldownUntilElapsedMs) return srcTex
     val params = FaceWarpRegistry.paramsFor(clip.id)?.takeIf { it.hasMeshWarp() } ?: return srcTex
     val source = FaceWarpRegistry.faceSource ?: return srcTex
 
@@ -73,9 +77,9 @@ class FaceWarpStage {
       pass.render(srcTex, fbo.getFboId(), width, height, ops)
       fbo.getTextureId()
     } catch (t: Throwable) {
-      Log.e(TAG, "Face warp failed; passing frames through", t)
+      Log.e(TAG, "Face warp failed; skipping frames for a short cooldown", t)
       if (blocking) throw t
-      disabled = true
+      cooldownUntilElapsedMs = System.currentTimeMillis() + RETRY_COOLDOWN_MS
       srcTex
     } finally {
       GlEsCompat.bindVao(prevVao)
@@ -95,7 +99,7 @@ class FaceWarpStage {
   fun onContextLost() {
     pass.reset()
     fbo.release()
-    disabled = false
+    cooldownUntilElapsedMs = 0L
   }
 
   fun release() {
@@ -103,5 +107,9 @@ class FaceWarpStage {
     fbo.release()
   }
 
-  private companion object { const val TAG = "FaceWarpStage" }
+  private companion object {
+    const val TAG = "FaceWarpStage"
+    /** Skip this many ms after a failed frame before trying again (preview only). */
+    const val RETRY_COOLDOWN_MS = 250L
+  }
 }

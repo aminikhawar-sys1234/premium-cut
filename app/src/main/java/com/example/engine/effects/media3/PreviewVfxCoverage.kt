@@ -39,4 +39,19 @@ object PreviewVfxCoverage {
       it.enabled && it.intensity > 0.01f && it.definition.id !in MEDIA3_PREVIEW_EFFECT_IDS
     }
   }
+
+  /**
+   * True when [vfxStackJson] has any active (enabled, non-zero intensity) effect at all.
+   *
+   * The live preview renders VFX stacks in the GPU compositor - the very pipeline the export
+   * uses - so ANY active stack is compositor-eligible. The player path stays as a fallback
+   * (some of its Media3 shaders can silently degrade to identity passthrough when the effect
+   * graph fails to build), which is why a project with an active stack must not rely on it:
+   * preview and export would disagree the moment that fallback fires.
+   */
+  fun hasAnyActiveEffects(vfxStackJson: String?): Boolean {
+    if (vfxStackJson.isNullOrBlank()) return false
+    val stack = VfxEffectsHost.decode(vfxStackJson)
+    return stack.effects().any { it.enabled && it.intensity > 0.01f }
+  }
 }

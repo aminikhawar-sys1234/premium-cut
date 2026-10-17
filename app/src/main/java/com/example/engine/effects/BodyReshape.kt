@@ -40,7 +40,17 @@ data class BodyPose(
   val rightKnee: Vec2?,
   val leftAnkle: Vec2?,
   val rightAnkle: Vec2?,
-)
+  /** Overall detection quality 0..1: the fraction of tracked joints that passed the likelihood
+   *  gate. Warp strengths scale with it so a half-detected pose cannot squeeze the body hard. */
+  val confidence: Float = 1f,
+) {
+  /** The vertical torso axis (average of available shoulder/hip x) used to mirror one-sided ops. */
+  fun bodyCenterX(): Float? {
+    val xs = listOfNotNull(leftShoulder?.x, rightShoulder?.x, leftHip?.x, rightHip?.x)
+    if (xs.size < 2) return xs.singleOrNull()
+    return xs.average().toFloat()
+  }
+}
 
 interface BodyPoseSource {
   fun poseAt(clipId: String, sourceTimeUs: Long, blocking: Boolean): BodyPose?

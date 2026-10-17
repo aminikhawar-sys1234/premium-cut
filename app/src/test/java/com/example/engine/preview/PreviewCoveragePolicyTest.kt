@@ -48,14 +48,29 @@ class PreviewCoveragePolicyTest {
   }
 
   @Test
-  fun aFullyRepresentableVfxStackStaysOnThePlayerPath() {
+  fun anyActiveVfxStackRequiresCompositionForPreviewExportParity() {
+    // The compositor is the pipeline the export runs, so EVERY active stack - including ids the
+    // light player path can draw - previews through it. The old split (representable ids on the
+    // player path) let a failing Media3 graph show no effect at all while the export drew it.
     val stackJson = VfxEffectsHost.addEffect(null, "noise.grain")
-    assertFalse(PreviewVfxCoverage.hasUnrepresentableEffects(stackJson))
-    assertFalse(
+    assertTrue(PreviewVfxCoverage.hasAnyActiveEffects(stackJson))
+    assertTrue(
       PreviewCoveragePolicy.requiresComposition(
         Timeline(videoClips = listOf(clip("a").copy(vfxStackJson = stackJson)))
       )
     )
+  }
+
+  @Test
+  fun hasAnyActiveEffectsIgnoresDisabledAndZeroIntensityEntries() {
+    val stackJson = VfxEffectsHost.addEffect(null, "noise.grain")
+    val stack = VfxEffectsHost.decode(stackJson)
+    stack.effectAt(0).intensity = 0f
+    val zeroJson = VfxEffectsHost.encode(stack)
+    assertFalse(PreviewVfxCoverage.hasAnyActiveEffects(zeroJson))
+    stack.effectAt(0).enabled = false
+    val disabledJson = VfxEffectsHost.encode(stack)
+    assertFalse(PreviewVfxCoverage.hasAnyActiveEffects(disabledJson))
   }
 
   @Test

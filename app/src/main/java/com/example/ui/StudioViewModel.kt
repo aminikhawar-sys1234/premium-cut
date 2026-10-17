@@ -2511,9 +2511,15 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     val next = if (effect == null) {
       com.example.engine.effects.ProductionEffectApplicator.clearCategory(clip, category)
     } else {
-      com.example.engine.effects.ProductionEffectApplicator.apply(clip, effect, intensity)
+      // A remote-published effect with an unknown engine id throws while building its stack;
+      // a bad row must never crash the apply - it just does nothing to the clip.
+      runCatching { com.example.engine.effects.ProductionEffectApplicator.apply(clip, effect, intensity) }
+        .getOrElse { return }
     }
-    if (!timelineEngine.setClipProductionLook(clip.id, next)) return
+    // A no-op write (identical values re-tapped) still repaints: the previous apply may have
+    // failed at the render layer, so the re-tap IS the recovery path - early-returning here
+    // left the preview stuck on the old picture with no way back but a scrub.
+    timelineEngine.setClipProductionLook(clip.id, next)
     val media = timelineEngine.timeline.value.let { it.videoClips + it.overlayClips }
     hydrateFaceReshape(media)
     hydrateBodyReshape(media)

@@ -30,11 +30,17 @@ class VfxStackStage {
   // Output of the previous frame; kept alive until the next call so the compositor can sample it safely.
   private var pending: GraphBuilder? = null
   private var vao = 0
-  private var disabled = false
+
+  // Quarantine, not a latch: a failing EFFECT RUNTIME is dropped (and retried on a later stack
+  // change), and a failing frame is skipped for a short cooldown - one GL hiccup must not
+  // silently remove every effect from the preview and the export for the whole session.
+  private var stageCooldownUntilElapsedMs = 0L
+  private val failedRuntimeIds = HashSet<String>()
 
   fun apply(clipId: String?, stackJson: String?, clipTimeMs: Long, srcTex: Int, width: Int, height: Int): Int {
     releasePending()
-    if (disabled || clipId == null || stackJson.isNullOrBlank() || srcTex <= 0 || width <= 0 || height <= 0) return srcTex
+    if (clipId == null || stackJson.isNullOrBlank() || srcTex <= 0 || width <= 0 || height <= 0) return srcTex
+    if (System.currentTimeMillis() < stageCooldownUntilElapsedMs) return srcTex
 
     val stack = stackFor(stackJson)
     val timeUs = clipTimeMs.coerceAtLeast(0L) * 1000L
@@ -65,18 +71,36 @@ class VfxStackStage {
       val builder = GraphBuilder(RenderContext(ctxGpu, width, height, timeUs, RenderContext.Quality.BALANCED))
       var tex = GpuTexture.adoptExternal(srcTex, width, height)
       for (r in resolved) {
-        val rt = runtimes.getOrPut(r.instance.instanceId) { r.instance.definition.createRuntime(r.instance) }
+        if (r.instance.definition.id in failedRuntimeIds) continue
+        val rt = try {
+          runtimes.getOrPut(r.instance.instanceId) { r.instance.definition.createRuntime(r.instance) }
+        } catch (t: Throwable) {
+          // This one effect definition cannot even build a runtime: drop it (and any runtime it
+          // left behind) so the REST of the stack still renders.
+          Log.e(TAG, "Effect runtime for ${r.instance.definition.id} failed to build; dropping it", t)
+          failedRuntimeIds += r.instance.definition.id
+          runtimes.remove(r.instance.instanceId)?.let { bad -> runCatching { bad.release() } }
+          continue
+        }
         val gpuRt = rt as? GpuEffectRuntime ?: continue
         gpuRt.onFrameStart(timeUs)
-        tex = gpuRt.buildPasses(builder, tex, r.snapshot)
+        tex = try {
+          gpuRt.buildPasses(builder, tex, r.snapshot)
+        } catch (t: Throwable) {
+          Log.e(TAG, "Effect ${r.instance.definition.id} failed to build passes; dropping it", t)
+          failedRuntimeIds += r.instance.definition.id
+          runCatching { rt.release() }
+          runtimes.remove(r.instance.instanceId)
+          tex
+        }
       }
       if (builder.passCount() == 0) return srcTex
       val out = builder.execute()
       pending = builder
       out.handle
     } catch (t: Throwable) {
-      Log.e(TAG, "Effect stack failed; passing frames through", t)
-      disabled = true
+      Log.e(TAG, "Effect stack frame failed; skipping frames for a short cooldown", t)
+      stageCooldownUntilElapsedMs = System.currentTimeMillis() + STAGE_RETRY_COOLDOWN_MS
       srcTex
     } finally {
       GlEsCompat.bindVao(prevVao)
@@ -98,6 +122,9 @@ class VfxStackStage {
     // New decode => new instance ids; drop runtimes that no longer belong to any instance.
     val live = next.effects().map { it.instanceId }.toSet()
     runtimes.keys.filter { it !in live }.forEach { id -> runCatching { runtimes.remove(id)?.release() } }
+    // A changed stack may also bring back a previously failing definition (user re-added it with
+    // different parameters), so give failed runtimes one more chance per stack change.
+    failedRuntimeIds.clear()
     cachedJson = json
     cachedStack = next
     return next
@@ -117,7 +144,8 @@ class VfxStackStage {
     runCatching { gpu?.handleContextLoss() }
     gpu = null
     vao = 0
-    disabled = false
+    stageCooldownUntilElapsedMs = 0L
+    failedRuntimeIds.clear()
   }
 
   fun release() {
@@ -131,5 +159,9 @@ class VfxStackStage {
     cachedStack = null
   }
 
-  private companion object { const val TAG = "VfxStackStage" }
+  private companion object {
+    const val TAG = "VfxStackStage"
+    /** Skip this many ms after a whole-frame failure before trying again. */
+    const val STAGE_RETRY_COOLDOWN_MS = 250L
+  }
 }

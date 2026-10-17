@@ -33,8 +33,12 @@ object PreviewCoveragePolicy {
 
   fun requiresComposition(timeline: Timeline): Boolean {
     val clips = timeline.videoClips + timeline.overlayClips
-    // A VFX stack the light preview cannot represent (blur.gaussian, light.bloom, vignette, ...).
-    if (clips.any { PreviewVfxCoverage.hasUnrepresentableEffects(it.vfxStackJson) }) return true
+    // ANY active VFX stack: the compositor is the pipeline the export runs, so routing every
+    // effect tap through it keeps preview and export identical. The light player path stays a
+    // fallback only (its Media3 shaders can silently degrade to identity passthrough), and the
+    // previous "representable subset" split meant a failing Media3 graph showed no effect at all
+    // while the export drew it. Disabled / zero-intensity stacks never count (no visual change).
+    if (clips.any { PreviewVfxCoverage.hasAnyActiveEffects(it.vfxStackJson) }) return true
     // Mesh-warp retouch (face / body) and AR face overlays.
     if (clips.any { faceReshapeActive(it) || bodyReshapeActive(it) }) return true
     if (clips.any { !it.arOverlay.isNullOrBlank() }) return true

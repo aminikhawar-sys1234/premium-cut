@@ -82,6 +82,7 @@ class GpuCompositionRenderer(private val context: Context) {
     fun isPostProcessShaderEffect(type: EffectType): Boolean {
       return when (type) {
         EffectType.BLUR, EffectType.SOFT_FOCUS, EffectType.SHARPEN,
+        EffectType.MOSAIC,
         EffectType.VFX_BLUR_1, EffectType.VFX_BLUR_3, EffectType.VFX_BLUR_8,
         EffectType.VFX_BLUR_9, EffectType.VFX_BLUR_10, EffectType.VFX_BLUR_11,
         EffectType.VFX_BLUR_12, EffectType.VFX_BLUR_13, EffectType.VFX_BLUR_15,
@@ -2600,6 +2601,10 @@ class GpuCompositionRenderer(private val context: Context) {
       EffectType.HALFTONE_DOT -> GpuShaders.EFFECT_HALFTONE
       EffectType.COMIC_SKETCH -> GpuShaders.EFFECT_COMIC
       EffectType.MIRROR -> GpuShaders.EFFECT_MIRROR
+      EffectType.RIPPLE -> GpuShaders.EFFECT_RIPPLE
+      // Tracked mosaic was silently invisible in the GPU preview AND the export: it was in
+      // neither the post-process set nor the shader mapping (uEffectType = -1 identity).
+      EffectType.MOSAIC -> GpuShaders.EFFECT_PIXELATE
 
       else -> -1
     }

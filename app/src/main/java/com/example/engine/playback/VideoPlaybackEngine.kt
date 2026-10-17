@@ -90,6 +90,9 @@ class VideoPlaybackEngine(
     private const val PAUSED_REPAINT_INTERVAL_MS = 40L
     /** How often a failed Media3 graph may retry one rebuild (device recovered, new look, ...). */
     private const val LOOK_FALLBACK_RETRY_MS = 5_000L
+    /** How often a failed compositor activation may retry (one transient decode failure must not
+     *  disable auto-activation for the whole session). */
+    private const val COMPOSITOR_RETRY_MS = 5_000L
     /** Minimum gap between two compositor playability disk-probes (see refreshCompositorMode). */
     private const val PLAYABLE_PROBE_THROTTLE_MS = 1_200L
   }
@@ -130,8 +133,10 @@ class VideoPlaybackEngine(
   private val _compositorActive = MutableStateFlow(false)
   val compositorActive: StateFlow<Boolean> = _compositorActive.asStateFlow()
   private var compositor: PreviewCompositor? = null
-  /** Set when the compositor could not decode a main-track clip; cleared when the setting changes. */
+  /** Set when the compositor could not decode a main-track clip; retried once per cooldown
+   *  (COMPOSITOR_RETRY_MS) while the project still needs the compositor, or cleared when the setting changes. */
   private var compositorFailed = false
+  private var compositorFailedAtElapsedMs = 0L
 
   private class CompositorSurface(val texture: SurfaceTexture, val width: Int, val height: Int)
   /** Live compositor views; the most recently attached one (fullscreen dialog over inline) is drawn. */
@@ -268,6 +273,15 @@ class VideoPlaybackEngine(
     val requiresComposition = PreviewCompositionPolicy.requiresCompositor(currentTimeline)
     val alwaysOn = PreviewCompositorSettings.enabled.value
     val active = _compositorActive.value
+    // One transient failure (a decoder slot still held by an overlay player, a slow first decode)
+    // used to latch compositorFailed for the whole session, silently disabling every later
+    // effect tap. Retry once per cooldown window while the project still needs the compositor.
+    if (compositorFailed && requiresComposition &&
+      SystemClock.elapsedRealtime() - compositorFailedAtElapsedMs > COMPOSITOR_RETRY_MS
+    ) {
+      Log.i(TAG, "Retrying the GPU compositor after a previous failure (cooldown elapsed)")
+      compositorFailed = false
+    }
     // The playability probe below touches the disk for every clip (no cache inside
     // isRealPlayableMedia). Skip it entirely when the decision cannot depend on it: nothing needs
     // the compositor, none is running, and the user did not ask for the always-on GPU preview.
@@ -305,15 +319,19 @@ class VideoPlaybackEngine(
         scope.launch {
           Log.w(TAG, "GPU preview cannot decode main clip $clipId; falling back to the player preview")
           compositorFailed = true
+          compositorFailedAtElapsedMs = SystemClock.elapsedRealtime()
           refreshCompositorMode()
         }
       }
     )
+    // Free the overlay decoders BEFORE the compositor opens its own: both claim MediaCodec slots,
+    // and starting the compositor while the overlay players still run starved its first decode -
+    // which used to trip onMainLayerUndecodable and latch the failure.
+    releaseOverlayPlayers()
     c.updateTimeline(currentTimeline)
     compositorSurfaces.lastOrNull()?.let { c.attachSurface(it.texture, it.width, it.height) }
     compositor = c
     _compositorActive.value = true
-    releaseOverlayPlayers()
     applyMainVideoTrackMode()
     syncOverlayPlayers(currentPosMs)
     Log.i(TAG, "GPU preview compositor active")
@@ -660,6 +678,13 @@ class VideoPlaybackEngine(
         PreviewVideoSurfaceRegistry.rebindCurrent(player)
         PreviewVideoSurfaceRegistry.rebindCurrent(player, PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS)
         restorePlaybackAfterGraphChange(playWhenReady, volume)
+        // setVideoEffects tears the renderer down and rebuilds it; an exact seek issued during
+        // that window is swallowed. Re-present the held frame AFTER the delayed surface rebind so
+        // a paused preview can never stay on the pre-effect picture ("effect tap did nothing").
+        scope.launch {
+          delay(PreviewEffectApplyPolicy.SURFACE_REBIND_DELAY_MS + 120L)
+          presentCurrentFrame(rebindSurface = false, force = true)
+        }
         Log.i(
           TAG,
           "Rebuilt Media3 preview graph lut=${lut?.first ?: "none"} effects=${effects.size} force=$force playWhenReady=$playWhenReady"
@@ -711,7 +736,14 @@ class VideoPlaybackEngine(
     lastPresentAtElapsedMs = now
     lastPresentPosMs = currentPosMs
     val clip = _activeClip.value ?: findClipAt(currentPosMs) ?: return
-    if (!isPlayableInPlayer(clip.uri)) return
+    // Probe the SAME uri playback resolves (proxy / relinked), not the raw project uri: a
+    // proxy-served clip used to fail the raw probe and the repaint was silently skipped, so
+    // setVideoEffects succeeded while the paused preview kept the old picture.
+    val playableUri = MediaPlayableUri.resolvePlayableString(
+      context,
+      proxyEngine?.getProxyUri(clip) ?: clip.uri
+    )
+    if (!isPlayableInPlayer(playableUri)) return
     try {
       engineController.playbackController.seekTo(
         clip.timelineToSourceMs(currentPosMs),

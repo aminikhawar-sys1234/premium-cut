@@ -590,6 +590,7 @@ object GpuShaders {
   const val EFFECT_PRISM = 27
   const val EFFECT_MIRROR = 28
   const val EFFECT_RIPPLE = 29
+  const val EFFECT_PIXELATE = 30
 
   val EFFECT_FRAGMENT_SHADER = """
     precision mediump float;
@@ -918,6 +919,19 @@ object GpuShaders {
         if (mUv.x > 0.5) mUv.x = 1.0 - mUv.x;
         vec4 col = texture2D(uTexture, mUv);
         gl_FragColor = mix(texture2D(uTexture, uv), col, intensity);
+        return;
+      }
+
+      if (uEffectType == $EFFECT_PIXELATE) {
+        // Real mosaic: sample the centre of every block of a grid whose density the intensity
+        // drives (low intensity = fine grid, high = chunky). Square blocks regardless of aspect.
+        float blocks = mix(180.0, 10.0, clamp(intensity, 0.0, 1.0));
+        float countX = max(blocks, 2.0);
+        float countY = max(countX * uTexelSize.x / max(uTexelSize.y, 0.0001), 2.0);
+        vec2 grid = vec2(countX, countY);
+        vec2 cellUv = (floor(uv * grid) + 0.5) / grid;
+        vec4 pix = texture2D(uTexture, clamp(cellUv, 0.0, 1.0));
+        gl_FragColor = vec4(clamp(pix.rgb, 0.0, 1.0), pix.a);
         return;
       }
       

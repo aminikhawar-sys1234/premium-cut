@@ -16,11 +16,12 @@ object PreviewCompositionPolicy {
 
   /**
    * True when some layer of [timeline] cannot be drawn by the plain player path: a per-pixel key or
-   * segmentation mask (chroma key / background removal), or any effect the Media3 player graph has no
-   * implementation for — registry VFX without a preview shader, face / body reshape, AR overlays,
-   * colour-engine grades beyond a LUT, clip-local looks on overlay clips, tracked effect clips
-   * (see [PreviewCoveragePolicy]). Such a project must not silently fall back to the player path:
-   * the effect would simply be missing from the preview while it is present in the export.
+   * segmentation mask (chroma key / background removal), or any effect the light player graph must
+   * not be trusted with - every active VFX stack (the compositor is the pipeline the export runs,
+   * see [PreviewCoveragePolicy]), face / body reshape, AR overlays, colour-engine grades beyond a
+   * LUT, clip-local looks on overlay clips, tracked effect clips (see [PreviewCoveragePolicy]).
+   * Such a project must not silently fall back to the player path: an effect could be missing from
+   * the preview while it is present in the export.
    */
   fun requiresCompositor(timeline: Timeline): Boolean =
     ChromaKeyResolver.requiresComposition(timeline) || PreviewCoveragePolicy.requiresComposition(timeline)
