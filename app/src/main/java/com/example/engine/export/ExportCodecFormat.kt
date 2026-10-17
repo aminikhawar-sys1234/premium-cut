@@ -27,8 +27,8 @@ object ExportCodecFormat {
     // satisfies the frame size, then the highest level listed for it.
     val allowedProfiles = when (mime) {
       MediaFormat.MIMETYPE_VIDEO_HEVC -> listOf(
-        MediaCodecInfo.CodecProfileLevel.HEVCMain,
-        MediaCodecInfo.CodecProfileLevel.HEVCMain10
+        MediaCodecInfo.CodecProfileLevel.HEVCProfileMain,
+        MediaCodecInfo.CodecProfileLevel.HEVCProfileMain10
       )
       MediaFormat.MIMETYPE_VIDEO_AVC -> listOf(
         MediaCodecInfo.CodecProfileLevel.AVCProfileBaseline,

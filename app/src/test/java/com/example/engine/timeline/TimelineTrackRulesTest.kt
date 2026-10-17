@@ -95,7 +95,7 @@ class TimelineTrackRulesTest {
       videoClips = listOf(video("a", 1000, 1000)),
       audioClips = listOf(audio("m", 1000, 300))
     )
-    val r = TimelineTrackRules.rippleFrom(tl, 0, -5000) { it == TrackType.AUDIO }
+    val r = TimelineTrackRules.rippleFrom(tl, 0, -5000, isLocked = { it == TrackType.AUDIO })
     assertEquals(0L, r.videoClips.single().timelineStartMs)
     assertSame(tl.audioClips, r.audioClips)
   }

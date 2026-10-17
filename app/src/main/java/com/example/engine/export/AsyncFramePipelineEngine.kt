@@ -347,6 +347,12 @@ class AsyncFramePipelineEngine(private val context: Context) {
     if (!exportRunning.compareAndSet(false, true)) {
       throw ExportPipelineException("An export is already running on this engine.", retryable = false)
     }
+    // Attempt-failure cancel for the audio-mix thread, separate from userCancelled: the mix thread
+    // is a daemon that only observed user cancellation, so after a non-cancel attempt failure it
+    // kept decoding/mixing the whole timeline in the background (minutes of CPU/IO and the ~115MB
+    // PCM of a 10-minute project held until it finished). Declared OUTSIDE the try so the finally
+    // block can stop the mix on EVERY exit path (success, failure, cancellation).
+    val mixCancelled = AtomicBoolean(false)
     try {
       if (cleanupPending.get()) {
         throw ExportPipelineException("Previous GPU export cleanup is still pending; wait or restart the editor.", retryable = false)
@@ -378,11 +384,6 @@ class AsyncFramePipelineEngine(private val context: Context) {
       val mixResult = AtomicReference<ShortArray>(ShortArray(0))
       val mixError = AtomicReference<Throwable?>(null)
       val mixLatch = CountDownLatch(1)
-      // Attempt-failure cancel, separate from userCancelled: the mix thread is a daemon that only
-      // observed user cancellation, so after a non-cancel attempt failure it kept decoding/mixing
-      // the whole timeline in the background (minutes of CPU/IO and the ~115MB PCM of a 10-minute
-      // project held until it finished). It is set on EVERY exit path of export() below.
-      val mixCancelled = AtomicBoolean(false)
       if (hasAudio) {
         Thread({
           try {
