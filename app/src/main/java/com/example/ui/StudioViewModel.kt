@@ -2506,15 +2506,29 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
     effect: com.example.engine.effects.registry.RegisteredEffect?,
     category: com.example.engine.effects.registry.EffectCategory,
     intensity: Float = effect?.intensity ?: 1f,
+    reanchorWindow: Boolean = true,
   ) {
     val clip = targetClipForEffects() ?: return
+    // Video-effect assets play on a bounded 3s span anchored at the playhead (CapCut-style);
+    // body / photo / AI assets cover the whole selected clip. Intensity-only updates keep the
+    // window the effect already has - dragging a strength slider must not teleport the span.
+    val playWindowMs = if (effect != null && category == com.example.engine.effects.registry.EffectCategory.VIDEO_EFFECTS) {
+      val existing = if (!reanchorWindow) {
+        effect.shaderKey?.removePrefix("vfx:")?.let { existingVideoWindowMs(clip, it) }
+      } else null
+      existing ?: com.example.engine.effects.ProductionEffectApplicator.videoEffectWindow(
+        clip.durationMs,
+        timelineEngine.currentPositionMs.value - clip.timelineStartMs
+      )
+    } else null
     val next = if (effect == null) {
       com.example.engine.effects.ProductionEffectApplicator.clearCategory(clip, category)
     } else {
       // A remote-published effect with an unknown engine id throws while building its stack;
       // a bad row must never crash the apply - it just does nothing to the clip.
-      runCatching { com.example.engine.effects.ProductionEffectApplicator.apply(clip, effect, intensity) }
-        .getOrElse { return }
+      runCatching {
+        com.example.engine.effects.ProductionEffectApplicator.apply(clip, effect, intensity, playWindowMs)
+      }.getOrElse { return }
     }
     // A no-op write (identical values re-tapped) still repaints: the previous apply may have
     // failed at the render layer, so the re-tap IS the recovery path - early-returning here
@@ -2545,6 +2559,14 @@ class StudioViewModel(application: Application) : AndroidViewModel(application) 
       else -> Unit
     }
     return getSelectedVideoClip()
+  }
+
+  /** The 3s play window currently written on [clip] for [effectId], in ms, or null. */
+  private fun existingVideoWindowMs(clip: VideoClip, effectId: String): Pair<Long, Long>? {
+    val stack = com.example.engine.vfx.VfxEffectsHost.decode(clip.vfxStackJson)
+    val inst = stack.effects().firstOrNull { it.definition.id == effectId } ?: return null
+    val startUs = inst.windowStartUs ?: return null
+    return (startUs / 1000L) to (inst.windowDurationUs / 1000L)
   }
 
   private fun mediaClip(id: String): VideoClip? {

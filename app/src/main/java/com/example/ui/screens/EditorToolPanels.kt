@@ -508,7 +508,10 @@ fun EffectsToolPanel(
     viewModel = viewModel,
     onClose = { viewModel.setActiveToolbarTab(null) },
     onApply = { effect -> viewModel.applyCatalogEffect(effect, category) },
-    onIntensity = { effect, amount -> viewModel.applyCatalogEffect(effect, category, amount) },
+    onIntensity = { effect, amount ->
+      // Strength ticks must not move the effect's 3s play window - only a fresh tap re-anchors it.
+      viewModel.applyCatalogEffect(effect, category, amount, reanchorWindow = false)
+    },
     modifier = modifier
   )
 }

@@ -86,13 +86,15 @@ class EffectStack(val registry: EffectRegistry = EffectRegistry()) {
     class ResolvedEffect(val instance: EffectInstance, val snapshot: EffectSnapshot)
 
     /**
-     * Resolve every enabled, non-zero-intensity effect at [timeUs] (media µs).
-     * Skipped effects: enabled == false, or intensity <= 1e-4 (provably a no-op).
+     * Resolve every enabled, non-zero-intensity effect whose play window contains [timeUs]
+     * (media µs, clip-relative). Skipped effects: enabled == false, intensity <= 1e-4
+     * (provably a no-op), or a time window that does not cover [timeUs].
+     * Window edges ramp the snapshot intensity (see [EffectInstance.windowedIntensityAt]).
      */
     fun resolveAt(timeUs: Long): List<ResolvedEffect> =
         effectList
-            .filter { it.enabled && it.intensity > EFFECT_EPSILON }
-            .map { ResolvedEffect(it, it.snapshotAt(timeUs)) }
+            .filter { it.enabled && it.intensity > EFFECT_EPSILON && it.isActiveAt(timeUs) }
+            .map { ResolvedEffect(it, it.snapshotWithWindowAt(timeUs)) }
 
     /** Max intensity in the stack — used by the pipeline to skip graph builds entirely. */
     fun anyActive(): Boolean =

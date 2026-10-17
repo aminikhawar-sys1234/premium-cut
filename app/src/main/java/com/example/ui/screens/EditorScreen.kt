@@ -1168,7 +1168,8 @@ fun EditorScreen(
                     viewModel.applyCatalogEffect(effect, activeEffectsCategoryModal!!)
                   },
                   onIntensity = { effect, amount ->
-                    viewModel.applyCatalogEffect(effect, activeEffectsCategoryModal!!, amount)
+                    // Strength ticks must not move the effect's 3s play window.
+                    viewModel.applyCatalogEffect(effect, activeEffectsCategoryModal!!, amount, reanchorWindow = false)
                   }
                 )
               }

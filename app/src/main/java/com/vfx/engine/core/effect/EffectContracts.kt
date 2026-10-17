@@ -47,6 +47,10 @@ class EffectSnapshot(
     fun floats(id: String): FloatArray = get(id)
     fun curve(id: String): Curve = get(id)
     fun has(id: String): Boolean = values.containsKey(id)
+
+    /** Engine-internal: rebuild a snapshot with a different intensity (play-window ramp). */
+    internal fun withIntensity(newIntensity: Float): EffectSnapshot =
+        EffectSnapshot(effectId, timeUs, values, newIntensity, mask, blendMode)
 }
 
 /**
@@ -118,6 +122,49 @@ class EffectInstance(val definition: EffectDefinition) {
 
     var enabled: Boolean = true
 
+    /**
+     * Optional play window inside the clip, in clip-relative microseconds.
+     * null start = the effect runs for the whole clip (legacy stacks, body/photo looks).
+     * A video-effect asset writes [0, 3s) style windows so a trend effect plays on a
+     * bounded span of the clip instead of its full duration.
+     */
+    var windowStartUs: Long? = null
+        private set
+
+    /** Span of the play window in microseconds; only meaningful when [windowStartUs] != null. */
+    var windowDurationUs: Long = Long.MAX_VALUE
+        private set
+
+    /** Writes the play window; null start clears it back to "whole clip". */
+    fun setTimeWindow(startUs: Long?, durationUs: Long) {
+        windowStartUs = startUs
+        windowDurationUs = if (startUs == null) Long.MAX_VALUE else durationUs.coerceAtLeast(1L)
+    }
+
+    /** True when [timeUs] (clip-relative media us) falls inside this instance's play window. */
+    fun isActiveAt(timeUs: Long): Boolean {
+        val start = windowStartUs ?: return true
+        return timeUs >= start && timeUs < start + windowDurationUs
+    }
+
+    /**
+     * Intensity multiplier for [timeUs]: 1 in the window interior, a smoothstep ramp over
+     * [WINDOW_EDGE_RAMP_US] at both edges so a bounded effect fades in/out instead of popping.
+     */
+    fun windowedIntensityAt(timeUs: Long): Float {
+        val start = windowStartUs ?: return 1f
+        if (timeUs < start || timeUs >= start + windowDurationUs) return 0f
+        val into = (timeUs - start).toFloat()
+        val left = (into / WINDOW_EDGE_RAMP_US).coerceIn(0f, 1f)
+        val remain = ((start + windowDurationUs - timeUs).toFloat() / WINDOW_EDGE_RAMP_US).coerceIn(0f, 1f)
+        return smoothstep(left) * smoothstep(remain)
+    }
+
+    private fun smoothstep(x: Float): Float {
+        val c = x.coerceIn(0f, 1f)
+        return c * c * (3f - 2f * c)
+    }
+
     /** Global effect strength 0..1 — mixed against the effect result. */
     var intensity: Float = 1f
         set(v) { field = v.coerceIn(0f, 1f) }
@@ -130,6 +177,9 @@ class EffectInstance(val definition: EffectDefinition) {
 
     companion object {
         private fun <T> initParamValue(d: ParamDescriptor<T>): ParamValue<T> = ParamValue(d, d.default)
+
+        /** Fade length at both window edges; shorter windows ramp proportionally via the coerce. */
+        const val WINDOW_EDGE_RAMP_US = 220_000f
     }
 
     init {
@@ -182,16 +232,34 @@ class EffectInstance(val definition: EffectDefinition) {
         return EffectSnapshot(definition.id, timeUs, m, intensity, mask, blendMode)
     }
 
+    /**
+     * Resolve all parameters at a media timestamp WITH the play-window ramp applied to the
+     * intensity. Identical to [snapshotAt] for windowless instances (the common case).
+     */
+    fun snapshotWithWindowAt(timeUs: Long): EffectSnapshot {
+        val base = snapshotAt(timeUs)
+        val ramp = windowedIntensityAt(timeUs)
+        return if (ramp >= 1f) base else base.withIntensity(base.intensity * ramp)
+    }
+
     fun reset() {
         values.values.forEach { it.reset() }
         intensity = 1f
         enabled = true
         mask = null
         blendMode = BlendMode.NORMAL
+        windowStartUs = null
+        windowDurationUs = Long.MAX_VALUE
     }
 
     // ---------- portable serialization ----------
     fun serialize(): Json.Obj {
+        val windowFields: Map<String, Json> = windowStartUs?.let { start ->
+            mapOf(
+                "startUs" to Json.Num(start.toDouble()),
+                "durationUs" to Json.Num(windowDurationUs.toDouble())
+            )
+        } ?: emptyMap()
         val params = LinkedHashMap<String, Json>()
         values.forEach { (pid, pv) ->
             val fields = LinkedHashMap<String, Json>()
@@ -209,12 +277,15 @@ class EffectInstance(val definition: EffectDefinition) {
             params[pid] = Json.Obj(fields)
         }
         return Json.obj(
-            "effectId" to Json.Str(definition.id),
-            "enabled" to Json.Bool(enabled),
-            "intensity" to Json.Num(intensity.toDouble()),
-            "blendMode" to Json.Str(blendMode.name),
-            "params" to Json.Obj(params),
-            "mask" to (mask?.let { MaskCodec.toJson(it) } ?: Json.Null)
+            *listOf(
+                "effectId" to Json.Str(definition.id),
+                "enabled" to Json.Bool(enabled),
+                "intensity" to Json.Num(intensity.toDouble()),
+                "blendMode" to Json.Str(blendMode.name)
+            ).let { base -> base + windowFields.map { it.key to it.value } }
+                .plus("params" to Json.Obj(params))
+                .plus("mask" to (mask?.let { MaskCodec.toJson(it) } ?: Json.Null))
+                .toTypedArray()
         )
     }
 
@@ -222,6 +293,16 @@ class EffectInstance(val definition: EffectDefinition) {
     internal fun deserializeState(o: Json.Obj) {
         enabled = o["enabled"]?.asBool() ?: true
         intensity = (o["intensity"]?.asFloat() ?: 1f).coerceIn(0f, 1f)
+        // Legacy stacks carry no window -> whole clip. Forward compatible: old app builds
+        // reading new JSON simply never look at these keys.
+        val startUs = o["startUs"]?.asLong()
+        if (startUs != null) {
+            windowStartUs = startUs
+            windowDurationUs = (o["durationUs"]?.asLong() ?: Long.MAX_VALUE).coerceAtLeast(1L)
+        } else {
+            windowStartUs = null
+            windowDurationUs = Long.MAX_VALUE
+        }
         o["blendMode"]?.asStr()?.let { name ->
             blendMode = BlendMode.entries.firstOrNull { it.name == name } ?: BlendMode.NORMAL
         }

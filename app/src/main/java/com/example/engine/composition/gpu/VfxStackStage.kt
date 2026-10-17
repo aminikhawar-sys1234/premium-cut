@@ -79,6 +79,7 @@ class VfxStackStage {
           // left behind) so the REST of the stack still renders.
           Log.e(TAG, "Effect runtime for ${r.instance.definition.id} failed to build; dropping it", t)
           failedRuntimeIds += r.instance.definition.id
+          VfxStageHealth.markQuarantined(r.instance.definition.id)
           runtimes.remove(r.instance.instanceId)?.let { bad -> runCatching { bad.release() } }
           continue
         }
@@ -89,6 +90,7 @@ class VfxStackStage {
         } catch (t: Throwable) {
           Log.e(TAG, "Effect ${r.instance.definition.id} failed to build passes; dropping it", t)
           failedRuntimeIds += r.instance.definition.id
+          VfxStageHealth.markQuarantined(r.instance.definition.id)
           runCatching { rt.release() }
           runtimes.remove(r.instance.instanceId)
           tex

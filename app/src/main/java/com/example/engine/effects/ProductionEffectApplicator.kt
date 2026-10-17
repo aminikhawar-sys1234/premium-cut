@@ -16,12 +16,36 @@ import com.vfx.engine.core.effect.EffectInstance
  */
 object ProductionEffectApplicator {
 
-  fun apply(clip: VideoClip, effect: RegisteredEffect, intensity: Float): VideoClip {
+  /** CapCut-style default play span for VIDEO-effect assets: 3 seconds from the playhead. */
+  const val VIDEO_EFFECT_WINDOW_MS = 3000L
+
+  /**
+   * Play window (clip-relative startMs to durationMs) for a video effect dropped at
+   * [playheadRelMs], or null when the whole clip IS the window (clip shorter than the rule).
+   * Pure math so the UI contract is unit-testable.
+   */
+  fun videoEffectWindow(
+    clipDurationMs: Long,
+    playheadRelMs: Long,
+    windowMs: Long = VIDEO_EFFECT_WINDOW_MS,
+  ): Pair<Long, Long>? {
+    if (clipDurationMs <= windowMs) return null
+    val start = playheadRelMs.coerceIn(0L, clipDurationMs)
+    val clamped = if (start + windowMs > clipDurationMs) clipDurationMs - windowMs else start
+    return clamped to windowMs
+  }
+
+  fun apply(
+    clip: VideoClip,
+    effect: RegisteredEffect,
+    intensity: Float,
+    playWindowMs: Pair<Long, Long>? = null,
+  ): VideoClip {
     val key = effect.shaderKey ?: return clip
     val amount = intensity.coerceIn(0f, 1f)
     return when {
       key.startsWith("vfx:") -> clip.copy(
-        vfxStackJson = upsertVfx(clip.vfxStackJson, key.removePrefix("vfx:"), amount)
+        vfxStackJson = upsertVfx(clip.vfxStackJson, key.removePrefix("vfx:"), amount, playWindowMs)
       )
       key.startsWith("face:") -> clip.copy(
         faceReshape = DeformationCodec.encode(faceParams(DeformationCodec.decode(clip.faceReshape), key.removePrefix("face:"), amount))
@@ -136,11 +160,17 @@ object ProductionEffectApplicator {
     return clip.copy(isBackgroundRemoved = true, bgRemove = BgRemoveCodec.encode(params))
   }
 
-  private fun upsertVfx(json: String?, effectId: String, intensity: Float): String? {
+  private fun upsertVfx(json: String?, effectId: String, intensity: Float, playWindowMs: Pair<Long, Long>? = null): String? {
     val stack = VfxEffectsHost.decode(json)
     val existing = stack.effects().indexOfFirst { it.definition.id == effectId }
     val inst = if (existing >= 0) stack.effectAt(existing) else stack.addEffect(effectId)
     inst.intensity = intensity
+    // Video-effect assets play on a bounded 3s span (re-tap re-anchors it at the playhead);
+    // photo / AI / legacy stacks pass null and keep covering the whole clip.
+    inst.setTimeWindow(
+      startUs = playWindowMs?.first?.let { it * 1000L },
+      durationUs = playWindowMs?.second?.let { it * 1000L } ?: Long.MAX_VALUE,
+    )
     tune(inst, effectId, intensity)
     return VfxEffectsHost.encode(stack)
   }
@@ -153,6 +183,13 @@ object ProductionEffectApplicator {
     keep.forEach { stack.addInstance(it) }
     return VfxEffectsHost.encode(stack)
   }
+
+  /**
+   * Engine-internal hook for live swatches: applies the same intensity -> param mapping the
+   * catalog apply runs, so a preview tile shows exactly the look a tap would produce.
+   */
+  internal fun tuneForPreview(inst: EffectInstance, effectId: String, intensity: Float) =
+    tune(inst, effectId, intensity)
 
   private fun tune(inst: EffectInstance, effectId: String, intensity: Float) {
     fun set(pid: String, value: Float) {

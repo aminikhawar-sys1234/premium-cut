@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
@@ -34,7 +35,9 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.engine.composition.gpu.VfxStageHealth
 import com.example.engine.effects.EffectThumbnailRaster
+import com.example.engine.effects.GlslSwatchRenderer
 import com.example.engine.effects.ProductionEffectApplicator
 import com.example.engine.effects.registry.EffectCategory
 import com.example.engine.effects.registry.EffectsAssetRegistry
@@ -303,25 +306,18 @@ internal fun EffectLiveSwatch(
   modifier: Modifier = Modifier
 ) {
   // One small shared sample (the clip's own frame when available) keeps every animated
-  // tile cheap: 64px raster, ~20 fps, triple-buffered so nothing allocates per frame.
-  val sample = remember(baseBitmap) {
-    val n = 64
-    when {
-      baseBitmap != null && !baseBitmap.isRecycled && baseBitmap.width > 0 && baseBitmap.height > 0 -> {
-        val scaled = Bitmap.createScaledBitmap(baseBitmap, n, n, true)
-        IntArray(n * n).also { px ->
-          scaled.getPixels(px, 0, n, 0, 0, n, n)
-          if (scaled !== baseBitmap) scaled.recycle()
-        }
-      }
-      else -> EffectThumbnailRaster.baseScene(n)
-    }
-  }
+  // tile cheap: 96px raster, ~20 fps, triple-buffered so nothing allocates per frame.
+  val sample = remember(baseBitmap) { bitmapSample(baseBitmap, SWATCH_PX) ?: EffectThumbnailRaster.baseScene(SWATCH_PX) }
+
+  // The GPU stage quarantined this id on THIS device: the live preview cannot draw it, so the
+  // tile flags itself instead of silently implying "this is what your video will look like".
+  val quarantined by VfxStageHealth.quarantinedIds.collectAsState()
+  val deviceUnsupported = quarantined.contains(shaderKey?.removePrefix(VFX_KEY_PREFIX))
 
   if (shaderKey.isNullOrBlank()) {
     // No shader on this entry: the untouched frame IS the truth for it.
     val frame = remember(sample) {
-      Bitmap.createBitmap(sample, 64, 64, Bitmap.Config.ARGB_8888).asImageBitmap()
+      Bitmap.createBitmap(sample, SWATCH_PX, SWATCH_PX, Bitmap.Config.ARGB_8888).asImageBitmap()
     }
     Image(
       bitmap = frame,
@@ -336,11 +332,15 @@ internal fun EffectLiveSwatch(
   LaunchedEffect(shaderKey, sample) {
     // Stagger tiles so a grid of live swatches never rasterises in lockstep.
     delay((shaderKey.hashCode().mod(6)) * 12L)
-    val n = 64
+    val n = SWATCH_PX
     val bufs = Array(3) { IntArray(n * n) }
     val frames = Array(3) { Bitmap.createBitmap(n, n, Bitmap.Config.ARGB_8888) }
     var slot = 0
     var lastT = -1f
+    // GPU first (the real shader, pixel-faithful to the video); CPU raster as the fallback.
+    // Three consecutive GPU failures (no EGL / driver refuses) park this tile on the raster.
+    var gpuOk = shaderKey.startsWith(VFX_KEY_PREFIX) && GlslSwatchRenderer.available
+    var gpuFails = 0
     val startNs = System.nanoTime()
     withContext(Dispatchers.Default) {
       while (isActive) {
@@ -348,10 +348,17 @@ internal fun EffectLiveSwatch(
         if (t - lastT >= 0.05f) {
           lastT = t
           val out = bufs[slot]
-          EffectThumbnailRaster.renderInto(
-            shaderKey, sample, out, n, n,
-            t % EffectThumbnailRaster.LIVE_LOOP_SECONDS
-          )
+          var ok = false
+          if (gpuOk) {
+            ok = GlslSwatchRenderer.render(shaderKey, sample, n, t, out)
+            if (ok) gpuFails = 0 else if (++gpuFails >= 3) gpuOk = false
+          }
+          if (!ok) {
+            EffectThumbnailRaster.renderInto(
+              shaderKey, sample, out, n, n,
+              t % EffectThumbnailRaster.LIVE_LOOP_SECONDS
+            )
+          }
           frames[slot].setPixels(out, 0, n, 0, 0, n, n)
           val frame = frames[slot].asImageBitmap()
           withContext(Dispatchers.Main.immediate) { shown = frame }
@@ -362,14 +369,39 @@ internal fun EffectLiveSwatch(
     }
   }
   val img = shown
-  if (img != null) {
-    Image(
-      bitmap = img,
-      contentDescription = shaderKey,
-      contentScale = ContentScale.Crop,
-      modifier = modifier
-    )
-  } else {
-    Box(modifier = modifier.background(Color(0xFF071419)))
+  Box(modifier = modifier) {
+    if (img != null) {
+      Image(
+        bitmap = img,
+        contentDescription = shaderKey,
+        contentScale = ContentScale.Crop,
+        modifier = Modifier.fillMaxSize()
+      )
+    } else {
+      Box(Modifier.fillMaxSize().background(Color(0xFF071419)))
+    }
+    if (deviceUnsupported) {
+      Box(
+        Modifier
+          .align(Alignment.TopEnd)
+          .padding(3.dp)
+          .size(9.dp)
+          .background(Color(0xFFFFB020), CircleShape)
+      )
+    }
   }
+}
+
+private const val VFX_KEY_PREFIX = "vfx:"
+private const val SWATCH_PX = 96
+
+private fun bitmapSample(base: Bitmap?, n: Int): IntArray? {
+  if (base == null || base.isRecycled || base.width <= 0 || base.height <= 0) return null
+  return runCatching {
+    val scaled = Bitmap.createScaledBitmap(base, n, n, true)
+    IntArray(n * n).also { px ->
+      scaled.getPixels(px, 0, n, 0, 0, n, n)
+      if (scaled !== base) scaled.recycle()
+    }
+  }.getOrNull()
 }
