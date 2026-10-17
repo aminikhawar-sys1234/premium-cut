@@ -50,13 +50,22 @@ object PreviewCompositionPolicy {
     trimPreviewActive: Boolean,
     sourcesPlayable: Boolean
   ): String {
-    val required = requiresCompositor(timeline)
+    // Name the actual gate: chroma key / background removal vs the wider coverage rule
+    // (registry VFX without a preview shader, reshape, AR, non-LUT grades, ...).
+    val chromaKeyed = ChromaKeyResolver.requiresComposition(timeline)
+    val covered = PreviewCoveragePolicy.requiresComposition(timeline)
+    val required = chromaKeyed || covered
+    val effectGate = when {
+      chromaKeyed && covered -> "chroma key and an effect the player path cannot draw"
+      chromaKeyed -> "chroma key"
+      else -> "an effect the player path cannot draw"
+    }
     return when {
       compositorFailed -> "GPU preview unavailable after a failure; using the player path"
       trimPreviewActive -> "Trimming preview owns the player"
       !sourcesPlayable -> "A layer cannot be decoded by the compositor"
-      required && alwaysOn -> "GPU preview on (player-unsupported effects, always-on setting)"
-      required -> "GPU preview on (an effect the player path cannot draw)"
+      required && alwaysOn -> "GPU preview on ($effectGate, always-on setting)"
+      required -> "GPU preview on ($effectGate)"
       alwaysOn -> "GPU preview on (always-on setting)"
       else -> "Player path (no effect that requires the compositor in this project)"
     }

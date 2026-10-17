@@ -3,6 +3,7 @@ package com.example.engine.preview
 import com.example.domain.model.ChromaKeySettings
 import com.example.domain.model.Timeline
 import com.example.domain.model.VideoClip
+import com.example.engine.vfx.VfxEffectsHost
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -111,6 +112,23 @@ class PreviewCompositionPolicyTest {
     )
     assertTrue(
       PreviewCompositionPolicy.explain(keyed, false, true, false, true).contains("failure")
+    )
+  }
+
+  @Test
+  fun explainDistinguishesTheCoverageGateFromChromaKey() {
+    // No chroma key anywhere: the compositor is on because of a coverage-only effect
+    // (blur.gaussian has no Media3 preview shader), and the explanation must say so.
+    val stackJson = VfxEffectsHost.addEffect(null, "blur.gaussian")
+    val covered = Timeline(videoClips = listOf(clip("a").copy(vfxStackJson = stackJson)))
+    val explanation = PreviewCompositionPolicy.explain(covered, false, false, false, true)
+    assertTrue(explanation.contains("cannot draw"))
+    assertFalse(explanation.contains("chroma key", ignoreCase = true))
+    // Both gates together are named together.
+    val both = covered.copy(chromaKey = ChromaKeySettings(enabled = true))
+    assertTrue(
+      PreviewCompositionPolicy.explain(both, false, false, false, true)
+        .contains("chroma key and an effect the player path cannot draw")
     )
   }
 }
