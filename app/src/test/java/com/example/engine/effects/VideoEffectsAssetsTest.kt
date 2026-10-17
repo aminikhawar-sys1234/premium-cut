@@ -64,10 +64,15 @@ class VideoEffectsAssetsTest {
       "skipped: ${VfxEffectsHost.registrationSkipped}",
       VfxEffectsHost.registrationSkipped.isEmpty()
     )
+    // TrendEffects also registers the photo trend assets (expand_x, orbit360, ...), so the
+    // video category is checked as the 8-key video subset of the registry, not the whole list.
     val trendKeys = videoAssets.mapNotNull { it.shaderKey }
       .filter { it != "vfx:blur.motion" }
       .map { it.removePrefix("vfx:") }
-    assertEquals(TrendEffects.ids, trendKeys)
+    assertEquals(8, trendKeys.toSet().size)
+    trendKeys.forEach { key ->
+      assertTrue("$key is not a TrendEffects id", key in TrendEffects.ids)
+    }
     videoAssets.forEach { asset ->
       val id = asset.shaderKey!!.removePrefix("vfx:")
       val def: EffectDefinition? = VfxEffectsHost.registry.getEffectOrNull(id)
@@ -147,7 +152,11 @@ class VideoEffectsAssetsTest {
     val keys = videoAssets.mapNotNull { it.shaderKey }
     val previewIds = keys.map { it.removePrefix("vfx:") }.toSet()
     assertEquals(9, previewIds.size)
-    assertEquals(TrendEffects.ids.toSet() + "blur.motion", previewIds)
+    assertTrue("blur.motion missing", "blur.motion" in previewIds)
+    assertTrue(
+      "video trend keys must all be registered TrendEffects ids",
+      previewIds.minus("blur.motion").all { it in TrendEffects.ids }
+    )
     // Nothing in the catalog may point at an id the engine does not know.
     ProductionEffectCatalog.effects.forEach { effect ->
       val key = effect.shaderKey ?: return@forEach
