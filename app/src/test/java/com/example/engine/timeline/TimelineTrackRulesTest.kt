@@ -101,6 +101,27 @@ class TimelineTrackRulesTest {
   }
 
   @Test
+  fun rippleCanExcludeAlreadyShiftedMainVideo() {
+    val tl = Timeline(
+      videoClips = listOf(video("v", 1400, 1000)),
+      overlayClips = listOf(video("o", 1000, 300)),
+      audioClips = listOf(audio("early", 500, 300), audio("late", 1000, 300)),
+      textClips = listOf(text("locked", 1000, 300))
+    )
+    val r = TimelineTrackRules.rippleFrom(
+      tl,
+      fromMs = 1000,
+      deltaMs = 400,
+      isLocked = { it == TrackType.TEXT },
+      includeMainVideo = false
+    )
+    assertSame(tl.videoClips, r.videoClips)
+    assertEquals(1400L, r.overlayClips.single().timelineStartMs)
+    assertEquals(listOf(500L, 1400L), r.audioClips.map { it.timelineStartMs })
+    assertSame(tl.textClips, r.textClips)
+  }
+
+  @Test
   fun earliestStartIgnoresLockedTracks() {
     val tl = Timeline(videoClips = listOf(video("v", 0, 1000)), audioClips = listOf(audio("a", 800, 100)))
     assertEquals(0L, TimelineTrackRules.earliestUnlockedStart(tl, unlocked))
