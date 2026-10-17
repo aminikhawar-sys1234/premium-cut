@@ -7,6 +7,7 @@ import com.example.domain.model.TrackType
 import com.example.domain.model.Transition
 import com.example.domain.model.TransitionType
 import com.example.domain.model.VideoClip
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -268,13 +269,13 @@ class TimelineEngineNLETest {
   fun testAdvancedNLEEditOperations() {
     val timeline = Timeline(
       videoClips = listOf(
-        VideoClip(id = "v1", name = "Clip 1", uri = "uri1", timelineStartMs = 0L, durationMs = 2000L, trackIndex = 0),
-        VideoClip(id = "v2", name = "Clip 2", uri = "uri2", timelineStartMs = 2000L, durationMs = 3000L, trackIndex = 0)
+        VideoClip(id = "v1", name = "Clip 1", uri = "uri1", timelineStartMs = 0L, durationMs = 2000L, sourceEndMs = 2000L, sourceTotalDurationMs = 4000L, trackIndex = 0),
+        VideoClip(id = "v2", name = "Clip 2", uri = "uri2", timelineStartMs = 2000L, durationMs = 3000L, sourceEndMs = 3000L, sourceTotalDurationMs = 3000L, trackIndex = 0)
       )
     )
     engine.loadTimeline(timeline)
 
-    // Test Roll Edit
+    // Test Roll Edit (the first source has spare media for the roll and subsequent slip).
     val rolled = engine.rollEditClip("v1", "v2", 500L)
     assertTrue(rolled)
     val curTimeline = engine.timeline.value
@@ -282,15 +283,41 @@ class TimelineEngineNLETest {
     assertEquals(2500L, curTimeline.videoClips[1].timelineStartMs)
     assertEquals(2500L, curTimeline.videoClips[1].durationMs)
 
+    assertEquals(2500L, curTimeline.videoClips[0].sourceEndMs)
+    assertEquals(500L, curTimeline.videoClips[1].sourceStartMs)
+    assertEquals(3000L, curTimeline.videoClips[1].sourceEndMs)
+
     // Test Slip Edit
     val slipped = engine.slipEditClip("v1", 200L)
     assertTrue(slipped)
     assertEquals(200L, engine.timeline.value.videoClips[0].sourceStartMs)
 
+    assertEquals(2700L, engine.timeline.value.videoClips[0].sourceEndMs)
+    assertEquals(2500L, engine.timeline.value.videoClips[0].durationMs)
+
     // Test Slide Edit
     val slided = engine.slideEditClip("v2", 300L)
     assertTrue(slided)
     assertEquals(2800L, engine.timeline.value.videoClips[1].timelineStartMs)
+  }
+
+  @Test
+  fun testRollAndSlipRejectExhaustedSourceMedia() {
+    val timeline = Timeline(
+      videoClips = listOf(
+        VideoClip(id = "v1", name = "Clip 1", timelineStartMs = 0L,
+          durationMs = 2000L, sourceEndMs = 2000L, sourceTotalDurationMs = 2000L),
+        VideoClip(id = "v2", name = "Clip 2", timelineStartMs = 2000L,
+          durationMs = 3000L, sourceEndMs = 3000L, sourceTotalDurationMs = 3000L)
+      )
+    )
+    engine.loadTimeline(timeline)
+    val before = engine.timeline.value
+
+    assertFalse(engine.rollEditClip("v1", "v2", 500L))
+    assertEquals(before, engine.timeline.value)
+    assertFalse(engine.slipEditClip("v1", 200L))
+    assertEquals(before, engine.timeline.value)
   }
 
   @Test
