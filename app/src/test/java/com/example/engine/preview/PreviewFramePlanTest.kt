@@ -152,7 +152,8 @@ class PreviewFramePlanTest {
     val c = clip("c", 2000, 1000)
     val ov = clip("ov", 1200, 300)
     val timeline = Timeline(videoClips = listOf(c, a, b), overlayClips = listOf(ov))
-    val midB = PreviewFramePlan.clipsVisibleAt(timeline, 1500).map { it.id }
+    // ov spans [1200, 1500): the playhead sits inside it at 1400.
+    val midB = PreviewFramePlan.clipsVisibleAt(timeline, 1400).map { it.id }
     // Active clip + the overlay covering the playhead (transition sides are runtime-owned).
     assertEquals(listOf("b", "ov"), midB)
     val onA = PreviewFramePlan.clipsVisibleAt(timeline, 100).map { it.id }
