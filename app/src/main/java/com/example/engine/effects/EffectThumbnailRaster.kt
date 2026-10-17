@@ -1,6 +1,7 @@
 package com.example.engine.effects
 
 import android.graphics.Bitmap
+import kotlin.math.atan
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.exp
